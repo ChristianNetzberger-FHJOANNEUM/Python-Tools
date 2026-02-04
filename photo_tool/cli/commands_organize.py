@@ -249,3 +249,115 @@ def dedupe(
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
+
+
+@app.command("undo")
+def undo_organization(
+    workspace: Path = typer.Option(".", "--workspace", "-w", help="Workspace directory"),
+    dry_run: bool = typer.Option(True, "--dry-run/--apply", help="Preview changes"),
+):
+    """
+    Undo burst organization - move photos back from burst folders
+    
+    Finds all burst folders (folders containing only photos) and moves
+    photos back to their parent directory, then removes empty folders.
+    
+    Example:
+        photo-tool organize undo --dry-run
+        photo-tool organize undo --apply
+    """
+    try:
+        ws = Workspace(workspace)
+        config = load_config(ws.config_file)
+        
+        if dry_run:
+            console.print("[yellow]DRY RUN MODE - No files will be moved[/yellow]\n")
+        else:
+            console.print("[red]APPLYING CHANGES - Files will be moved![/red]\n")
+        
+        console.print("Undoing burst organization...\n")
+        
+        # Scan for media to find burst folders
+        console.print("Scanning for burst folders...")
+        all_media = scan_multiple_directories(
+            config.scan.roots,
+            config.scan.extensions,
+            config.scan.recurse,
+            show_progress=True
+        )
+        
+        # Find burst folders (folders that contain photos)
+        burst_folders = set()
+        for media in all_media:
+            # If file is in a subfolder, check if it's a burst folder
+            if media.path.parent != media.path.parent.parent:
+                # Check if parent folder looks like a burst folder
+                # (typically named after a photo, like P1022811)
+                parent_name = media.path.parent.name
+                if parent_name.startswith('P') or parent_name.startswith('IMG'):
+                    burst_folders.add(media.path.parent)
+        
+        if not burst_folders:
+            console.print("[yellow]No burst folders found[/yellow]")
+            return
+        
+        console.print(f"\nFound {len(burst_folders)} burst folder(s)")
+        
+        # Move photos back and remove folders
+        import shutil
+        
+        photos_moved = 0
+        folders_removed = 0
+        
+        for burst_folder in sorted(burst_folders):
+            console.print(f"\nProcessing: {burst_folder.name}")
+            
+            # Get all files in this folder
+            files_in_folder = list(burst_folder.glob("*"))
+            photo_files = [f for f in files_in_folder if f.is_file() and f.suffix.lower() in ['.jpg', '.jpeg', '.png']]
+            
+            if not photo_files:
+                continue
+            
+            console.print(f"  Found {len(photo_files)} photo(s) to move back")
+            
+            # Move each photo back to parent
+            for photo in photo_files:
+                target = burst_folder.parent / photo.name
+                
+                if not dry_run:
+                    try:
+                        shutil.move(str(photo), str(target))
+                        console.print(f"  ✓ Moved: {photo.name} → {target.parent.name}/")
+                        photos_moved += 1
+                    except Exception as e:
+                        console.print(f"  [red]Error moving {photo.name}:[/red] {e}")
+                else:
+                    console.print(f"  Would move: {photo.name} → {target.parent.name}/")
+                    photos_moved += 1
+            
+            # Remove empty folder
+            if not dry_run:
+                try:
+                    # Check if folder is empty
+                    remaining = list(burst_folder.glob("*"))
+                    if not remaining:
+                        burst_folder.rmdir()
+                        console.print(f"  ✓ Removed empty folder: {burst_folder.name}")
+                        folders_removed += 1
+                except Exception as e:
+                    console.print(f"  [yellow]Could not remove folder:[/yellow] {e}")
+            else:
+                console.print(f"  Would remove folder: {burst_folder.name}")
+                folders_removed += 1
+        
+        console.print(f"\n[green]✓[/green] Done!")
+        console.print(f"  Photos moved: {photos_moved}")
+        console.print(f"  Folders removed: {folders_removed}")
+        
+        if dry_run:
+            console.print("\n[yellow]This was a dry run. Use --apply to make changes.[/yellow]")
+    
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)

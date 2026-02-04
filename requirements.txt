@@ -22,6 +22,10 @@ rich>=13.0.0
 # Progress bars
 tqdm>=4.65.0
 
+# Web GUI (PoC)
+flask>=3.0.0
+flask-cors>=4.0.0
+
 # Development dependencies (optional)
 # Uncomment to install
 # pytest>=7.4.0
