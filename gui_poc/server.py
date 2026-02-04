@@ -729,7 +729,28 @@ def get_burst_detail(burst_id):
 
 
 if __name__ == '__main__':
-    print("🚀 Starting Photo Tool PoC Server...")
-    print("📸 Open browser: http://localhost:8000")
-    print("Press Ctrl+C to stop")
+    import socket
+    
+    # Get local IP for Smart TV access
+    try:
+        hostname = socket.gethostname()
+        local_ip = socket.gethostbyname(hostname)
+    except:
+        local_ip = "localhost"
+    
+    print("\n" + "="*60)
+    print("🖼️  Photo Tool Web GUI - Server Starting")
+    print("="*60)
+    print(f"🖥️  PC Browser:       http://localhost:8000")
+    print(f"📺 Smart TV/Mobile:  http://{local_ip}:8000")
+    print("="*60)
+    print("\n💡 For Smart TV access:")
+    print("   1. Make sure Windows Firewall allows port 8000")
+    print("   2. Open Smart TV browser")
+    print(f"   3. Navigate to: http://{local_ip}:8000")
+    print("\n⚠️  To enable firewall (run as Administrator):")
+    print('   netsh advfirewall firewall add rule name="Photo Tool Web GUI" dir=in action=allow protocol=TCP localport=8000')
+    print("\n▶️  Press Ctrl+C to stop\n")
+    
+    # Bind to all interfaces (0.0.0.0) for network access
     app.run(debug=True, port=8000, host='0.0.0.0')

@@ -45,6 +45,8 @@ Open: **http://localhost:8000**
 - ✅ **Sorting** - By name, rating, date
 - ✅ **Web Gallery Export** - PhotoSwipe standalone galleries
 - ✅ **Keyboard Shortcuts** - Lightning-fast workflow
+- 🎬 **NEW: Slideshow Mode** - Auto-play with fade transitions, controls & loop
+- ⛶ **NEW: True Fullscreen** - Browser Fullscreen API (like YouTube, no UI!)
 
 ### **Performance:**
 - ✅ **Caching** - Instant burst reload
@@ -76,6 +78,23 @@ Open: **http://localhost:8000**
 3. **Keyword Filter** - Click tags to filter
 4. **In Bursts** - Show only photos in burst groups
 5. **Clear Filters** - Reset all filters
+
+### **Slideshow:** 🎬 **NEW!**
+1. **Filter Photos** (optional) - Select photos for slideshow
+2. **Click Slideshow** - 🎬 button next to Export
+3. **Auto-Play** - Starts automatically with smooth fade transitions
+4. **Fullscreen** - ⛶ button or press `F` for true fullscreen (no browser UI!)
+5. **Keyboard Controls:**
+   - `F` - Toggle fullscreen 🆕
+   - `Space` - Play/Pause
+   - `←` `→` - Navigate photos
+   - `↑` `↓` - Adjust speed
+   - `L` - Toggle loop
+   - `ESC` - Exit fullscreen / Exit slideshow
+6. **Settings** - Speed (2-10s), Loop on/off
+7. **Smart TV Ready** - Works on Samsung/LG browsers with fullscreen support!
+
+See: `SLIDESHOW_QUICKSTART.md` and `FULLSCREEN_GUIDE.md` for detailed guides!
 
 ### **Export:**
 1. **Filter Photos** - Apply desired filters
