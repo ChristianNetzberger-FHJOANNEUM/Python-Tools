@@ -16,6 +16,15 @@ from .metadata import get_metadata
 
 logger = get_logger("export")
 
+# Progress tracking for export
+_export_progress = {
+    'status': 'idle',  # idle, running, complete, error
+    'current': 0,
+    'total': 0,
+    'step': '',
+    'message': ''
+}
+
 
 def export_gallery(
     photo_paths: List[Path],
@@ -42,7 +51,16 @@ def export_gallery(
         Path to generated gallery directory
     """
     
+    global _export_progress
+    
     logger.info(f"Exporting gallery with {len(photo_paths)} photos to {output_dir}")
+    
+    # Initialize progress
+    _export_progress['status'] = 'running'
+    _export_progress['current'] = 0
+    _export_progress['total'] = len(photo_paths)
+    _export_progress['step'] = 'setup'
+    _export_progress['message'] = 'Creating directory structure...'
     
     # Create directory structure
     gallery_dir = output_dir / "gallery"
@@ -56,7 +74,11 @@ def export_gallery(
     # Process photos
     photo_data = []
     
+    _export_progress['step'] = 'processing'
+    
     for i, photo_path in enumerate(photo_paths):
+        _export_progress['current'] = i + 1
+        _export_progress['message'] = f'Processing {photo_path.name}...'
         try:
             # Generate image filename
             img_filename = f"{i:04d}{photo_path.suffix}"
@@ -122,8 +144,14 @@ def export_gallery(
         html = _generate_simple_html(title, photo_data)
     
     # Write HTML file
+    _export_progress['step'] = 'finalizing'
+    _export_progress['message'] = 'Generating HTML...'
+    
     index_path = gallery_dir / "index.html"
     index_path.write_text(html, encoding='utf-8')
+    
+    _export_progress['status'] = 'complete'
+    _export_progress['message'] = 'Export complete!'
     
     logger.info(f"Gallery exported successfully to {gallery_dir}")
     logger.info(f"Open {index_path} in browser to view")

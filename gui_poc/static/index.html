@@ -744,6 +744,188 @@
             margin-left: 4px;
         }
         
+        .lightbox {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.98);
+            display: flex;
+            flex-direction: column;
+            z-index: 2000;
+        }
+        
+        .lightbox-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 30px;
+            background: rgba(0, 0, 0, 0.8);
+        }
+        
+        .lightbox-title {
+            font-size: 1.2rem;
+            color: #fff;
+        }
+        
+        .lightbox-controls {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+        
+        .lightbox-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            color: #fff;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            font-size: 1.2rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .lightbox-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: scale(1.1);
+        }
+        
+        .lightbox-main {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            padding: 20px;
+        }
+        
+        .lightbox-image {
+            max-width: 90%;
+            max-height: 80vh;
+            object-fit: contain;
+            border-radius: 8px;
+            box-shadow: 0 8px 40px rgba(0, 0, 0, 0.8);
+        }
+        
+        .lightbox-nav {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            background: rgba(0, 0, 0, 0.7);
+            border: none;
+            color: #fff;
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            font-size: 2rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+        
+        .lightbox-nav:hover {
+            background: rgba(74, 222, 128, 0.3);
+            transform: translateY(-50%) scale(1.1);
+        }
+        
+        .lightbox-nav:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+        
+        .lightbox-nav.prev {
+            left: 30px;
+        }
+        
+        .lightbox-nav.next {
+            right: 30px;
+        }
+        
+        .lightbox-sidebar {
+            background: rgba(0, 0, 0, 0.8);
+            padding: 30px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 30px;
+            flex-wrap: wrap;
+        }
+        
+        .lightbox-metadata {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        
+        .lightbox-rating {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .lightbox-star {
+            cursor: pointer;
+            font-size: 32px;
+            color: #333;
+            transition: all 0.2s ease;
+        }
+        
+        .lightbox-star:hover,
+        .lightbox-star.hover {
+            color: #fbbf24;
+            transform: scale(1.2);
+        }
+        
+        .lightbox-star.active {
+            color: #fbbf24;
+        }
+        
+        .lightbox-colors {
+            display: flex;
+            gap: 8px;
+        }
+        
+        .lightbox-color-dot {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: 3px solid transparent;
+        }
+        
+        .lightbox-color-dot:hover {
+            transform: scale(1.2);
+            box-shadow: 0 0 12px currentColor;
+        }
+        
+        .lightbox-color-dot.active {
+            border-color: #fff;
+        }
+        
+        .keyboard-shortcuts {
+            position: absolute;
+            bottom: 90px;
+            left: 30px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px 20px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            backdrop-filter: blur(10px);
+            opacity: 0.7;
+        }
+        
+        .keyboard-shortcuts kbd {
+            background: #333;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-family: monospace;
+            margin: 0 3px;
+        }
+        
         @media (max-width: 768px) {
             .burst-viewer {
                 grid-template-columns: 1fr;
@@ -756,6 +938,24 @@
             
             .sidebar-photo {
                 min-width: 150px;
+            }
+            
+            .lightbox-nav {
+                width: 50px;
+                height: 50px;
+                font-size: 1.5rem;
+            }
+            
+            .lightbox-nav.prev {
+                left: 10px;
+            }
+            
+            .lightbox-nav.next {
+                right: 10px;
+            }
+            
+            .keyboard-shortcuts {
+                display: none;
             }
         }
     </style>
@@ -948,11 +1148,12 @@
             </div>
             
             <div v-if="filteredPhotos.length > 0" class="grid">
-                <div v-for="photo in filteredPhotos" 
+                <div v-for="(photo, index) in filteredPhotos" 
                      :key="photo.id" 
                      class="photo-card"
                      @mouseenter="hoveredPhoto = photo.id"
-                     @mouseleave="hoveredPhoto = null; hoverStar = 0">
+                     @mouseleave="hoveredPhoto = null; hoverStar = 0"
+                     @click="openLightbox(photo, index)">
                     
                     <img :src="photo.thumbnail" 
                          :alt="photo.name"
@@ -969,7 +1170,7 @@
                     <div class="photo-info">
                         <div class="photo-name" :title="photo.name">{{ photo.name }}</div>
                         
-                        <div class="stars">
+                        <div class="stars" @click.stop>
                             <span v-for="n in 5" 
                                   :key="n" 
                                   class="star" 
@@ -1154,6 +1355,102 @@
             </div>
         </div>
         
+        <!-- Lightbox -->
+        <div v-if="showLightbox && lightboxPhoto" class="lightbox" @click.self="closeLightbox">
+            <div class="lightbox-header">
+                <div class="lightbox-title">
+                    {{ lightboxPhoto.name }} ({{ lightboxIndex + 1 }} / {{ filteredPhotos.length }})
+                </div>
+                <div class="lightbox-controls">
+                    <button class="lightbox-btn" @click="closeLightbox" title="Close (ESC)">×</button>
+                </div>
+            </div>
+            
+            <div class="lightbox-main">
+                <img :src="lightboxPhoto.full_image || lightboxPhoto.thumbnail" 
+                     :alt="lightboxPhoto.name" 
+                     class="lightbox-image">
+                
+                <button class="lightbox-nav prev" 
+                        @click="prevPhoto" 
+                        :disabled="lightboxIndex === 0"
+                        title="Previous (←)">
+                    ‹
+                </button>
+                
+                <button class="lightbox-nav next" 
+                        @click="nextPhoto" 
+                        :disabled="lightboxIndex === filteredPhotos.length - 1"
+                        title="Next (→)">
+                    ›
+                </button>
+                
+                <div class="keyboard-shortcuts">
+                    <div><kbd>←</kbd> <kbd>→</kbd> Navigate</div>
+                    <div><kbd>1-5</kbd> Quick rating</div>
+                    <div><kbd>C</kbd> Color label</div>
+                    <div><kbd>ESC</kbd> Close</div>
+                </div>
+            </div>
+            
+            <div class="lightbox-sidebar">
+                <div class="lightbox-metadata">
+                    <div class="lightbox-rating">
+                        <span style="color: #888; margin-right: 10px;">Rating:</span>
+                        <span v-for="n in 5" 
+                              :key="n" 
+                              class="lightbox-star" 
+                              :class="{ active: n <= lightboxPhoto.rating }"
+                              @mouseenter="hoverStar = n"
+                              @mouseleave="hoverStar = 0"
+                              @click="rateLightboxPhoto(n)">
+                            ★
+                        </span>
+                    </div>
+                    
+                    <div class="lightbox-colors">
+                        <span style="color: #888; margin-right: 10px;">Color:</span>
+                        <span class="lightbox-color-dot red" 
+                              :class="{ active: lightboxPhoto.color === 'red' }"
+                              @click="setColor(lightboxPhoto, lightboxPhoto.color === 'red' ? null : 'red')"
+                              :style="{ background: '#ef4444' }">
+                        </span>
+                        <span class="lightbox-color-dot yellow" 
+                              :class="{ active: lightboxPhoto.color === 'yellow' }"
+                              @click="setColor(lightboxPhoto, lightboxPhoto.color === 'yellow' ? null : 'yellow')"
+                              :style="{ background: '#fbbf24' }">
+                        </span>
+                        <span class="lightbox-color-dot green" 
+                              :class="{ active: lightboxPhoto.color === 'green' }"
+                              @click="setColor(lightboxPhoto, lightboxPhoto.color === 'green' ? null : 'green')"
+                              :style="{ background: '#4ade80' }">
+                        </span>
+                        <span class="lightbox-color-dot blue" 
+                              :class="{ active: lightboxPhoto.color === 'blue' }"
+                              @click="setColor(lightboxPhoto, lightboxPhoto.color === 'blue' ? null : 'blue')"
+                              :style="{ background: '#3b82f6' }">
+                        </span>
+                        <span class="lightbox-color-dot purple" 
+                              :class="{ active: lightboxPhoto.color === 'purple' }"
+                              @click="setColor(lightboxPhoto, lightboxPhoto.color === 'purple' ? null : 'purple')"
+                              :style="{ background: '#a855f7' }">
+                        </span>
+                    </div>
+                    
+                    <div v-if="lightboxPhoto.keywords && lightboxPhoto.keywords.length > 0">
+                        <div style="color: #888; margin-bottom: 8px;">Tags:</div>
+                        <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                            <span v-for="keyword in lightboxPhoto.keywords" 
+                                  :key="keyword"
+                                  class="keyword-tag">
+                                {{ keyword }}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
         <!-- Export Modal -->
         <div v-if="showExportModal" class="modal" @click.self="showExportModal = false">
             <div class="modal-content" style="max-width: 600px;">
@@ -1196,6 +1493,19 @@
                             ✓ Keywords/Tags<br>
                             ✓ Optimized images<br>
                             ✓ Standalone HTML file
+                        </div>
+                    </div>
+                    
+                    <!-- Progress Bar -->
+                    <div v-if="exportProgress.show" style="background: rgba(74, 222, 128, 0.1); padding: 15px; border-radius: 8px; margin-bottom: 15px; border: 2px solid rgba(74, 222, 128, 0.3);">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 0.9rem;">
+                            <span>{{ exportProgress.message }}</span>
+                            <span>{{ exportProgress.current }} / {{ exportProgress.total }}</span>
+                        </div>
+                        <div style="background: rgba(0,0,0,0.3); height: 8px; border-radius: 4px; overflow: hidden;">
+                            <div style="background: linear-gradient(90deg, #4ade80, #3b82f6); height: 100%; transition: width 0.3s ease;"
+                                 :style="{ width: exportProgress.total > 0 ? (exportProgress.current / exportProgress.total * 100) + '%' : '0%' }">
+                            </div>
                         </div>
                     </div>
                     
@@ -1323,6 +1633,16 @@
                     exportTitle: '',
                     exportTemplate: 'photoswipe',
                     exporting: false,
+                    exportProgress: {
+                        show: false,
+                        current: 0,
+                        total: 0,
+                        message: ''
+                    },
+                    // Lightbox
+                    showLightbox: false,
+                    lightboxPhoto: null,
+                    lightboxIndex: 0,
                     // Filtering & Sorting
                     filters: {
                         ratings: {
@@ -1777,6 +2097,12 @@
                     }
                     
                     this.exporting = true;
+                    this.exportProgress.show = true;
+                    this.exportProgress.total = this.filteredPhotos.length;
+                    this.exportProgress.current = 0;
+                    
+                    // Monitor progress
+                    this.monitorExportProgress();
                     
                     try {
                         const photoIds = this.filteredPhotos.map(p => p.id);
@@ -1811,6 +2137,95 @@
                         console.error('Export error:', err);
                     } finally {
                         this.exporting = false;
+                        this.exportProgress.show = false;
+                    }
+                },
+                
+                monitorExportProgress() {
+                    const eventSource = new EventSource('/api/export/progress');
+                    
+                    eventSource.onmessage = (event) => {
+                        const progress = JSON.parse(event.data);
+                        
+                        this.exportProgress.current = progress.current;
+                        this.exportProgress.total = progress.total;
+                        this.exportProgress.message = progress.message;
+                        
+                        console.log(`Export: ${progress.message} (${progress.current}/${progress.total})`);
+                        
+                        if (progress.status === 'complete' || progress.status === 'error') {
+                            eventSource.close();
+                        }
+                    };
+                    
+                    eventSource.onerror = () => {
+                        eventSource.close();
+                    };
+                },
+                
+                openLightbox(photo, index) {
+                    this.lightboxPhoto = photo;
+                    this.lightboxIndex = index;
+                    this.showLightbox = true;
+                    document.addEventListener('keydown', this.handleLightboxKeyboard);
+                },
+                
+                closeLightbox() {
+                    this.showLightbox = false;
+                    this.lightboxPhoto = null;
+                    document.removeEventListener('keydown', this.handleLightboxKeyboard);
+                },
+                
+                nextPhoto() {
+                    if (this.lightboxIndex < this.filteredPhotos.length - 1) {
+                        this.lightboxIndex++;
+                        this.lightboxPhoto = this.filteredPhotos[this.lightboxIndex];
+                    }
+                },
+                
+                prevPhoto() {
+                    if (this.lightboxIndex > 0) {
+                        this.lightboxIndex--;
+                        this.lightboxPhoto = this.filteredPhotos[this.lightboxIndex];
+                    }
+                },
+                
+                async rateLightboxPhoto(rating) {
+                    await this.rate(this.lightboxPhoto, rating);
+                },
+                
+                handleLightboxKeyboard(e) {
+                    if (!this.showLightbox) return;
+                    
+                    switch(e.key) {
+                        case 'Escape':
+                            this.closeLightbox();
+                            break;
+                        case 'ArrowLeft':
+                            this.prevPhoto();
+                            break;
+                        case 'ArrowRight':
+                            this.nextPhoto();
+                            break;
+                        case '1':
+                        case '2':
+                        case '3':
+                        case '4':
+                        case '5':
+                            this.rateLightboxPhoto(parseInt(e.key));
+                            break;
+                        case 'c':
+                        case 'C':
+                            // Cycle through colors
+                            const colors = ['red', 'yellow', 'green', 'blue', 'purple', null];
+                            const currentIndex = colors.indexOf(this.lightboxPhoto.color);
+                            const nextColor = colors[(currentIndex + 1) % colors.length];
+                            this.setColor(this.lightboxPhoto, nextColor);
+                            break;
+                        case '0':
+                            // Clear rating
+                            this.rateLightboxPhoto(0);
+                            break;
                     }
                 }
             },

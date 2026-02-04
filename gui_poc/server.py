@@ -28,7 +28,7 @@ from photo_tool.actions.metadata import (
     set_keywords,
     get_all_keywords
 )
-from photo_tool.actions.export import export_gallery
+from photo_tool.actions.export import export_gallery, _export_progress
 
 app = Flask(__name__, static_folder='static')
 CORS(app)  # Enable CORS for development
@@ -104,7 +104,8 @@ def get_photos():
                 'color': metadata.get('color'),
                 'comment': metadata.get('comment', ''),
                 'keywords': metadata.get('keywords', []),
-                'thumbnail': f"/thumbnails/{photo.path.stem}.jpg"
+                'thumbnail': f"/thumbnails/{photo.path.stem}.jpg",
+                'full_image': f"/images/{photo.path.stem}{photo.path.suffix}"
             })
         
         return jsonify({
@@ -282,6 +283,7 @@ def export_gallery_api():
     """
     try:
         from flask import request
+        import threading
         
         data = request.get_json()
         photo_ids = data.get('photo_ids', [])
@@ -295,19 +297,35 @@ def export_gallery_api():
         # Convert IDs to Path objects
         photo_paths = [Path(photo_id) for photo_id in photo_ids]
         
-        # Export gallery
+        # Export gallery in background thread
         workspace_path = Path("C:/PhotoTool_Test")
         output_dir = workspace_path / "exports" / output_name
         
-        gallery_dir = export_gallery(
-            photo_paths=photo_paths,
-            output_dir=output_dir,
-            title=title,
-            template=template,
-            max_image_size=2000,
-            thumbnail_size=400,
-            include_metadata=True
-        )
+        result = {'gallery_dir': None, 'error': None}
+        
+        def do_export():
+            try:
+                result['gallery_dir'] = export_gallery(
+                    photo_paths=photo_paths,
+                    output_dir=output_dir,
+                    title=title,
+                    template=template,
+                    max_image_size=2000,
+                    thumbnail_size=400,
+                    include_metadata=True
+                )
+            except Exception as e:
+                result['error'] = str(e)
+        
+        # Start export in thread
+        thread = threading.Thread(target=do_export)
+        thread.start()
+        thread.join()  # Wait for completion
+        
+        if result['error']:
+            return jsonify({'error': result['error']}), 500
+        
+        gallery_dir = result['gallery_dir']
         
         return jsonify({
             'success': True,
@@ -320,6 +338,29 @@ def export_gallery_api():
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
+
+@app.get('/api/export/progress')
+def get_export_progress():
+    """Get export progress (SSE)"""
+    def generate():
+        from photo_tool.actions.export import _export_progress
+        
+        last_current = -1
+        while True:
+            current = _export_progress.copy()
+            
+            if current['current'] != last_current or current['status'] == 'complete':
+                data = json.dumps(current)
+                yield f"data: {data}\n\n"
+                last_current = current['current']
+            
+            if current['status'] in ['complete', 'error', 'idle']:
+                break
+            
+            time.sleep(0.3)
+    
+    return Response(stream_with_context(generate()), mimetype='text/event-stream')
 
 
 @app.get('/thumbnails/<path:filename>')
@@ -371,6 +412,49 @@ def get_thumbnail(filename):
                         return send_file(img_io, mimetype='image/jpeg')
             
             return jsonify({'error': 'Thumbnail not found'}), 404
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.get('/images/<path:filename>')
+def get_full_image(filename):
+    """Serve full-size images for lightbox"""
+    try:
+        workspace_path = Path("C:/PhotoTool_Test")
+        config = load_config(workspace_path / "config.yaml")
+        
+        # Search in scan roots
+        for root in config.scan.roots:
+            root_path = Path(root)
+            # Try different cases
+            for ext in ['.JPG', '.jpg', '.JPEG', '.jpeg', '.PNG', '.png']:
+                image_path = root_path / f"{Path(filename).stem}{ext}"
+                if image_path.exists():
+                    # Serve with optimized size (max 2500px)
+                    from PIL import Image
+                    from io import BytesIO
+                    from flask import send_file
+                    
+                    img = Image.open(image_path)
+                    
+                    # Resize if too large
+                    max_size = 2500
+                    if img.width > max_size or img.height > max_size:
+                        img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+                    
+                    # Convert to JPEG
+                    if img.mode in ('RGBA', 'LA', 'P'):
+                        img = img.convert('RGB')
+                    
+                    # Save to BytesIO
+                    img_io = BytesIO()
+                    img.save(img_io, 'JPEG', quality=92)
+                    img_io.seek(0)
+                    
+                    return send_file(img_io, mimetype='image/jpeg')
+        
+        return jsonify({'error': 'Image not found'}), 404
     
     except Exception as e:
         return jsonify({'error': str(e)}), 500

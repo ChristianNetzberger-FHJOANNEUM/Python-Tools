@@ -1,10 +1,10 @@
 # 📸 Photo Tool PoC - Web GUI
 
-**Proof-of-Concept** web interface for Photo Tool
+**Full-featured** web interface for Photo Tool with burst detection, filtering, and gallery export.
 
 ## 🚀 Quick Start
 
-### 1. Install Flask
+### 1. Install Dependencies
 
 ```powershell
 # Activate your venv first
@@ -30,21 +30,60 @@ Open: **http://localhost:8000**
 
 ## ✨ Features
 
+### **Core Features:**
 - ✅ **Photo Grid** - Browse all photos as thumbnails
+- ✅ **Lightbox Viewer** - Fullscreen photo viewing
 - ✅ **Star Rating** - Click stars to rate 1-5
+- ✅ **Color Labels** - Lightroom-style 🔴🟡🟢🔵🟣
+- ✅ **Keywords/Tags** - Tag & filter photos
 - ✅ **Statistics** - Total/Rated/Unrated counts
-- ✅ **Lazy Loading** - Load more as you scroll
-- ✅ **Persistent Ratings** - Uses existing JSON sidecar system
-- ✅ **Modern UI** - Beautiful dark theme
+
+### **Advanced Features:**
+- ✅ **Burst Detection** - Find & view photo series
+- ✅ **Quality Indicators** - Blur/sharpness scores
+- ✅ **Smart Filtering** - By rating, color, keywords, bursts
+- ✅ **Sorting** - By name, rating, date
+- ✅ **Web Gallery Export** - PhotoSwipe standalone galleries
+- ✅ **Keyboard Shortcuts** - Lightning-fast workflow
+
+### **Performance:**
+- ✅ **Caching** - Instant burst reload
+- ✅ **Progress Bars** - Real-time analysis updates
+- ✅ **Lazy Loading** - Smooth scrolling
+- ✅ **On-the-fly Thumbnails** - Auto-generate if missing
 
 ---
 
 ## 🎮 Usage
 
+### **Photo Management:**
 1. **Browse Photos** - Scroll through thumbnail grid
-2. **Rate Photos** - Click on stars (1-5)
-3. **Load More** - Click "Load More" button
-4. **View Stats** - Top bar shows totals
+2. **Rate Photos** - Click stars (1-5) or use keyboard (1-5 in lightbox)
+3. **Color Label** - Click color dots or press C in lightbox
+4. **Add Keywords** - Click "+ tag", type, press Enter
+5. **Lightbox** - Click photo for fullscreen view
+
+### **Burst Detection:**
+1. **Switch to Bursts Tab** - Analyzes photo series
+2. **Click Burst Group** - Opens detail viewer
+3. **Navigate** - Use ◄ ► buttons or arrow keys
+4. **Rate** - Rate individual photos in burst
+5. **View Quality** - See blur scores & BEST badge
+
+### **Filtering:**
+1. **Rating Filter** - Select 0-5 stars (multi-select)
+2. **Color Filter** - Filter by color labels
+3. **Keyword Filter** - Click tags to filter
+4. **In Bursts** - Show only photos in burst groups
+5. **Clear Filters** - Reset all filters
+
+### **Export:**
+1. **Filter Photos** - Apply desired filters
+2. **Click Export** - Top-right button
+3. **Enter Title** - Gallery name
+4. **Choose Template** - PhotoSwipe or Simple
+5. **Export** - Creates standalone HTML gallery
+6. **Share** - Upload to Netlify/Vercel/GitHub Pages
 
 ---
 
@@ -101,18 +140,55 @@ app.run(debug=True, port=8080)  # Use 8080 instead
 
 ---
 
-## 🚀 Next Steps (v0.3.0)
+## ⌨️ Keyboard Shortcuts
 
-This is just a PoC! For production GUI:
+### **In Lightbox:**
+```
+←/→     Navigate photos
+1-5     Quick rating
+C       Cycle color labels
+0       Clear rating
+ESC     Close lightbox
+```
 
-1. **FastAPI** instead of Flask (better performance)
-2. **Vue/Nuxt** proper build system
-3. **Lightbox** for fullscreen view
-4. **Burst Viewer** for series
-5. **Filtering** by rating, date, etc.
-6. **Keyboard Shortcuts** (1-5 keys)
-7. **Batch Operations** (rate multiple)
-8. **Export** selected photos
+See `KEYBOARD_SHORTCUTS.md` for full list.
+
+---
+
+## 📦 Export Galleries
+
+### **Export Process:**
+1. Filter photos (e.g., 5★ + Green + "landscape")
+2. Click "📦 Export Gallery"
+3. Enter title and choose template
+4. Gallery created in `C:\PhotoTool_Test\exports\`
+
+### **Templates:**
+- **PhotoSwipe** - Modern, fullscreen, touch-enabled
+- **Simple** - Lightweight grid, no dependencies
+
+### **Deployment:**
+```powershell
+# Upload to Netlify (free, 1 minute)
+# 1. Go to: https://app.netlify.com/drop
+# 2. Drag & drop the "gallery" folder
+# 3. Get shareable link!
+```
+
+---
+
+## 🚀 Production Roadmap (v0.3.0+)
+
+Future enhancements:
+
+1. **FastAPI** instead of Flask (async, better performance)
+2. **Vue/Nuxt** proper build system (SPA/SSR)
+3. **Map View** - GPS coordinates on interactive map
+4. **Burst Management** - Select & delete from bursts
+5. **Batch Operations** - Rate/tag/color multiple photos
+6. **Video Player** - Play videos in lightbox
+7. **Audio Player** - Play audio files
+8. **Basic Editing** - Crop, rotate, adjust
 
 ---
 
