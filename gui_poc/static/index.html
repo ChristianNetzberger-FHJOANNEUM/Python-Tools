@@ -41,6 +41,35 @@
             gap: 10px;
         }
         
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .tab {
+            padding: 12px 24px;
+            background: transparent;
+            border: none;
+            color: #888;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 500;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s ease;
+        }
+        
+        .tab:hover {
+            color: #fff;
+            background: rgba(255, 255, 255, 0.05);
+        }
+        
+        .tab.active {
+            color: #4ade80;
+            border-bottom-color: #4ade80;
+        }
+        
         .stats {
             display: flex;
             gap: 20px;
@@ -151,16 +180,242 @@
             color: #fbbf24;
         }
         
-        .comment-badge {
-            position: absolute;
-            top: 18px;
-            right: 18px;
-            background: rgba(59, 130, 246, 0.9);
-            color: white;
-            padding: 4px 8px;
+        .burst-card {
+            background: rgba(74, 222, 128, 0.1);
+            border: 2px solid rgba(74, 222, 128, 0.3);
+            border-radius: 12px;
+            padding: 15px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .burst-card:hover {
+            transform: translateY(-5px);
+            background: rgba(74, 222, 128, 0.15);
+            box-shadow: 0 8px 24px rgba(74, 222, 128, 0.2);
+        }
+        
+        .burst-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        
+        .burst-name {
+            font-size: 1rem;
+            font-weight: 600;
+            color: #4ade80;
+        }
+        
+        .burst-count {
+            background: rgba(74, 222, 128, 0.3);
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+        
+        .burst-thumbnails {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+        }
+        
+        .burst-thumb {
+            width: 100%;
+            height: 80px;
+            object-fit: cover;
             border-radius: 6px;
-            font-size: 0.75rem;
+            position: relative;
+        }
+        
+        .burst-thumb-wrapper {
+            position: relative;
+        }
+        
+        .best-badge {
+            position: absolute;
+            top: 4px;
+            right: 4px;
+            background: rgba(74, 222, 128, 0.9);
+            color: #000;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.7rem;
             font-weight: bold;
+        }
+        
+        .blur-badge {
+            position: absolute;
+            bottom: 4px;
+            left: 4px;
+            background: rgba(0, 0, 0, 0.8);
+            color: #fff;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+        }
+        
+        .blur-badge.good {
+            background: rgba(74, 222, 128, 0.8);
+            color: #000;
+        }
+        
+        .blur-badge.warning {
+            background: rgba(251, 191, 36, 0.8);
+        }
+        
+        .blur-badge.bad {
+            background: rgba(239, 68, 68, 0.8);
+        }
+        
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.95);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 20px;
+        }
+        
+        .modal-content {
+            max-width: 1200px;
+            width: 100%;
+            background: #1a1a2e;
+            border-radius: 16px;
+            padding: 30px;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .modal-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #4ade80;
+        }
+        
+        .close-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            color: #fff;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            font-size: 1.5rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .close-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: rotate(90deg);
+        }
+        
+        .burst-viewer {
+            display: grid;
+            grid-template-columns: 1fr 300px;
+            gap: 30px;
+        }
+        
+        .main-photo {
+            text-align: center;
+        }
+        
+        .main-photo img {
+            max-width: 100%;
+            max-height: 60vh;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        }
+        
+        .photo-controls {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        
+        .nav-btn {
+            background: rgba(74, 222, 128, 0.2);
+            border: 2px solid rgba(74, 222, 128, 0.5);
+            color: #4ade80;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 1.2rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .nav-btn:hover {
+            background: rgba(74, 222, 128, 0.3);
+            transform: scale(1.05);
+        }
+        
+        .nav-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+        
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        
+        .sidebar-photo {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: 2px solid transparent;
+        }
+        
+        .sidebar-photo.active {
+            border-color: #4ade80;
+            background: rgba(74, 222, 128, 0.1);
+        }
+        
+        .sidebar-photo:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+        
+        .sidebar-photo img {
+            width: 100%;
+            height: 120px;
+            object-fit: cover;
+            border-radius: 6px;
+        }
+        
+        .sidebar-photo-name {
+            font-size: 0.8rem;
+            color: #aaa;
+            margin-top: 6px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .error {
+            background: rgba(239, 68, 68, 0.2);
+            color: #fca5a5;
+            padding: 16px;
+            border-radius: 8px;
+            margin: 20px 0;
+            border-left: 4px solid #ef4444;
         }
         
         .load-more {
@@ -191,32 +446,124 @@
             transform: none;
         }
         
-        .error {
-            background: rgba(239, 68, 68, 0.2);
-            color: #fca5a5;
-            padding: 16px;
-            border-radius: 8px;
-            margin: 20px 0;
-            border-left: 4px solid #ef4444;
-        }
-        
-        .keyboard-hint {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            background: rgba(0, 0, 0, 0.8);
-            padding: 12px 18px;
-            border-radius: 8px;
-            font-size: 0.85rem;
+        .filter-bar {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 30px;
             backdrop-filter: blur(10px);
         }
         
-        .keyboard-hint kbd {
-            background: #333;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-family: monospace;
-            margin: 0 2px;
+        .filter-section {
+            margin-bottom: 15px;
+        }
+        
+        .filter-section:last-child {
+            margin-bottom: 0;
+        }
+        
+        .filter-label {
+            font-size: 0.85rem;
+            color: #888;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 600;
+        }
+        
+        .filter-options {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        
+        .filter-chip {
+            background: rgba(255, 255, 255, 0.08);
+            border: 2px solid transparent;
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 0.9rem;
+            user-select: none;
+        }
+        
+        .filter-chip:hover {
+            background: rgba(255, 255, 255, 0.12);
+        }
+        
+        .filter-chip.active {
+            background: rgba(74, 222, 128, 0.2);
+            border-color: rgba(74, 222, 128, 0.5);
+            color: #4ade80;
+        }
+        
+        .filter-chip input[type="checkbox"] {
+            margin-right: 6px;
+            cursor: pointer;
+        }
+        
+        .sort-controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        
+        .sort-select {
+            background: rgba(255, 255, 255, 0.08);
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            color: #fff;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            cursor: pointer;
+            outline: none;
+            transition: all 0.3s ease;
+        }
+        
+        .sort-select:hover,
+        .sort-select:focus {
+            border-color: rgba(74, 222, 128, 0.5);
+            background: rgba(255, 255, 255, 0.12);
+        }
+        
+        .sort-order-btn {
+            background: rgba(255, 255, 255, 0.08);
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 1rem;
+        }
+        
+        .sort-order-btn:hover {
+            background: rgba(255, 255, 255, 0.12);
+            border-color: rgba(74, 222, 128, 0.5);
+        }
+        
+        .filter-stats {
+            background: rgba(74, 222, 128, 0.1);
+            padding: 10px 16px;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            color: #4ade80;
+        }
+        
+        @media (max-width: 768px) {
+            .burst-viewer {
+                grid-template-columns: 1fr;
+            }
+            
+            .sidebar {
+                flex-direction: row;
+                overflow-x: auto;
+            }
+            
+            .sidebar-photo {
+                min-width: 150px;
+            }
         }
     </style>
 </head>
@@ -228,6 +575,15 @@
                 <span>Photo Tool PoC</span>
             </h1>
             
+            <div class="tabs">
+                <button class="tab" :class="{ active: currentView === 'photos' }" @click="currentView = 'photos'">
+                    All Photos
+                </button>
+                <button class="tab" :class="{ active: currentView === 'bursts' }" @click="switchToBursts">
+                    Bursts {{ bursts.length > 0 ? `(${bursts.length})` : '' }}
+                </button>
+            </div>
+            
             <div v-if="stats" class="stats">
                 <div class="stat-card">
                     <div class="stat-value">{{ stats.total_photos }}</div>
@@ -238,67 +594,289 @@
                     <div>Rated</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-value">{{ stats.unrated_photos }}</div>
-                    <div>Unrated</div>
-                </div>
-                <div class="stat-card" v-if="stats.total_videos > 0">
-                    <div class="stat-value">{{ stats.total_videos }}</div>
-                    <div>Videos</div>
+                    <div class="stat-value">{{ bursts.length }}</div>
+                    <div>Burst Groups</div>
                 </div>
             </div>
         </header>
         
-        <div v-if="loading && photos.length === 0" class="loading">
-            <div class="spinner"></div>
-            <div>Loading photos...</div>
-        </div>
-        
-        <div v-if="error" class="error">
-            <strong>Error:</strong> {{ error }}
-        </div>
-        
-        <div v-if="photos.length > 0" class="grid">
-            <div v-for="photo in photos" 
-                 :key="photo.id" 
-                 class="photo-card"
-                 @mouseenter="hoveredPhoto = photo.id"
-                 @mouseleave="hoveredPhoto = null; hoverStar = 0">
+        <!-- All Photos View -->
+        <div v-if="currentView === 'photos'">
+            <!-- Filter Bar -->
+            <div v-if="photos.length > 0" class="filter-bar">
+                <div class="filter-section">
+                    <div class="filter-label">⭐ Rating</div>
+                    <div class="filter-options">
+                        <label class="filter-chip" :class="{ active: filters.ratings[0] }">
+                            <input type="checkbox" v-model="filters.ratings[0]">
+                            ☆☆☆☆☆ Unrated
+                        </label>
+                        <label class="filter-chip" :class="{ active: filters.ratings[1] }">
+                            <input type="checkbox" v-model="filters.ratings[1]">
+                            ★☆☆☆☆ 1-Star
+                        </label>
+                        <label class="filter-chip" :class="{ active: filters.ratings[2] }">
+                            <input type="checkbox" v-model="filters.ratings[2]">
+                            ★★☆☆☆ 2-Star
+                        </label>
+                        <label class="filter-chip" :class="{ active: filters.ratings[3] }">
+                            <input type="checkbox" v-model="filters.ratings[3]">
+                            ★★★☆☆ 3-Star
+                        </label>
+                        <label class="filter-chip" :class="{ active: filters.ratings[4] }">
+                            <input type="checkbox" v-model="filters.ratings[4]">
+                            ★★★★☆ 4-Star
+                        </label>
+                        <label class="filter-chip" :class="{ active: filters.ratings[5] }">
+                            <input type="checkbox" v-model="filters.ratings[5]">
+                            ★★★★★ 5-Star
+                        </label>
+                    </div>
+                </div>
                 
-                <img :src="photo.thumbnail" 
-                     :alt="photo.name"
-                     @error="handleImageError($event, photo)"
-                     loading="lazy">
+                <div class="filter-section">
+                    <div class="filter-label">🔍 Other Filters</div>
+                    <div class="filter-options">
+                        <label class="filter-chip" :class="{ active: filters.inBursts }">
+                            <input type="checkbox" v-model="filters.inBursts">
+                            📸 In Bursts
+                        </label>
+                        
+                        <div v-if="activeFilterCount > 0" class="filter-stats">
+                            {{ filteredPhotos.length }} of {{ photos.length }} photos
+                        </div>
+                    </div>
+                </div>
                 
-                <div v-if="photo.comment" class="comment-badge">💬</div>
-                
-                <div class="photo-info">
-                    <div class="photo-name" :title="photo.name">{{ photo.name }}</div>
+                <div class="filter-section">
+                    <div class="filter-label">📊 Sort By</div>
+                    <div class="sort-controls">
+                        <select v-model="sortBy" class="sort-select">
+                            <option value="name">Name</option>
+                            <option value="rating">Rating</option>
+                            <option value="date">Date</option>
+                        </select>
+                        
+                        <button class="sort-order-btn" @click="sortOrder = sortOrder === 'asc' ? 'desc' : 'asc'">
+                            {{ sortOrder === 'asc' ? '↑' : '↓' }}
+                        </button>
+                        
+                        <button v-if="activeFilterCount > 0" 
+                                @click="clearFilters"
+                                style="background: rgba(239, 68, 68, 0.2); border-color: rgba(239, 68, 68, 0.5); color: #f87171; margin-left: 10px;"
+                                class="sort-order-btn">
+                            Clear Filters
+                        </button>
+                    </div>
+                </div>
+            </div>
+            
+            <div v-if="loading && photos.length === 0" class="loading">
+                <div class="spinner"></div>
+                <div>Loading photos...</div>
+            </div>
+            
+            <div v-if="error" class="error">
+                <strong>Error:</strong> {{ error }}
+            </div>
+            
+            <div v-if="filteredPhotos.length > 0" class="grid">
+                <div v-for="photo in filteredPhotos" 
+                     :key="photo.id" 
+                     class="photo-card"
+                     @mouseenter="hoveredPhoto = photo.id"
+                     @mouseleave="hoveredPhoto = null; hoverStar = 0">
                     
-                    <div class="stars">
-                        <span v-for="n in 5" 
-                              :key="n" 
-                              class="star" 
-                              :class="{ 
-                                  active: n <= photo.rating,
-                                  hover: hoveredPhoto === photo.id && n <= hoverStar
-                              }"
-                              @mouseenter="hoverStar = n"
-                              @click="rate(photo, n)">
-                            ★
-                        </span>
+                    <img :src="photo.thumbnail" 
+                         :alt="photo.name"
+                         @error="handleImageError($event, photo)"
+                         loading="lazy">
+                    
+                    <div class="photo-info">
+                        <div class="photo-name" :title="photo.name">{{ photo.name }}</div>
+                        
+                        <div class="stars">
+                            <span v-for="n in 5" 
+                                  :key="n" 
+                                  class="star" 
+                                  :class="{ 
+                                      active: n <= photo.rating,
+                                      hover: hoveredPhoto === photo.id && n <= hoverStar
+                                  }"
+                                  @mouseenter="hoverStar = n"
+                                  @click="rate(photo, n)">
+                                ★
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div v-if="photos.length > 0 && filteredPhotos.length === 0" class="loading">
+                <div style="font-size: 3rem; margin-bottom: 20px;">🔍</div>
+                <div>No photos match your filters</div>
+                <div style="margin-top: 15px;">
+                    <button @click="clearFilters" 
+                            style="background: rgba(74, 222, 128, 0.2); border: 2px solid rgba(74, 222, 128, 0.5); color: #4ade80; padding: 10px 20px; border-radius: 8px; cursor: pointer;">
+                        Clear All Filters
+                    </button>
+                </div>
+            </div>
+            
+            <div v-if="photos.length > 0 && photos.length < totalPhotos && filteredPhotos.length > 0" class="load-more">
+                <button @click="loadMore" :disabled="loading">
+                    {{ loading ? 'Loading...' : `Load More (${totalPhotos - photos.length} remaining)` }}
+                </button>
+            </div>
+        </div>
+        
+        <!-- Bursts View -->
+        <div v-if="currentView === 'bursts'">
+            <!-- Progress indicator -->
+            <div v-if="burstProgress.show && loadingBursts" 
+                 style="background: rgba(74, 222, 128, 0.1); padding: 20px; border-radius: 12px; margin-bottom: 20px; border: 2px solid rgba(74, 222, 128, 0.3);">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                    <span style="font-weight: 600;">{{ burstProgress.message }}</span>
+                    <span v-if="burstProgress.total > 0">{{ burstProgress.progress }} / {{ burstProgress.total }}</span>
+                </div>
+                <div style="background: rgba(0,0,0,0.3); height: 8px; border-radius: 4px; overflow: hidden;">
+                    <div style="background: linear-gradient(90deg, #4ade80, #3b82f6); height: 100%; transition: width 0.3s ease;"
+                         :style="{ width: burstProgress.total > 0 ? (burstProgress.progress / burstProgress.total * 100) + '%' : '0%' }">
+                    </div>
+                </div>
+            </div>
+            
+            <div v-if="loadingBursts && !burstProgress.show" class="loading">
+                <div class="spinner"></div>
+                <div>Analyzing bursts...</div>
+            </div>
+            
+            <!-- Cache indicator & Reanalyze button -->
+            <div v-if="!loadingBursts && bursts.length > 0" style="margin-bottom: 20px; display: flex; gap: 15px; align-items: center;">
+                <div v-if="burstsFromCache" style="background: rgba(74, 222, 128, 0.1); padding: 10px 15px; border-radius: 8px; font-size: 0.9rem;">
+                    ✓ Loaded from cache
+                </div>
+                <button @click="loadBursts(true)" 
+                        style="background: rgba(74, 222, 128, 0.2); border: 2px solid rgba(74, 222, 128, 0.5); color: #4ade80; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: 600;">
+                    🔄 Reanalyze
+                </button>
+            </div>
+            
+            <div v-if="burstError" class="error">
+                <strong>Error:</strong> {{ burstError }}
+            </div>
+            
+            <div v-if="bursts.length === 0 && !loadingBursts" class="loading">
+                <div style="font-size: 3rem; margin-bottom: 20px;">📸</div>
+                <div>No burst groups found</div>
+                <div style="margin-top: 10px; font-size: 0.9rem; color: #666;">
+                    Bursts are groups of similar photos taken in quick succession
+                </div>
+            </div>
+            
+            <div v-if="bursts.length > 0" class="grid">
+                <div v-for="burst in bursts" 
+                     :key="burst.id" 
+                     class="burst-card"
+                     @click="openBurstViewer(burst)">
+                    
+                    <div class="burst-header">
+                        <div class="burst-name">{{ burst.name }}</div>
+                        <div class="burst-count">{{ burst.count }} photos</div>
+                    </div>
+                    
+                    <div class="burst-thumbnails">
+                        <div v-for="(photo, idx) in burst.photos.slice(0, 4)" 
+                             :key="photo.id"
+                             class="burst-thumb-wrapper">
+                            <img :src="photo.thumbnail" 
+                                 :alt="photo.name"
+                                 class="burst-thumb">
+                            <div v-if="photo.is_best" class="best-badge">BEST</div>
+                            <div v-if="photo.blur_score" 
+                                 class="blur-badge"
+                                 :class="getBlurClass(photo.blur_score)">
+                                {{ Math.round(photo.blur_score) }}
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
         
-        <div v-if="photos.length > 0 && photos.length < totalPhotos" class="load-more">
-            <button @click="loadMore" :disabled="loading">
-                {{ loading ? 'Loading...' : `Load More (${totalPhotos - photos.length} remaining)` }}
-            </button>
-        </div>
-        
-        <div class="keyboard-hint">
-            💡 Click stars to rate photos | <kbd>1-5</kbd> for quick rating (coming soon)
+        <!-- Burst Detail Modal -->
+        <div v-if="selectedBurst" class="modal" @click.self="selectedBurst = null">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <div class="modal-title">
+                        {{ selectedBurst.name }} ({{ currentBurstPhotoIndex + 1 }} / {{ selectedBurst.count }})
+                    </div>
+                    <button class="close-btn" @click="selectedBurst = null">×</button>
+                </div>
+                
+                <div class="burst-viewer">
+                    <div class="main-photo">
+                        <img :src="currentBurstPhoto.thumbnail" 
+                             :alt="currentBurstPhoto.name">
+                        
+                        <div class="photo-info" style="margin-top: 20px;">
+                            <div style="font-size: 1.1rem; margin-bottom: 10px;">
+                                {{ currentBurstPhoto.name }}
+                            </div>
+                            
+                            <div v-if="currentBurstPhoto.blur_score" style="margin-bottom: 15px;">
+                                <span :class="getBlurClass(currentBurstPhoto.blur_score)">
+                                    Sharpness: {{ Math.round(currentBurstPhoto.blur_score) }}
+                                </span>
+                                <span v-if="currentBurstPhoto.is_best" style="margin-left: 10px; color: #4ade80; font-weight: 600;">
+                                    ⭐ BEST
+                                </span>
+                            </div>
+                            
+                            <div class="stars" style="justify-content: center;">
+                                <span v-for="n in 5" 
+                                      :key="n" 
+                                      class="star" 
+                                      :class="{ active: n <= currentBurstPhoto.rating }"
+                                      @click="rateBurstPhoto(currentBurstPhoto, n)">
+                                    ★
+                                </span>
+                            </div>
+                        </div>
+                        
+                        <div class="photo-controls">
+                            <button class="nav-btn" 
+                                    @click="prevBurstPhoto" 
+                                    :disabled="currentBurstPhotoIndex === 0">
+                                ◄ Prev
+                            </button>
+                            <button class="nav-btn" 
+                                    @click="nextBurstPhoto" 
+                                    :disabled="currentBurstPhotoIndex === selectedBurst.count - 1">
+                                Next ►
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="sidebar">
+                        <div v-for="(photo, idx) in selectedBurst.photos" 
+                             :key="photo.id"
+                             class="sidebar-photo"
+                             :class="{ active: idx === currentBurstPhotoIndex }"
+                             @click="currentBurstPhotoIndex = idx">
+                            <img :src="photo.thumbnail" :alt="photo.name">
+                            <div class="sidebar-photo-name">
+                                {{ photo.name }}
+                                <span v-if="photo.is_best" style="color: #4ade80;">⭐</span>
+                            </div>
+                            <div v-if="photo.blur_score" 
+                                 style="font-size: 0.75rem; color: #888; margin-top: 4px;">
+                                Sharp: {{ Math.round(photo.blur_score) }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -308,15 +886,113 @@
         createApp({
             data() {
                 return {
+                    currentView: 'photos',
                     photos: [],
+                    bursts: [],
                     stats: null,
                     loading: true,
+                    loadingBursts: false,
                     error: null,
+                    burstError: null,
                     totalPhotos: 0,
                     offset: 0,
                     limit: 50,
                     hoveredPhoto: null,
-                    hoverStar: 0
+                    hoverStar: 0,
+                    selectedBurst: null,
+                    currentBurstPhotoIndex: 0,
+                    burstProgress: {
+                        show: false,
+                        step: '',
+                        progress: 0,
+                        total: 0,
+                        message: ''
+                    },
+                    burstsFromCache: false,
+                    // Filtering & Sorting
+                    filters: {
+                        ratings: {
+                            0: false,
+                            1: false,
+                            2: false,
+                            3: false,
+                            4: false,
+                            5: false
+                        },
+                        inBursts: false,
+                        blurry: false
+                    },
+                    sortBy: 'name', // name, date, rating, quality
+                    sortOrder: 'asc' // asc, desc
+                }
+            },
+            computed: {
+                currentBurstPhoto() {
+                    if (!this.selectedBurst) return null;
+                    return this.selectedBurst.photos[this.currentBurstPhotoIndex];
+                },
+                
+                filteredPhotos() {
+                    let filtered = [...this.photos];
+                    
+                    // Apply rating filters
+                    const activeRatings = Object.keys(this.filters.ratings)
+                        .filter(r => this.filters.ratings[r])
+                        .map(r => parseInt(r));
+                    
+                    if (activeRatings.length > 0) {
+                        filtered = filtered.filter(p => activeRatings.includes(p.rating || 0));
+                    }
+                    
+                    if (this.filters.inBursts) {
+                        // Check if photo is in any burst
+                        const burstPhotoIds = new Set();
+                        this.bursts.forEach(burst => {
+                            burst.photos.forEach(photo => {
+                                burstPhotoIds.add(photo.id);
+                            });
+                        });
+                        filtered = filtered.filter(p => burstPhotoIds.has(p.id));
+                    }
+                    
+                    if (this.filters.blurry) {
+                        // This would require blur_score in photo data
+                        // For now, skip or implement when available
+                    }
+                    
+                    // Apply sorting
+                    filtered.sort((a, b) => {
+                        let result = 0;
+                        
+                        switch (this.sortBy) {
+                            case 'name':
+                                result = a.name.localeCompare(b.name);
+                                break;
+                            case 'rating':
+                                result = (b.rating || 0) - (a.rating || 0);
+                                break;
+                            case 'date':
+                                // Would need date field
+                                result = a.name.localeCompare(b.name);
+                                break;
+                            case 'quality':
+                                // Would need blur_score field
+                                result = 0;
+                                break;
+                        }
+                        
+                        return this.sortOrder === 'desc' ? -result : result;
+                    });
+                    
+                    return filtered;
+                },
+                
+                activeFilterCount() {
+                    let count = 0;
+                    count += Object.values(this.filters.ratings).filter(v => v).length;
+                    if (this.filters.inBursts) count++;
+                    if (this.filters.blurry) count++;
+                    return count;
                 }
             },
             methods: {
@@ -344,6 +1020,66 @@
                     }
                 },
                 
+                async loadBursts(force = false) {
+                    try {
+                        this.loadingBursts = true;
+                        this.burstError = null;
+                        this.burstProgress.show = true;
+                        this.burstProgress.message = 'Starting analysis...';
+                        
+                        // Start progress monitoring if not from cache
+                        if (force || this.bursts.length === 0) {
+                            this.monitorBurstProgress();
+                        }
+                        
+                        const url = force ? '/api/bursts?force=true' : '/api/bursts';
+                        const res = await fetch(url);
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        this.bursts = data.bursts;
+                        this.burstsFromCache = data.cached || false;
+                        
+                        if (data.cached) {
+                            console.log('✓ Loaded from cache:', data.computed_at);
+                        }
+                        
+                    } catch (err) {
+                        this.burstError = err.message;
+                        console.error('Error loading bursts:', err);
+                    } finally {
+                        this.loadingBursts = false;
+                        this.burstProgress.show = false;
+                    }
+                },
+                
+                monitorBurstProgress() {
+                    // Use EventSource for Server-Sent Events
+                    const eventSource = new EventSource('/api/bursts/progress');
+                    
+                    eventSource.onmessage = (event) => {
+                        const progress = JSON.parse(event.data);
+                        
+                        this.burstProgress.step = progress.step;
+                        this.burstProgress.progress = progress.progress;
+                        this.burstProgress.total = progress.total;
+                        this.burstProgress.message = progress.message;
+                        
+                        console.log(`Progress: ${progress.message} (${progress.progress}/${progress.total})`);
+                        
+                        if (progress.status === 'complete' || progress.status === 'error') {
+                            eventSource.close();
+                        }
+                    };
+                    
+                    eventSource.onerror = () => {
+                        eventSource.close();
+                    };
+                },
+                
                 async loadStats() {
                     try {
                         const res = await fetch('/api/stats');
@@ -357,9 +1093,16 @@
                     await this.loadPhotos();
                 },
                 
-                async rate(photo, stars) {
+                async switchToBursts() {
+                    this.currentView = 'bursts';
+                    if (this.bursts.length === 0) {
+                        await this.loadBursts();
+                    }
+                },
+                
+                async rate(photo, rating) {
                     const oldRating = photo.rating;
-                    photo.rating = stars;
+                    photo.rating = rating;
                     
                     try {
                         const res = await fetch(`/api/photos/${encodeURIComponent(photo.id)}/rate`, {
@@ -367,7 +1110,7 @@
                             headers: {
                                 'Content-Type': 'application/json'
                             },
-                            body: JSON.stringify({ stars })
+                            body: JSON.stringify({ rating })
                         });
                         
                         const data = await res.json();
@@ -377,21 +1120,62 @@
                         }
                         
                         // Update stats
-                        if (oldRating === 0 && stars > 0) {
+                        if (oldRating === 0 && rating > 0) {
                             this.stats.rated_photos++;
                             this.stats.unrated_photos--;
-                        } else if (oldRating > 0 && stars === 0) {
+                        } else if (oldRating > 0 && rating === 0) {
                             this.stats.rated_photos--;
                             this.stats.unrated_photos++;
                         }
-                        
-                        console.log(`✓ Rated ${photo.name}: ${stars} stars`);
                         
                     } catch (err) {
                         photo.rating = oldRating;
                         this.error = `Failed to rate photo: ${err.message}`;
                         console.error('Error rating photo:', err);
                     }
+                },
+                
+                async rateBurstPhoto(photo, stars) {
+                    await this.rate(photo, stars);
+                },
+                
+                openBurstViewer(burst) {
+                    this.selectedBurst = burst;
+                    this.currentBurstPhotoIndex = 0;
+                },
+                
+                nextBurstPhoto() {
+                    if (this.currentBurstPhotoIndex < this.selectedBurst.count - 1) {
+                        this.currentBurstPhotoIndex++;
+                    }
+                },
+                
+                prevBurstPhoto() {
+                    if (this.currentBurstPhotoIndex > 0) {
+                        this.currentBurstPhotoIndex--;
+                    }
+                },
+                
+                getBlurClass(score) {
+                    if (!score) return '';
+                    if (score >= 150) return 'good';
+                    if (score >= 100) return 'warning';
+                    return 'bad';
+                },
+                
+                clearFilters() {
+                    this.filters = {
+                        ratings: {
+                            0: false,
+                            1: false,
+                            2: false,
+                            3: false,
+                            4: false,
+                            5: false
+                        },
+                        inBursts: false,
+                        blurry: false
+                    };
                 },
                 
                 handleImageError(event, photo) {
@@ -405,6 +1189,9 @@
                     this.loadPhotos(),
                     this.loadStats()
                 ]);
+                
+                // Preload bursts in background
+                setTimeout(() => this.loadBursts(), 1000);
             }
         }).mount('#app');
     </script>

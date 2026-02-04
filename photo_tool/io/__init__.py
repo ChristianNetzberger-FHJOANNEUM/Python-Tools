@@ -1,7 +1,7 @@
 """I/O operations: scanning, EXIF, thumbnails, video metadata, audio metadata"""
 
 from .scanner import scan_directory, scan_multiple_directories, MediaFile, PhotoFile, filter_by_type
-from .exif import extract_exif, get_capture_time
+from .exif import extract_exif, get_capture_time, get_gps_coordinates, get_keywords
 from .thumbnails import generate_thumbnail
 from .video_metadata import (
     extract_video_metadata,
