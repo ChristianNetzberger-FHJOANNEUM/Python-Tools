@@ -551,6 +551,199 @@
             color: #4ade80;
         }
         
+        .color-labels {
+            display: flex;
+            gap: 4px;
+            margin-top: 8px;
+            align-items: center;
+        }
+        
+        .color-dot {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: 2px solid transparent;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+        }
+        
+        .color-dot:hover {
+            transform: scale(1.3);
+            box-shadow: 0 0 8px currentColor;
+        }
+        
+        .color-dot.active {
+            border-color: #fff;
+            transform: scale(1.2);
+        }
+        
+        .color-dot.red {
+            background: #ef4444;
+        }
+        
+        .color-dot.yellow {
+            background: #fbbf24;
+        }
+        
+        .color-dot.green {
+            background: #4ade80;
+        }
+        
+        .color-dot.blue {
+            background: #3b82f6;
+        }
+        
+        .color-dot.purple {
+            background: #a855f7;
+        }
+        
+        .color-label-badge {
+            position: absolute;
+            top: 18px;
+            left: 18px;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            border: 2px solid #000;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .keywords-container {
+            margin-top: 8px;
+            min-height: 24px;
+        }
+        
+        .keyword-tag {
+            display: inline-block;
+            background: rgba(59, 130, 246, 0.2);
+            border: 1px solid rgba(59, 130, 246, 0.5);
+            color: #3b82f6;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            margin: 2px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .keyword-tag:hover {
+            background: rgba(59, 130, 246, 0.3);
+            transform: scale(1.05);
+        }
+        
+        .keyword-tag .remove {
+            margin-left: 4px;
+            opacity: 0.7;
+            font-weight: bold;
+        }
+        
+        .keyword-tag .remove:hover {
+            opacity: 1;
+        }
+        
+        .add-keyword-btn {
+            display: inline-block;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px dashed rgba(255, 255, 255, 0.3);
+            color: #888;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            margin: 2px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .add-keyword-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: rgba(255, 255, 255, 0.5);
+            color: #fff;
+        }
+        
+        .keyword-input-wrapper {
+            position: relative;
+            display: inline-block;
+            margin: 2px;
+        }
+        
+        .keyword-input {
+            background: rgba(0, 0, 0, 0.5);
+            border: 2px solid rgba(59, 130, 246, 0.5);
+            color: #fff;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            outline: none;
+            width: 100px;
+        }
+        
+        .keyword-suggestions {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            background: rgba(0, 0, 0, 0.95);
+            border: 2px solid rgba(59, 130, 246, 0.5);
+            border-radius: 8px;
+            margin-top: 4px;
+            max-height: 150px;
+            overflow-y: auto;
+            z-index: 1000;
+            min-width: 150px;
+        }
+        
+        .keyword-suggestion {
+            padding: 6px 12px;
+            cursor: pointer;
+            transition: background 0.2s;
+            font-size: 0.85rem;
+        }
+        
+        .keyword-suggestion:hover {
+            background: rgba(59, 130, 246, 0.3);
+        }
+        
+        .keyword-suggestion .count {
+            color: #888;
+            margin-left: 8px;
+            font-size: 0.75rem;
+        }
+        
+        .keyword-filter-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        
+        .keyword-filter-chip {
+            background: rgba(59, 130, 246, 0.2);
+            border: 2px solid transparent;
+            color: #3b82f6;
+            padding: 6px 12px;
+            border-radius: 16px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .keyword-filter-chip:hover {
+            background: rgba(59, 130, 246, 0.3);
+        }
+        
+        .keyword-filter-chip.active {
+            background: rgba(59, 130, 246, 0.4);
+            border-color: rgba(59, 130, 246, 0.7);
+        }
+        
+        .keyword-filter-chip .count {
+            opacity: 0.7;
+            margin-left: 4px;
+        }
+        
         @media (max-width: 768px) {
             .burst-viewer {
                 grid-template-columns: 1fr;
@@ -575,12 +768,20 @@
                 <span>Photo Tool PoC</span>
             </h1>
             
-            <div class="tabs">
-                <button class="tab" :class="{ active: currentView === 'photos' }" @click="currentView = 'photos'">
-                    All Photos
-                </button>
-                <button class="tab" :class="{ active: currentView === 'bursts' }" @click="switchToBursts">
-                    Bursts {{ bursts.length > 0 ? `(${bursts.length})` : '' }}
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div class="tabs">
+                    <button class="tab" :class="{ active: currentView === 'photos' }" @click="currentView = 'photos'">
+                        All Photos
+                    </button>
+                    <button class="tab" :class="{ active: currentView === 'bursts' }" @click="switchToBursts">
+                        Bursts {{ bursts.length > 0 ? `(${bursts.length})` : '' }}
+                    </button>
+                </div>
+                
+                <button v-if="currentView === 'photos' && filteredPhotos.length > 0" 
+                        @click="openExportModal"
+                        style="background: linear-gradient(135deg, #4ade80, #3b82f6); color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: 600; transition: transform 0.2s;">
+                    📦 Export Gallery ({{ filteredPhotos.length }})
                 </button>
             </div>
             
@@ -631,6 +832,72 @@
                             <input type="checkbox" v-model="filters.ratings[5]">
                             ★★★★★ 5-Star
                         </label>
+                    </div>
+                </div>
+                
+                <div class="filter-section">
+                    <div class="filter-label">🎨 Color Labels</div>
+                    <div class="filter-options">
+                        <label class="filter-chip" :class="{ active: filters.colors.red }">
+                            <input type="checkbox" v-model="filters.colors.red">
+                            🔴 Red
+                        </label>
+                        <label class="filter-chip" :class="{ active: filters.colors.yellow }">
+                            <input type="checkbox" v-model="filters.colors.yellow">
+                            🟡 Yellow
+                        </label>
+                        <label class="filter-chip" :class="{ active: filters.colors.green }">
+                            <input type="checkbox" v-model="filters.colors.green">
+                            🟢 Green
+                        </label>
+                        <label class="filter-chip" :class="{ active: filters.colors.blue }">
+                            <input type="checkbox" v-model="filters.colors.blue">
+                            🔵 Blue
+                        </label>
+                        <label class="filter-chip" :class="{ active: filters.colors.purple }">
+                            <input type="checkbox" v-model="filters.colors.purple">
+                            🟣 Purple
+                        </label>
+                        <label class="filter-chip" :class="{ active: filters.colors.none }">
+                            <input type="checkbox" v-model="filters.colors.none">
+                            ⚪ No Color
+                        </label>
+                    </div>
+                </div>
+                
+                <div class="filter-section" v-if="allKeywords.length > 0">
+                    <div class="filter-label">🏷️ Keywords</div>
+                    <div class="keyword-filter-chips">
+                        <div v-for="kw in allKeywords.slice(0, 15)" 
+                             :key="kw.name"
+                             class="keyword-filter-chip"
+                             :class="{ active: filters.keywords.includes(kw.name) }"
+                             @click="toggleKeywordFilter(kw.name)">
+                            {{ kw.name }} <span class="count">({{ kw.count }})</span>
+                        </div>
+                        <div v-if="allKeywords.length > 15" style="color: #888; font-size: 0.85rem; padding: 6px 12px;">
+                            +{{ allKeywords.length - 15 }} more
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="filter-section" v-if="allKeywords.length > 0">
+                    <div class="filter-label">🏷️ Keywords ({{ allKeywords.length }})</div>
+                    <div class="keyword-filter-chips">
+                        <span v-for="keyword in allKeywords.slice(0, 20)" 
+                              :key="keyword.name"
+                              class="keyword-filter-chip"
+                              :class="{ active: filters.keywords.includes(keyword.name) }"
+                              @click="toggleKeywordFilter(keyword.name)">
+                            {{ keyword.name }}
+                            <span class="count">({{ keyword.count }})</span>
+                        </span>
+                        <span v-if="allKeywords.length > 20" style="color: #888; font-size: 0.85rem; padding: 6px;">
+                            +{{ allKeywords.length - 20 }} more...
+                        </span>
+                    </div>
+                    <div v-if="filters.keywords.length > 0" style="margin-top: 10px; font-size: 0.85rem; color: #4ade80;">
+                        Active filters: {{ filters.keywords.join(', ') }}
                     </div>
                 </div>
                 
@@ -692,6 +959,13 @@
                          @error="handleImageError($event, photo)"
                          loading="lazy">
                     
+                    <!-- Color Label Badge (top-left) -->
+                    <div v-if="photo.color" 
+                         class="color-label-badge"
+                         :class="photo.color"
+                         :style="{ background: getColorHex(photo.color) }">
+                    </div>
+                    
                     <div class="photo-info">
                         <div class="photo-name" :title="photo.name">{{ photo.name }}</div>
                         
@@ -706,6 +980,82 @@
                                   @mouseenter="hoverStar = n"
                                   @click="rate(photo, n)">
                                 ★
+                            </span>
+                        </div>
+                        
+                        <!-- Color Labels UI -->
+                        <div class="color-labels" @click.stop>
+                            <span class="color-dot red" 
+                                  :class="{ active: photo.color === 'red' }"
+                                  @click="setColor(photo, photo.color === 'red' ? null : 'red')"
+                                  title="Red Label">
+                                {{ photo.color === 'red' ? '✓' : '' }}
+                            </span>
+                            <span class="color-dot yellow" 
+                                  :class="{ active: photo.color === 'yellow' }"
+                                  @click="setColor(photo, photo.color === 'yellow' ? null : 'yellow')"
+                                  title="Yellow Label">
+                                {{ photo.color === 'yellow' ? '✓' : '' }}
+                            </span>
+                            <span class="color-dot green" 
+                                  :class="{ active: photo.color === 'green' }"
+                                  @click="setColor(photo, photo.color === 'green' ? null : 'green')"
+                                  title="Green Label">
+                                {{ photo.color === 'green' ? '✓' : '' }}
+                            </span>
+                            <span class="color-dot blue" 
+                                  :class="{ active: photo.color === 'blue' }"
+                                  @click="setColor(photo, photo.color === 'blue' ? null : 'blue')"
+                                  title="Blue Label">
+                                {{ photo.color === 'blue' ? '✓' : '' }}
+                            </span>
+                            <span class="color-dot purple" 
+                                  :class="{ active: photo.color === 'purple' }"
+                                  @click="setColor(photo, photo.color === 'purple' ? null : 'purple')"
+                                  title="Purple Label">
+                                {{ photo.color === 'purple' ? '✓' : '' }}
+                            </span>
+                        </div>
+                        
+                        <!-- Keywords UI -->
+                        <div class="keywords-container" @click.stop>
+                            <span v-for="keyword in (photo.keywords || [])" 
+                                  :key="keyword"
+                                  class="keyword-tag"
+                                  :title="'Remove: ' + keyword">
+                                {{ keyword }}
+                                <span class="remove" @click="removeKeyword(photo, keyword)">×</span>
+                            </span>
+                            
+                            <!-- Add keyword button/input -->
+                            <span v-if="showKeywordInput === photo.id" class="keyword-input-wrapper">
+                                <input type="text" 
+                                       class="keyword-input"
+                                       v-model="keywordInput"
+                                       @keyup.enter="addKeyword(photo, keywordInput)"
+                                       @keyup.esc="showKeywordInput = null; keywordInput = ''"
+                                       @blur="showKeywordInput = null; keywordInput = ''"
+                                       placeholder="tag..."
+                                       autofocus>
+                                
+                                <!-- Autocomplete suggestions -->
+                                <div v-if="keywordSuggestionsFiltered.length > 0" 
+                                     class="keyword-suggestions"
+                                     @mousedown.prevent>
+                                    <div v-for="suggestion in keywordSuggestionsFiltered"
+                                         :key="suggestion.name"
+                                         class="keyword-suggestion"
+                                         @click="addKeyword(photo, suggestion.name)">
+                                        {{ suggestion.name }}
+                                        <span class="count">({{ suggestion.count }})</span>
+                                    </div>
+                                </div>
+                            </span>
+                            
+                            <span v-else 
+                                  class="add-keyword-btn"
+                                  @click="showKeywordInput = photo.id; keywordInput = ''">
+                                + tag
                             </span>
                         </div>
                     </div>
@@ -800,6 +1150,60 @@
                             </div>
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Export Modal -->
+        <div v-if="showExportModal" class="modal" @click.self="showExportModal = false">
+            <div class="modal-content" style="max-width: 600px;">
+                <div class="modal-header">
+                    <div class="modal-title">📦 Export Web Gallery</div>
+                    <button class="close-btn" @click="showExportModal = false">×</button>
+                </div>
+                
+                <div style="padding: 20px 0;">
+                    <p style="color: #888; margin-bottom: 20px;">
+                        Export {{ filteredPhotos.length }} photos as a standalone HTML gallery.
+                    </p>
+                    
+                    <div style="margin-bottom: 20px;">
+                        <label style="display: block; margin-bottom: 8px; color: #aaa; font-size: 0.9rem;">
+                            Gallery Title
+                        </label>
+                        <input v-model="exportTitle"
+                               type="text"
+                               placeholder="My Photo Gallery"
+                               style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 12px; border-radius: 8px; font-size: 1rem; outline: none;">
+                    </div>
+                    
+                    <div style="margin-bottom: 20px;">
+                        <label style="display: block; margin-bottom: 8px; color: #aaa; font-size: 0.9rem;">
+                            Template
+                        </label>
+                        <select v-model="exportTemplate"
+                                style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 12px; border-radius: 8px; font-size: 1rem; outline: none; cursor: pointer;">
+                            <option value="photoswipe" style="background: #1a1a1a;">PhotoSwipe (Modern, Fullscreen)</option>
+                            <option value="simple" style="background: #1a1a1a;">Simple Grid (No dependencies)</option>
+                        </select>
+                    </div>
+                    
+                    <div style="background: rgba(74, 222, 128, 0.1); padding: 15px; border-radius: 8px; border: 1px solid rgba(74, 222, 128, 0.3); margin-bottom: 20px;">
+                        <div style="font-size: 0.85rem; color: #aaa; margin-bottom: 8px;">Will export:</div>
+                        <div style="font-size: 0.9rem;">
+                            ✓ {{ filteredPhotos.length }} photos<br>
+                            ✓ Ratings & Color Labels<br>
+                            ✓ Keywords/Tags<br>
+                            ✓ Optimized images<br>
+                            ✓ Standalone HTML file
+                        </div>
+                    </div>
+                    
+                    <button @click="exportGallery" 
+                            :disabled="exporting"
+                            style="width: 100%; background: linear-gradient(135deg, #4ade80, #3b82f6); color: white; border: none; padding: 14px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 1rem; transition: all 0.3s;">
+                        {{ exporting ? 'Exporting...' : '📦 Export Gallery' }}
+                    </button>
                 </div>
             </div>
         </div>
@@ -909,6 +1313,16 @@
                         message: ''
                     },
                     burstsFromCache: false,
+                    // Keywords
+                    allKeywords: [],
+                    keywordInput: '',
+                    showKeywordInput: null,
+                    keywordSuggestions: [],
+                    // Export
+                    showExportModal: false,
+                    exportTitle: '',
+                    exportTemplate: 'photoswipe',
+                    exporting: false,
                     // Filtering & Sorting
                     filters: {
                         ratings: {
@@ -919,6 +1333,15 @@
                             4: false,
                             5: false
                         },
+                        colors: {
+                            red: false,
+                            yellow: false,
+                            green: false,
+                            blue: false,
+                            purple: false,
+                            none: false
+                        },
+                        keywords: [],  // Selected keywords to filter by
                         inBursts: false,
                         blurry: false
                     },
@@ -942,6 +1365,25 @@
                     
                     if (activeRatings.length > 0) {
                         filtered = filtered.filter(p => activeRatings.includes(p.rating || 0));
+                    }
+                    
+                    // Apply color filters
+                    const activeColors = Object.keys(this.filters.colors)
+                        .filter(c => this.filters.colors[c]);
+                    
+                    if (activeColors.length > 0) {
+                        filtered = filtered.filter(p => {
+                            const photoColor = p.color || 'none';
+                            return activeColors.includes(photoColor);
+                        });
+                    }
+                    
+                    // Apply keyword filters
+                    if (this.filters.keywords.length > 0) {
+                        filtered = filtered.filter(p => {
+                            const photoKeywords = p.keywords || [];
+                            return this.filters.keywords.some(k => photoKeywords.includes(k));
+                        });
                     }
                     
                     if (this.filters.inBursts) {
@@ -990,9 +1432,19 @@
                 activeFilterCount() {
                     let count = 0;
                     count += Object.values(this.filters.ratings).filter(v => v).length;
+                    count += Object.values(this.filters.colors).filter(v => v).length;
+                    count += this.filters.keywords.length;
                     if (this.filters.inBursts) count++;
                     if (this.filters.blurry) count++;
                     return count;
+                },
+                
+                keywordSuggestionsFiltered() {
+                    if (!this.keywordInput) return [];
+                    const input = this.keywordInput.toLowerCase();
+                    return this.allKeywords
+                        .filter(k => k.name.toLowerCase().includes(input))
+                        .slice(0, 10);
                 }
             },
             methods: {
@@ -1173,21 +1625,201 @@
                             4: false,
                             5: false
                         },
+                        colors: {
+                            red: false,
+                            yellow: false,
+                            green: false,
+                            blue: false,
+                            purple: false,
+                            none: false
+                        },
+                        keywords: [],
                         inBursts: false,
                         blurry: false
                     };
                 },
                 
+                async setColor(photo, color) {
+                    const oldColor = photo.color;
+                    photo.color = color;
+                    
+                    try {
+                        const res = await fetch(`/api/photos/${encodeURIComponent(photo.id)}/color`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({ color })
+                        });
+                        
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        console.log(`✓ Set color ${color} for ${photo.name}`);
+                        
+                    } catch (err) {
+                        photo.color = oldColor;
+                        this.error = `Failed to set color: ${err.message}`;
+                        console.error('Error setting color:', err);
+                    }
+                },
+                
                 handleImageError(event, photo) {
                     console.warn(`Failed to load thumbnail for ${photo.name}`);
                     event.target.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect fill="%23333" width="100" height="100"/><text x="50" y="50" text-anchor="middle" dy=".3em" fill="%23666" font-size="40">📷</text></svg>';
+                },
+                
+                getColorHex(color) {
+                    const colors = {
+                        red: '#ef4444',
+                        yellow: '#fbbf24',
+                        green: '#4ade80',
+                        blue: '#3b82f6',
+                        purple: '#a855f7'
+                    };
+                    return colors[color] || '#888';
+                },
+                
+                async loadKeywords() {
+                    try {
+                        const res = await fetch('/api/keywords');
+                        const data = await res.json();
+                        this.allKeywords = data.keywords || [];
+                    } catch (err) {
+                        console.error('Error loading keywords:', err);
+                    }
+                },
+                
+                async addKeyword(photo, keyword) {
+                    if (!keyword || !keyword.trim()) return;
+                    
+                    keyword = keyword.trim().toLowerCase();
+                    
+                    if (photo.keywords && photo.keywords.includes(keyword)) {
+                        return;
+                    }
+                    
+                    try {
+                        const res = await fetch(`/api/photos/${encodeURIComponent(photo.id)}/keywords`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ add: keyword })
+                        });
+                        
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        photo.keywords = data.keywords;
+                        this.keywordInput = '';
+                        this.showKeywordInput = null;
+                        
+                        await this.loadKeywords();
+                        
+                    } catch (err) {
+                        this.error = `Failed to add keyword: ${err.message}`;
+                        console.error('Error adding keyword:', err);
+                    }
+                },
+                
+                async removeKeyword(photo, keyword) {
+                    try {
+                        const res = await fetch(`/api/photos/${encodeURIComponent(photo.id)}/keywords`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ remove: keyword })
+                        });
+                        
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        photo.keywords = data.keywords;
+                        
+                        await this.loadKeywords();
+                        
+                    } catch (err) {
+                        this.error = `Failed to remove keyword: ${err.message}`;
+                        console.error('Error removing keyword:', err);
+                    }
+                },
+                
+                toggleKeywordFilter(keyword) {
+                    const index = this.filters.keywords.indexOf(keyword);
+                    if (index > -1) {
+                        this.filters.keywords.splice(index, 1);
+                    } else {
+                        this.filters.keywords.push(keyword);
+                    }
+                },
+                
+                openExportModal() {
+                    if (this.filteredPhotos.length === 0) {
+                        alert('No photos to export! Apply some filters first.');
+                        return;
+                    }
+                    
+                    this.showExportModal = true;
+                    this.exportTitle = `Photo Gallery - ${new Date().toISOString().split('T')[0]}`;
+                },
+                
+                async exportGallery() {
+                    if (!this.exportTitle.trim()) {
+                        alert('Please enter a gallery title');
+                        return;
+                    }
+                    
+                    this.exporting = true;
+                    
+                    try {
+                        const photoIds = this.filteredPhotos.map(p => p.id);
+                        const outputName = this.exportTitle
+                            .toLowerCase()
+                            .replace(/[^a-z0-9]+/g, '-')
+                            .replace(/^-|-$/g, '');
+                        
+                        const res = await fetch('/api/export/gallery', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                photo_ids: photoIds,
+                                title: this.exportTitle,
+                                output_name: outputName,
+                                template: this.exportTemplate
+                            })
+                        });
+                        
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        alert(`✓ Gallery exported successfully!\n\nPhotos: ${data.photo_count}\nLocation: ${data.gallery_path}\n\nOpen: ${data.index_html}`);
+                        
+                        this.showExportModal = false;
+                        
+                    } catch (err) {
+                        alert(`Failed to export gallery: ${err.message}`);
+                        console.error('Export error:', err);
+                    } finally {
+                        this.exporting = false;
+                    }
                 }
             },
             
             async mounted() {
                 await Promise.all([
                     this.loadPhotos(),
-                    this.loadStats()
+                    this.loadStats(),
+                    this.loadKeywords()
                 ]);
                 
                 // Preload bursts in background

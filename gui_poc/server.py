@@ -19,6 +19,16 @@ from photo_tool.io import scan_multiple_directories, filter_by_type
 from photo_tool.config import load_config
 from photo_tool.workspace import Workspace
 from photo_tool.actions.rating import get_rating, get_rating_with_comment
+from photo_tool.actions.metadata import (
+    get_metadata, 
+    set_color_label, 
+    get_color_label,
+    add_keyword,
+    remove_keyword,
+    set_keywords,
+    get_all_keywords
+)
+from photo_tool.actions.export import export_gallery
 
 app = Flask(__name__, static_folder='static')
 CORS(app)  # Enable CORS for development
@@ -82,16 +92,18 @@ def get_photos():
         # Build response
         result = []
         for photo in photos_page:
-            # Try to get rating from sidecar
-            rating, comment = get_rating_with_comment(photo.path)
+            # Try to get all metadata
+            metadata = get_metadata(photo.path)
             
             result.append({
                 'id': str(photo.path),
                 'name': photo.path.name,
                 'path': str(photo.path.relative_to(config.scan.roots[0]) if config.scan.roots else photo.path),
                 'size': photo.size_bytes,
-                'rating': rating or 0,
-                'comment': comment or '',
+                'rating': metadata.get('rating', 0),
+                'color': metadata.get('color'),
+                'comment': metadata.get('comment', ''),
+                'keywords': metadata.get('keywords', []),
                 'thumbnail': f"/thumbnails/{photo.path.stem}.jpg"
             })
         
@@ -114,7 +126,7 @@ def rate_photo(photo_id):
     """
     try:
         from flask import request
-        from photo_tool.actions.rating import set_rating
+        from photo_tool.actions.metadata import set_metadata
         
         data = request.get_json()
         rating = data.get('rating', 0)
@@ -123,8 +135,11 @@ def rate_photo(photo_id):
         # Decode photo path
         photo_path = Path(photo_id)
         
-        # Set rating
-        set_rating(photo_path, rating, comment)
+        # Set rating (now via metadata system)
+        set_metadata(photo_path, {
+            'rating': rating,
+            'comment': comment if comment else None
+        })
         
         return jsonify({
             'success': True,
@@ -133,6 +148,177 @@ def rate_photo(photo_id):
         })
     
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.post('/api/photos/<path:photo_id>/color')
+def set_photo_color(photo_id):
+    """
+    Set color label for a photo
+    Body: { "color": "red" | "yellow" | "green" | "blue" | "purple" | null }
+    """
+    try:
+        from flask import request
+        
+        data = request.get_json()
+        color = data.get('color')
+        
+        # Decode photo path
+        photo_path = Path(photo_id)
+        
+        # Set color
+        set_color_label(photo_path, color)
+        
+        return jsonify({
+            'success': True,
+            'color': color
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.post('/api/photos/<path:photo_id>/keywords')
+def update_photo_keywords(photo_id):
+    """
+    Update keywords for a photo
+    Body: { "keywords": ["tag1", "tag2"] } or { "add": "tag" } or { "remove": "tag" }
+    """
+    try:
+        from flask import request
+        
+        data = request.get_json()
+        photo_path = Path(photo_id)
+        
+        if 'keywords' in data:
+            # Set complete keyword list
+            set_keywords(photo_path, data['keywords'])
+            metadata = get_metadata(photo_path)
+            return jsonify({
+                'success': True,
+                'keywords': metadata.get('keywords', [])
+            })
+        
+        elif 'add' in data:
+            # Add single keyword
+            add_keyword(photo_path, data['add'])
+            metadata = get_metadata(photo_path)
+            return jsonify({
+                'success': True,
+                'keywords': metadata.get('keywords', [])
+            })
+        
+        elif 'remove' in data:
+            # Remove single keyword
+            remove_keyword(photo_path, data['remove'])
+            metadata = get_metadata(photo_path)
+            return jsonify({
+                'success': True,
+                'keywords': metadata.get('keywords', [])
+            })
+        
+        else:
+            return jsonify({'error': 'Invalid request'}), 400
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.get('/api/keywords')
+def get_all_keywords_api():
+    """
+    Get all unique keywords across workspace with counts
+    Query params:
+        - min_count: Minimum number of photos (default: 1)
+    """
+    try:
+        from flask import request
+        
+        workspace_path = Path("C:/PhotoTool_Test")
+        ws = Workspace(workspace_path)
+        config = load_config(ws.config_file)
+        
+        min_count = int(request.args.get('min_count', 1))
+        
+        # Scan all media
+        all_media = scan_multiple_directories(
+            config.scan.roots,
+            config.scan.extensions,
+            config.scan.recurse,
+            show_progress=False
+        )
+        
+        photos = filter_by_type(all_media, "photo")
+        photo_paths = [p.path for p in photos]
+        
+        # Get all keywords
+        keyword_counts = get_all_keywords(photo_paths)
+        
+        # Filter by min_count
+        filtered = {k: v for k, v in keyword_counts.items() if v >= min_count}
+        
+        # Sort by count (descending)
+        sorted_keywords = sorted(filtered.items(), key=lambda x: x[1], reverse=True)
+        
+        return jsonify({
+            'keywords': [{'name': k, 'count': v} for k, v in sorted_keywords],
+            'total': len(sorted_keywords)
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.post('/api/export/gallery')
+def export_gallery_api():
+    """
+    Export filtered photos as web gallery
+    Body: {
+        "photo_ids": ["path1", "path2"],
+        "title": "Gallery Title",
+        "output_name": "gallery-name",
+        "template": "photoswipe" or "simple"
+    }
+    """
+    try:
+        from flask import request
+        
+        data = request.get_json()
+        photo_ids = data.get('photo_ids', [])
+        title = data.get('title', 'Photo Gallery')
+        output_name = data.get('output_name', 'gallery')
+        template = data.get('template', 'photoswipe')
+        
+        if not photo_ids:
+            return jsonify({'error': 'No photos selected'}), 400
+        
+        # Convert IDs to Path objects
+        photo_paths = [Path(photo_id) for photo_id in photo_ids]
+        
+        # Export gallery
+        workspace_path = Path("C:/PhotoTool_Test")
+        output_dir = workspace_path / "exports" / output_name
+        
+        gallery_dir = export_gallery(
+            photo_paths=photo_paths,
+            output_dir=output_dir,
+            title=title,
+            template=template,
+            max_image_size=2000,
+            thumbnail_size=400,
+            include_metadata=True
+        )
+        
+        return jsonify({
+            'success': True,
+            'gallery_path': str(gallery_dir),
+            'index_html': str(gallery_dir / 'index.html'),
+            'photo_count': len(photo_ids)
+        })
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
