@@ -5,7 +5,10 @@
 ### **Was ist das?**
 Browser Fullscreen API - wie YouTube Fullscreen:
 - ✅ Kein Browser-UI (keine Tabs, keine Adressleiste)
-- ✅ Nur deine Slideshow
+- ✅ Nur deine Photos - randlos & groß!
+- ✅ **Auto-hide Controls** (wie YouTube!) 🆕
+- ✅ Controls verschwinden nach 3s Inaktivität
+- ✅ Mouse bewegen → Controls erscheinen wieder
 - ✅ Echter Vollbild-Modus
 - ✅ Perfekt für Präsentationen & Smart TV!
 
@@ -18,7 +21,10 @@ Browser Fullscreen API - wie YouTube Fullscreen:
 1. Slideshow starten (🎬 Button)
 2. "⛶ Fullscreen" Button klicken
 3. Browser geht in echten Fullscreen!
-4. "⛶ Exit Fullscreen" zum Verlassen
+4. Photos füllen den ganzen Screen!
+5. Controls verschwinden nach 3s → Pure Immersion!
+6. Mouse bewegen → Controls erscheinen wieder
+7. "⛶ Exit Fullscreen" zum Verlassen
 ```
 
 ### **Methode 2: Keyboard Shortcut**
@@ -26,8 +32,20 @@ Browser Fullscreen API - wie YouTube Fullscreen:
 1. Slideshow starten
 2. Taste [F] drücken
 3. Fullscreen aktiviert!
-4. [F] erneut → Exit
-5. Oder [ESC] → Exit Fullscreen
+4. Controls auto-hide nach 3s
+5. Jede Taste → Controls wieder sichtbar
+6. [F] erneut → Exit
+7. Oder [ESC] → Exit Fullscreen
+```
+
+### **Auto-Hide Controls (YouTube-Style):**
+```
+✅ Controls verschwinden nach 3 Sekunden Inaktivität
+✅ Mouse bewegen → Controls erscheinen
+✅ Keyboard-Input → Controls erscheinen
+✅ Mouse-Cursor verschwindet auch!
+✅ Click anywhere → Controls erscheinen
+✅ Pure Photo Experience!
 ```
 
 ---

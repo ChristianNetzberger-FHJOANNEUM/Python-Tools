@@ -47,6 +47,7 @@ Open: **http://localhost:8000**
 - ✅ **Keyboard Shortcuts** - Lightning-fast workflow
 - 🎬 **NEW: Slideshow Mode** - Auto-play with fade transitions, controls & loop
 - ⛶ **NEW: True Fullscreen** - Browser Fullscreen API (like YouTube, no UI!)
+- 👻 **NEW: Auto-Hide Controls** - YouTube-style UX, controls vanish after 3s!
 
 ### **Performance:**
 - ✅ **Caching** - Instant burst reload

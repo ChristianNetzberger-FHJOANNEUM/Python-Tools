@@ -975,13 +975,29 @@
             z-index: 3000;
         }
         
+        .slideshow.hide-controls {
+            cursor: none;
+        }
+        
         .slideshow-header {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
             display: flex;
             justify-content: space-between;
             align-items: center;
             padding: 20px 30px;
-            background: rgba(0, 0, 0, 0.9);
+            background: linear-gradient(to bottom, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0.4) 70%, transparent 100%);
             backdrop-filter: blur(10px);
+            z-index: 100;
+            transition: opacity 0.3s ease, transform 0.3s ease;
+        }
+        
+        .slideshow.hide-controls .slideshow-header {
+            opacity: 0;
+            transform: translateY(-100%);
+            pointer-events: none;
         }
         
         .slideshow-title {
@@ -1017,16 +1033,29 @@
         }
         
         .slideshow-image {
-            max-width: 95%;
-            max-height: 95%;
+            max-width: 100%;
+            max-height: 100%;
+            width: 100%;
+            height: 100%;
             object-fit: contain;
-            box-shadow: 0 8px 40px rgba(0, 0, 0, 0.8);
         }
         
         .slideshow-footer {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
             padding: 20px 30px;
-            background: rgba(0, 0, 0, 0.9);
+            background: linear-gradient(to top, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0.4) 70%, transparent 100%);
             backdrop-filter: blur(10px);
+            z-index: 100;
+            transition: opacity 0.3s ease, transform 0.3s ease;
+        }
+        
+        .slideshow.hide-controls .slideshow-footer {
+            opacity: 0;
+            transform: translateY(100%);
+            pointer-events: none;
         }
         
         .slideshow-progress {
@@ -1635,7 +1664,11 @@
         </div>
         
         <!-- Slideshow Modal -->
-        <div v-if="showSlideshow" class="slideshow">
+        <div v-if="showSlideshow" 
+             class="slideshow" 
+             :class="{ 'hide-controls': hideControls }"
+             @mousemove="showControlsTemporarily"
+             @click="showControlsTemporarily">
             <div class="slideshow-header">
                 <div class="slideshow-title">
                     <span>🎬</span>
@@ -1912,6 +1945,8 @@
                     slideshowInterval: null,
                     slideshowPlaying: false,
                     isFullscreen: false,
+                    hideControls: false,
+                    hideControlsTimeout: null,
                     slideshowSettings: {
                         duration: 5,      // seconds per photo
                         transition: 'fade',
@@ -2517,6 +2552,7 @@
                     this.slideshowIndex = 0;
                     this.showSlideshow = true;
                     this.slideshowPlaying = false;
+                    this.hideControls = false;
                     
                     // Auto-start playback
                     this.$nextTick(() => {
@@ -2524,6 +2560,9 @@
                         
                         // Add fullscreen change listener
                         document.addEventListener('fullscreenchange', this.handleFullscreenChange);
+                        
+                        // Start auto-hide timer
+                        this.startHideControlsTimer();
                     });
                     
                     // Add keyboard listener
@@ -2537,9 +2576,12 @@
                     }
                     
                     this.stopSlideshow();
+                    this.stopHideControlsTimer();
+                    
                     this.showSlideshow = false;
                     this.slideshowPhotos = [];
                     this.isFullscreen = false;
+                    this.hideControls = false;
                     
                     document.removeEventListener('keydown', this.handleSlideshowKeyboard);
                     document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
@@ -2628,8 +2670,43 @@
                     }
                 },
                 
+                // ========================================
+                // AUTO-HIDE CONTROLS (YouTube-style)
+                // ========================================
+                
+                startHideControlsTimer() {
+                    // Clear any existing timer
+                    this.stopHideControlsTimer();
+                    
+                    // Show controls initially
+                    this.hideControls = false;
+                    
+                    // Hide after 3 seconds of inactivity
+                    this.hideControlsTimeout = setTimeout(() => {
+                        this.hideControls = true;
+                    }, 3000);
+                },
+                
+                stopHideControlsTimer() {
+                    if (this.hideControlsTimeout) {
+                        clearTimeout(this.hideControlsTimeout);
+                        this.hideControlsTimeout = null;
+                    }
+                },
+                
+                showControlsTemporarily() {
+                    // Show controls
+                    this.hideControls = false;
+                    
+                    // Restart hide timer
+                    this.startHideControlsTimer();
+                },
+                
                 handleSlideshowKeyboard(e) {
                     if (!this.showSlideshow) return;
+                    
+                    // Show controls on any keyboard input
+                    this.showControlsTemporarily();
                     
                     switch(e.key) {
                         case 'Escape':

@@ -59,6 +59,7 @@ http://localhost:8000
 - ▶️ Play / ⏸️ Pause
 - ⏮️ Previous / Next ⏭️
 - ⛶ **Fullscreen** (True fullscreen, no browser UI!) 🆕
+- **Auto-hide Controls** (YouTube-style, vanish after 3s!) 🆕
 - Progress bar
 - Photo counter (X / Total)
 
