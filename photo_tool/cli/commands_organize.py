@@ -10,7 +10,7 @@ from rich.console import Console
 
 from ..workspace import Workspace
 from ..config import load_config
-from ..io import scan_multiple_directories, get_capture_time
+from ..io import scan_multiple_directories, get_capture_time, get_video_capture_time, filter_by_type
 from ..analysis import group_by_time, cluster_similar_photos
 from ..analysis.similarity import detect_blur, HashMethod
 from ..actions import organize_clusters, deduplicate_photos
@@ -51,14 +51,25 @@ def organize_bursts(
         console.print("[bold]Organizing burst photos...[/bold]\n")
         
         # Scan and analyze (same as analyze command)
-        console.print("Scanning and analyzing photos...")
+        console.print("Scanning and analyzing media files...")
         
-        photos = scan_multiple_directories(
+        all_media = scan_multiple_directories(
             config.scan.roots,
             config.scan.extensions,
             config.scan.recurse,
             show_progress=True
         )
+        
+        if not all_media:
+            console.print("[yellow]No files found[/yellow]")
+            return
+        
+        # Filter photos only (burst organization for photos)
+        photos = filter_by_type(all_media, "photo")
+        other_count = len(all_media) - len(photos)
+        
+        if other_count > 0:
+            console.print(f"[dim]Note: Skipping {other_count} video/audio files (burst organization for photos only)[/dim]")
         
         if not photos:
             console.print("[yellow]No photos found[/yellow]")
@@ -161,13 +172,24 @@ def dedupe(
         
         console.print("[bold]Finding duplicates...[/bold]\n")
         
-        # Scan photos
-        photos = scan_multiple_directories(
+        # Scan media files
+        all_media = scan_multiple_directories(
             config.scan.roots,
             config.scan.extensions,
             config.scan.recurse,
             show_progress=True
         )
+        
+        if not all_media:
+            console.print("[yellow]No files found[/yellow]")
+            return
+        
+        # Filter photos only (deduplication for photos)
+        photos = filter_by_type(all_media, "photo")
+        other_count = len(all_media) - len(photos)
+        
+        if other_count > 0:
+            console.print(f"[dim]Note: Skipping {other_count} video/audio files (deduplication for photos only)[/dim]")
         
         if not photos:
             console.print("[yellow]No photos found[/yellow]")

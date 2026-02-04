@@ -3,24 +3,42 @@
 
 # Workspace settings
 workspace:
-  path: "D:/PhotoWorkspace"
+  path: "C:/PhotoWorkspace"
 
-# Photo scanning settings
+# Photo, video, and audio scanning settings
 scan:
-  # Source directories to scan for photos
+  # Source directories to scan for all media types
   roots:
-    - "E:/Photos/Lumix"
-    - "F:/Camera/DCIM"
-    - "G:/Backup/Photos"
+    - "E:\Lumix-2026-01"
+    - "F:\DCIM"              # Lumix S5 DCIM folder
+    - "F:\AUDIO"             # Audio recordings/downloads
+
   
   # File extensions to include
   extensions:
+    # Photos
     - ".jpg"
     - ".jpeg"
     - ".JPG"
     - ".JPEG"
     - ".png"
     - ".PNG"
+    # Videos (v0.2)
+    - ".mp4"                 # Lumix S5 standard video
+    - ".MP4"
+    - ".mov"                 # Lumix S5 high-quality/HFR video
+    - ".MOV"
+    - ".avi"
+    - ".mts"                 # AVCHD format
+    # Audio (v0.2.1)
+    - ".mp3"                 # Most common
+    - ".MP3"
+    - ".wav"                 # Uncompressed
+    - ".WAV"
+    - ".m4a"                 # AAC audio
+    - ".flac"                # Lossless
+    - ".ogg"                 # Ogg Vorbis
+    - ".aac"                 # AAC
   
   # Scan subdirectories recursively
   recurse: true

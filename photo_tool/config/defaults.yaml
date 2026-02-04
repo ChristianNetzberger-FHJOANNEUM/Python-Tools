@@ -5,8 +5,8 @@ workspace:
   path: "./workspace"
 
 scan:
-  roots: []  # Add your photo directories here
-  extensions: [".jpg", ".jpeg", ".png"]
+  roots: []  # Add your media directories here
+  extensions: [".jpg", ".jpeg", ".png", ".mp4", ".mov", ".mp3", ".wav"]  # Photos + Videos + Audio
   recurse: true
 
 grouping:

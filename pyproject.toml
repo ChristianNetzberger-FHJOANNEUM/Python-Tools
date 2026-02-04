@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "photo-tool"
-version = "0.1.0"
-description = "Modern photo management tool for sorting, rating, and organizing photos"
+version = "0.2.1"
+description = "Modern photo, video, and audio management tool for sorting, rating, and organizing media files"
 authors = [
     {name = "Photo Tool Team"}
 ]

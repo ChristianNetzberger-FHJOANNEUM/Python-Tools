@@ -10,7 +10,12 @@ from rich.console import Console
 
 from ..workspace import Workspace
 from ..config import load_config
-from ..io import scan_multiple_directories, get_capture_time
+from ..io import (
+    scan_multiple_directories,
+    get_capture_time,
+    get_video_capture_time,
+    filter_by_type
+)
 from ..analysis import group_by_time, cluster_similar_photos
 from ..analysis.similarity import detect_blur, HashMethod
 from ..report import generate_text_report, generate_html_report
@@ -42,18 +47,29 @@ def generate(
         
         console.print("[bold]Generating report...[/bold]\n")
         
-        # Analyze photos
-        console.print("Scanning and analyzing photos...")
+        # Analyze media
+        console.print("Scanning and analyzing media files...")
         
-        photos = scan_multiple_directories(
+        all_media = scan_multiple_directories(
             config.scan.roots,
             config.scan.extensions,
             config.scan.recurse,
             show_progress=True
         )
         
+        if not all_media:
+            console.print("[yellow]No files found[/yellow]")
+            return
+        
+        # Filter photos only (clustering for photos)
+        photos = filter_by_type(all_media, "photo")
+        other_count = len(all_media) - len(photos)
+        
+        if other_count > 0:
+            console.print(f"[dim]Note: Report includes {other_count} video/audio files (without clustering)[/dim]")
+        
         if not photos:
-            console.print("[yellow]No photos found[/yellow]")
+            console.print("[yellow]No photos found for analysis[/yellow]")
             return
         
         # Get capture times

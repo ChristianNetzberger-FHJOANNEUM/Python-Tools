@@ -11,7 +11,7 @@ from rich.table import Table
 
 from ..workspace import Workspace
 from ..config import load_config
-from ..io import scan_multiple_directories, get_capture_time
+from ..io import scan_multiple_directories, get_capture_time, get_video_capture_time, filter_by_type
 from ..analysis import group_by_time, cluster_similar_photos
 from ..analysis.similarity import detect_blur, compute_phash, HashMethod
 from ..util.timing import timer
@@ -46,27 +46,45 @@ def find_bursts(
         
         console.print("[bold]Finding burst sequences...[/bold]\n")
         
-        # Step 1: Scan photos
-        console.print("Step 1: Scanning photos...")
+        # Step 1: Scan media files
+        console.print("Step 1: Scanning media files...")
         with timer("Scan"):
-            photos = scan_multiple_directories(
+            all_media = scan_multiple_directories(
                 config.scan.roots,
                 config.scan.extensions,
                 config.scan.recurse,
                 show_progress=True
             )
         
+        if not all_media:
+            console.print("[yellow]No files found[/yellow]")
+            return
+        
+        # Filter photos only (skip videos/audio for burst analysis)
+        photos = filter_by_type(all_media, "photo")
+        other_count = len(all_media) - len(photos)
+        
+        if other_count > 0:
+            console.print(f"[dim]Note: Skipping {other_count} video/audio files (not applicable for burst detection)[/dim]")
+        
         if not photos:
             console.print("[yellow]No photos found[/yellow]")
             return
         
-        # Step 2: Get capture times
+        # Step 2: Get capture times  
         console.print("\nStep 2: Reading capture times...")
         capture_times = []
         photo_paths = []
         
         for photo in photos:
-            capture_time = get_capture_time(photo.path)
+            # Use appropriate method based on file type
+            if photo.is_photo:
+                capture_time = get_capture_time(photo.path)
+            elif photo.is_video:
+                capture_time = get_video_capture_time(photo.path)
+            else:
+                capture_time = None
+            
             if capture_time:
                 capture_times.append(capture_time)
                 photo_paths.append(photo.path)
@@ -156,13 +174,24 @@ def analyze_quality(
         
         console.print("[bold]Analyzing photo quality...[/bold]\n")
         
-        # Scan photos
-        photos = scan_multiple_directories(
+        # Scan media files
+        all_media = scan_multiple_directories(
             config.scan.roots,
             config.scan.extensions,
             config.scan.recurse,
             show_progress=True
         )
+        
+        if not all_media:
+            console.print("[yellow]No files found[/yellow]")
+            return
+        
+        # Filter photos only (quality analysis not applicable to videos/audio)
+        photos = filter_by_type(all_media, "photo")
+        other_count = len(all_media) - len(photos)
+        
+        if other_count > 0:
+            console.print(f"[dim]Note: Skipping {other_count} video/audio files (quality analysis for photos only)[/dim]")
         
         if not photos:
             console.print("[yellow]No photos found[/yellow]")

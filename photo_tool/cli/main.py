@@ -17,6 +17,9 @@ from . import commands_scan
 from . import commands_analyze
 from . import commands_organize
 from . import commands_report
+from . import commands_video
+from . import commands_audio
+from . import commands_rate
 
 
 # Create main app
@@ -56,10 +59,13 @@ def version():
 
 # Add subcommands
 app.add_typer(commands_workspace.app, name="workspace", help="Workspace management")
-app.add_typer(commands_scan.app, name="scan", help="Scan and index photos")
+app.add_typer(commands_scan.app, name="scan", help="Scan and index media files")
 app.add_typer(commands_analyze.app, name="analyze", help="Analyze photos (bursts, quality)")
 app.add_typer(commands_organize.app, name="organize", help="Organize and deduplicate")
 app.add_typer(commands_report.app, name="report", help="Generate reports")
+app.add_typer(commands_video.app, name="video", help="Video file management")
+app.add_typer(commands_audio.app, name="audio", help="Audio file management")
+app.add_typer(commands_rate.app, name="rate", help="Rate and tag files")
 
 
 if __name__ == "__main__":

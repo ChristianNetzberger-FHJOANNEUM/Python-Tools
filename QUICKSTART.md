@@ -1,12 +1,19 @@
 # Photo Tool - Quick Start (5 Minutes)
 
-Get started with Photo Tool in 5 minutes!
+Get started with Photo Tool in 5 minutes! Works with photos AND videos from your Lumix S5.
 
 ## Installation
 
 ```bash
 cd C:\_Git\Python-tools
-pip install -e .
+python -m venv venv
+.\venv\Scripts\activate
+pip install -e ".[dev]"
+```
+
+**Optional:** Install ffmpeg for video metadata:
+```bash
+winget install ffmpeg
 ```
 
 ## Basic Usage
@@ -14,7 +21,13 @@ pip install -e .
 ### 1. Create Workspace (1 min)
 
 ```bash
-photo-tool workspace init D:\MyPhotos --root E:\Camera
+# For Lumix S5 DCIM folder (photos + videos)
+photo-tool workspace init D:\MyPhotos --root F:\DCIM
+```
+
+Edit `D:\MyPhotos\config.yaml` to include videos:
+```yaml
+extensions: [".jpg", ".jpeg", ".mp4", ".mov"]
 ```
 
 ### 2. Find Burst Photos (2 min)
@@ -48,12 +61,25 @@ Your burst photos are now organized into folders, with the best photo from each 
 
 ## What Photo Tool Did
 
-1. ✓ Scanned your photos and read EXIF timestamps
+1. ✓ Scanned your photos AND videos, read EXIF/metadata
 2. ✓ Found photos taken within 3 seconds of each other
 3. ✓ Compared them visually using perceptual hashing
 4. ✓ Detected sharpest photo in each burst
-5. ✓ Moved similar photos into folders
+5. ✓ Moved similar photos into folders (videos untouched)
 6. ✓ Generated a report with thumbnails
+
+## Video Bonus
+
+```bash
+# List all videos
+photo-tool video list --sort duration
+
+# Show video info
+photo-tool video info F:\DCIM\100_PANA\VIDEO001.mp4
+
+# Rate videos for DaVinci Resolve
+photo-tool rate set VIDEO001.mp4 --stars 5
+```
 
 ## Next Steps
 

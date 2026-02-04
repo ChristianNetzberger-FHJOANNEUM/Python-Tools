@@ -1,6 +1,6 @@
 """
-Photo Tool - Modern photo management and organization system
+Photo Tool - Modern photo, video, and audio management system
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.1"
 __author__ = "Photo Tool Team"
