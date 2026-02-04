@@ -1,0 +1,30 @@
+# Photo Tool Default Configuration
+# Copy this to your workspace as config.yaml and customize
+
+workspace:
+  path: "./workspace"
+
+scan:
+  roots: []  # Add your photo directories here
+  extensions: [".jpg", ".jpeg", ".png"]
+  recurse: true
+
+grouping:
+  time_window_seconds: 3.0
+  max_group_gap_seconds: 2.0
+
+similarity:
+  method: "phash"
+  phash_threshold: 6
+  use_ssim_refine: false
+  ssim_threshold: 0.92
+
+quality:
+  blur_method: "laplacian"
+  blur_threshold: 120.0
+  compute_histogram: true
+
+actions:
+  dry_run: true
+  burst_folder_naming: "first_filename"
+  min_group_size: 2

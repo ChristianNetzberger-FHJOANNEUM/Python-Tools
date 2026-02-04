@@ -1,0 +1,119 @@
+# Photo Tool Configuration Example
+# Copy this file to your workspace as config.yaml and customize
+
+# Workspace settings
+workspace:
+  path: "D:/PhotoWorkspace"
+
+# Photo scanning settings
+scan:
+  # Source directories to scan for photos
+  roots:
+    - "E:/Photos/Lumix"
+    - "F:/Camera/DCIM"
+    - "G:/Backup/Photos"
+  
+  # File extensions to include
+  extensions:
+    - ".jpg"
+    - ".jpeg"
+    - ".JPG"
+    - ".JPEG"
+    - ".png"
+    - ".PNG"
+  
+  # Scan subdirectories recursively
+  recurse: true
+
+# Time-based grouping settings (Stage 1)
+grouping:
+  # Maximum time span for a burst group (seconds)
+  # Adjust based on your camera's burst speed:
+  #   - Fast burst (10fps): 2-3 seconds
+  #   - Medium (5fps): 3-5 seconds
+  #   - Slow continuous: 5-10 seconds
+  time_window_seconds: 3.0
+  
+  # Maximum gap between consecutive photos in a group (seconds)
+  # Smaller values = stricter grouping
+  max_group_gap_seconds: 2.0
+
+# Visual similarity settings (Stage 2)
+similarity:
+  # Hashing method: "phash" (robust), "dhash" (fast), "ahash" (simple)
+  method: "phash"
+  
+  # Similarity threshold (0-64)
+  # Lower values = stricter matching
+  #   0-3:  Very strict (only nearly identical)
+  #   4-8:  Default (good for burst detection)
+  #   9-15: Loose (finds more variations)
+  phash_threshold: 6
+  
+  # Use SSIM for refinement (slower but more accurate)
+  use_ssim_refine: false
+  
+  # SSIM threshold (0.0-1.0)
+  # Higher values = stricter
+  ssim_threshold: 0.92
+
+# Photo quality analysis settings
+quality:
+  # Blur detection method: "laplacian" (recommended) or "variance"
+  blur_method: "laplacian"
+  
+  # Blur threshold
+  # Adjust based on your camera resolution:
+  #   - 24MP (Lumix S5): 100-150
+  #   - 12MP: 80-120
+  #   - Lower score = more blurry
+  blur_threshold: 120.0
+  
+  # Compute histogram for exposure analysis
+  compute_histogram: true
+
+# Organization and action settings
+actions:
+  # Dry-run mode (preview changes without applying)
+  # IMPORTANT: Set to false only when you're ready to make actual changes!
+  dry_run: true
+  
+  # Folder naming strategy for burst groups:
+  #   "first_filename": Use first photo's name (e.g., "P1234567")
+  #   "timestamp": Use timestamp (e.g., "20260204_143052")
+  #   "sequential": Use sequential numbers (e.g., "burst_0001")
+  burst_folder_naming: "first_filename"
+  
+  # Minimum photos in a group to create a folder
+  # Set to 2 for pairs, 3+ for larger bursts only
+  min_group_size: 2
+
+# Example configurations for different scenarios:
+
+# For Wedding Photography (many similar poses):
+# grouping:
+#   time_window_seconds: 10.0
+#   max_group_gap_seconds: 5.0
+# similarity:
+#   phash_threshold: 8
+# actions:
+#   min_group_size: 3
+
+# For Sports Photography (fast bursts):
+# grouping:
+#   time_window_seconds: 2.0
+#   max_group_gap_seconds: 0.5
+# similarity:
+#   phash_threshold: 5
+# actions:
+#   min_group_size: 5
+
+# For Landscape (fewer bursts, strict matching):
+# grouping:
+#   time_window_seconds: 5.0
+#   max_group_gap_seconds: 2.0
+# similarity:
+#   phash_threshold: 4
+#   use_ssim_refine: true
+# actions:
+#   min_group_size: 2

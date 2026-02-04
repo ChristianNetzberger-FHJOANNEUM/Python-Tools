@@ -1,0 +1,80 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "photo-tool"
+version = "0.1.0"
+description = "Modern photo management tool for sorting, rating, and organizing photos"
+authors = [
+    {name = "Photo Tool Team"}
+]
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+keywords = ["photo", "image", "management", "photography", "burst", "similarity"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "pillow>=10.0.0",           # Image loading, EXIF, thumbnails
+    "imagehash>=4.3.1",         # Perceptual hashing
+    "opencv-python>=4.8.0",     # Blur detection, advanced image ops
+    "numpy>=1.24.0",            # Array operations
+    "pyyaml>=6.0",              # Config files
+    "pydantic>=2.0.0",          # Config validation
+    "typer>=0.9.0",             # CLI framework
+    "rich>=13.0.0",             # Beautiful terminal output
+    "scikit-image>=0.21.0",     # SSIM, image metrics
+    "tqdm>=4.65.0",             # Progress bars
+    "exifread>=3.0.0",          # EXIF metadata
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.5.0",
+]
+gui = [
+    "PySide6>=6.5.0",           # Qt for desktop GUI
+]
+server = [
+    "fastapi>=0.104.0",         # REST/GraphQL server
+    "uvicorn>=0.24.0",          # ASGI server
+    "strawberry-graphql>=0.214.0",  # GraphQL
+    "sqlalchemy>=2.0.0",        # ORM for database
+]
+
+[project.scripts]
+photo-tool = "photo_tool.cli.main:app"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["photo_tool*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
