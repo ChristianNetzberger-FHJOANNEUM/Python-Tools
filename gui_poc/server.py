@@ -125,14 +125,26 @@ def get_photos():
         # Sort by capture time (newest first)
         from datetime import datetime
         
-        def get_sort_key(photo):
-            capture_time = get_capture_time(photo.path, fallback_to_mtime=True)
-            if capture_time:
-                return capture_time
-            # Fallback to file modification time as datetime
-            return datetime.fromtimestamp(photo.path.stat().st_mtime)
+        # Build a list of (photo, capture_time) tuples for efficient sorting
+        photos_with_times = []
+        for photo in photos:
+            try:
+                capture_time = get_capture_time(photo.path, fallback_to_mtime=True)
+                if capture_time is None:
+                    # Fallback to file modification time
+                    capture_time = datetime.fromtimestamp(photo.path.stat().st_mtime)
+                photos_with_times.append((photo, capture_time))
+            except Exception as e:
+                # Ultimate fallback: use current time (will be sorted last)
+                print(f"Warning: Could not get time for {photo.path.name}: {e}")
+                photos_with_times.append((photo, datetime.now()))
         
-        photos.sort(key=get_sort_key, reverse=True)
+        # Sort by capture time (newest first)
+        photos_with_times.sort(key=lambda x: x[1], reverse=True)
+        
+        # Extract sorted photos
+        photos = [p[0] for p in photos_with_times]
+
         
         # Paginate
         photos_page = photos[offset:offset + limit]
@@ -157,6 +169,10 @@ def get_photos():
             if relative_path is None:
                 relative_path = str(photo.path)
             
+            # Get capture time for display
+            capture_time = get_capture_time(photo.path, fallback_to_mtime=True)
+            capture_time_str = capture_time.strftime('%Y-%m-%d %H:%M:%S') if capture_time else None
+            
             result.append({
                 'id': str(photo.path),
                 'name': photo.path.name,
@@ -166,6 +182,7 @@ def get_photos():
                 'color': metadata.get('color'),
                 'comment': metadata.get('comment', ''),
                 'keywords': metadata.get('keywords', []),
+                'capture_time': capture_time_str,
                 'thumbnail': f"/thumbnails/{photo.path.stem}.jpg",
                 'full_image': f"/images/{photo.path.stem}{photo.path.suffix}"
             })
@@ -529,6 +546,21 @@ def get_full_image(filename):
                     from flask import send_file
                     
                     img = Image.open(image_path)
+                    
+                    # Apply EXIF orientation (fix Samsung rotation issue)
+                    try:
+                        exif = img.getexif()
+                        if exif:
+                            orientation = exif.get(0x0112)  # Orientation tag
+                            if orientation:
+                                if orientation == 3:
+                                    img = img.rotate(180, expand=True)
+                                elif orientation == 6:
+                                    img = img.rotate(270, expand=True)
+                                elif orientation == 8:
+                                    img = img.rotate(90, expand=True)
+                    except:
+                        pass
                     
                     # Resize if too large
                     max_size = 2500
