@@ -49,6 +49,7 @@ Open: **http://localhost:8000**
 - ⛶ **NEW: True Fullscreen** - Browser Fullscreen API (like YouTube, no UI!)
 - 👻 **NEW: Auto-Hide Controls** - YouTube-style UX, controls vanish after 3s!
 - 🎨 **NEW: Advanced Transitions** - 9 effects! Slide, Zoom, Rotate, Ken Burns, Random!
+- 🌫️ **NEW: Blurred Background** - Instagram-style! No black bars, blurred photo background!
 
 ### **Performance:**
 - ✅ **Caching** - Instant burst reload

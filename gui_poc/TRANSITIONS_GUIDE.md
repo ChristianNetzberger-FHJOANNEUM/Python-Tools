@@ -129,16 +129,18 @@ Best for: Creative, artistic
 ✅ Checkbox toggle (works with ANY transition!)
 ✅ Slow zoom + pan during display
 ✅ Like in documentaries!
-✅ Scale: 1.0 → 1.15
+✅ Scale: 1.0 → 1.08 (subtle zoom)
+✅ object-fit: cover (crop, no letterbox!)
 ✅ Random pan directions
 ✅ Duration: Full photo duration (5s)
+✅ 🌫️ Blurred background (no black bars!) 🆕
 
 Perfect Combo:
 - Fade transition + Ken Burns = Smooth crossfade + zoom!
 - Slide transition + Ken Burns = Dynamic!
 - Any transition + Ken Burns = Always great!
 
-Best for: Storytelling, immersive, NO black screens!
+Best for: Storytelling, immersive, NO black screens, Instagram-style!
 ```
 
 ### **8. Random** 🎲
