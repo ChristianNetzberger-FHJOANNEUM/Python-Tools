@@ -15,7 +15,7 @@ from datetime import datetime
 # Add parent directory to path to import photo_tool
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from photo_tool.io import scan_multiple_directories, filter_by_type
+from photo_tool.io import scan_multiple_directories, filter_by_type, get_capture_time
 from photo_tool.config import load_config, save_config
 from photo_tool.workspace import Workspace
 from photo_tool.actions.rating import get_rating, get_rating_with_comment
@@ -122,6 +122,18 @@ def get_photos():
         # Filter to photos only
         photos = filter_by_type(all_media, "photo")
         
+        # Sort by capture time (newest first)
+        from datetime import datetime
+        
+        def get_sort_key(photo):
+            capture_time = get_capture_time(photo.path, fallback_to_mtime=True)
+            if capture_time:
+                return capture_time
+            # Fallback to file modification time as datetime
+            return datetime.fromtimestamp(photo.path.stat().st_mtime)
+        
+        photos.sort(key=get_sort_key, reverse=True)
+        
         # Paginate
         photos_page = photos[offset:offset + limit]
         
@@ -131,10 +143,24 @@ def get_photos():
             # Try to get all metadata
             metadata = get_metadata(photo.path)
             
+            # Find which root folder this photo belongs to and calculate relative path
+            relative_path = None
+            if enabled_folders:
+                for root in enabled_folders:
+                    try:
+                        relative_path = str(photo.path.relative_to(root))
+                        break
+                    except ValueError:
+                        continue
+            
+            # Fallback to absolute path if relative path couldn't be determined
+            if relative_path is None:
+                relative_path = str(photo.path)
+            
             result.append({
                 'id': str(photo.path),
                 'name': photo.path.name,
-                'path': str(photo.path.relative_to(config.scan.roots[0]) if config.scan.roots else photo.path),
+                'path': relative_path,
                 'size': photo.size_bytes,
                 'rating': metadata.get('rating', 0),
                 'color': metadata.get('color'),
@@ -514,13 +540,19 @@ def get_full_image(filename):
 def get_stats():
     """Get workspace statistics"""
     try:
-        workspace_path = Path("C:/PhotoTool_Test")
+        workspace_path = get_current_workspace()
         ws = Workspace(workspace_path)
         config = load_config(ws.config_file)
         
-        # Scan all media
+        # Get only enabled folders
+        enabled_folders = get_enabled_folders(workspace_path)
+        if not enabled_folders:
+            # Fallback to all folders if none enabled
+            enabled_folders = config.scan.roots
+        
+        # Scan all media (only enabled folders)
         all_media = scan_multiple_directories(
-            config.scan.roots,
+            enabled_folders,
             config.scan.extensions,
             config.scan.recurse,
             show_progress=False
@@ -1029,7 +1061,11 @@ def add_folder_to_workspace():
             config.scan.roots.append(folder_path)
             save_config(config, ws.config_file)
             
-            logger.info(f"Added folder to workspace: {folder_path}")
+            # Enable the folder by default
+            from photo_tool.workspace.manager import toggle_folder
+            toggle_folder(workspace_path, str(folder_path), enabled=True)
+            
+            print(f"Added folder to workspace: {folder_path}")
             return jsonify({'success': True})
         else:
             return jsonify({'error': 'Folder already exists'}), 400

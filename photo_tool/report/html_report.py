@@ -59,7 +59,11 @@ def generate_html_report(
                 try:
                     # Generate thumbnail
                     thumb_path = generate_thumbnail(photo, thumbnails_dir)
-                    rel_thumb_path = Path(thumb_path).relative_to(output_path.parent)
+                    try:
+                        rel_thumb_path = Path(thumb_path).relative_to(output_path.parent)
+                    except ValueError:
+                        # If relative path fails, use absolute path
+                        rel_thumb_path = Path(thumb_path)
                     
                     css_class = "photo best" if is_best else "photo"
                     html_parts.append(f"<div class='{css_class}'>")

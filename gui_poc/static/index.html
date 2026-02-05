@@ -1275,7 +1275,7 @@
             
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div class="tabs">
-                    <button class="tab" :class="{ active: currentView === 'photos' }" @click="currentView = 'photos'">
+                    <button class="tab" :class="{ active: currentView === 'photos' }" @click="switchToPhotosView">
                         📸 Photos
                     </button>
                     <button class="tab" :class="{ active: currentView === 'bursts' }" @click="switchToBursts">
@@ -2509,7 +2509,7 @@
                     burstError: null,
                     totalPhotos: 0,
                     offset: 0,
-                    limit: 50,
+                    limit: 2000,
                     hoveredPhoto: null,
                     hoverStar: 0,
                     selectedBurst: null,
@@ -2893,7 +2893,14 @@
                             folder.enabled = enabled;
                         }
                         
-                        // Reload photos if on photos tab
+                        // Always reset photo list so it reloads when user switches to photos tab
+                        this.photos = [];
+                        this.offset = 0;
+                        
+                        // Reload stats to update total count
+                        await this.loadStats();
+                        
+                        // If currently on photos tab, reload immediately
                         if (this.currentView === 'photos') {
                             await this.loadPhotos();
                         }
@@ -2931,7 +2938,16 @@
                         // Reload folders
                         await this.loadWorkspaceFolders();
                         
-                        alert('✓ Folder added successfully!');
+                        // Reload stats to update total count
+                        await this.loadStats();
+                        
+                        // Switch to photos view and load photos
+                        this.currentView = 'photos';
+                        this.photos = [];
+                        this.offset = 0;
+                        await this.loadPhotos();
+                        
+                        alert('✓ Folder added and enabled! Loading photos...');
                         
                     } catch (err) {
                         alert(`Failed to add folder: ${err.message}`);
@@ -2967,9 +2983,12 @@
                         // Reload everything
                         await this.loadWorkspaceFolders();
                         await this.loadProjects();
+                        await this.loadStats();
                         
                         // Switch to photos view
                         this.currentView = 'photos';
+                        this.photos = [];
+                        this.offset = 0;
                         await this.loadPhotos();
                         
                         alert(`✓ Switched to workspace`);
@@ -3002,6 +3021,8 @@
                             throw new Error(data.error);
                         }
                         
+                        const newWorkspacePath = this.newWorkspacePath;
+                        
                         this.newWorkspaceName = '';
                         this.newWorkspacePath = '';
                         this.showAddWorkspaceModal = false;
@@ -3009,7 +3030,10 @@
                         // Reload workspaces
                         await this.loadWorkspaces();
                         
-                        alert('✓ Workspace added!');
+                        // Switch to the new workspace
+                        await this.switchToWorkspace(newWorkspacePath);
+                        
+                        alert('✓ Workspace created and activated!');
                     
                     } catch (err) {
                         alert(`Failed to add workspace: ${err.message}`);
@@ -3083,6 +3107,18 @@
                 },
                 
                 // ===== END FILE BROWSER =====
+                
+                async switchToPhotosView() {
+                    this.currentView = 'photos';
+                    
+                    // If photos list is empty (e.g., after toggling folders), reload
+                    if (this.photos.length === 0) {
+                        await Promise.all([
+                            this.loadPhotos(),
+                            this.loadStats()
+                        ]);
+                    }
+                },
                 
                 async switchWorkspace() {
                     // Called when dropdown changes
@@ -3231,6 +3267,8 @@
                         this.currentView = 'photos';
                         
                         // Reload photos to apply filters
+                        this.photos = [];
+                        this.offset = 0;
                         await this.loadPhotos();
                         
                         alert(`✓ Project "${project.name}" loaded!\n\n${this.filteredPhotos.length} photos selected`);
