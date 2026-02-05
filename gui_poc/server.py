@@ -474,6 +474,22 @@ def get_thumbnail(filename):
                         from flask import send_file
                         
                         img = Image.open(original)
+                        
+                        # Apply EXIF orientation (fix Samsung rotation issue)
+                        try:
+                            exif = img.getexif()
+                            if exif:
+                                orientation = exif.get(0x0112)  # Orientation tag
+                                if orientation:
+                                    if orientation == 3:
+                                        img = img.rotate(180, expand=True)
+                                    elif orientation == 6:
+                                        img = img.rotate(270, expand=True)
+                                    elif orientation == 8:
+                                        img = img.rotate(90, expand=True)
+                        except:
+                            pass
+                        
                         img.thumbnail((300, 300), Image.Resampling.LANCZOS)
                         
                         # Convert to JPEG
@@ -732,7 +748,7 @@ def _compute_bursts_cached(workspace_path, force=False):
         _analysis_progress['progress'] = 100
         _analysis_progress['message'] = 'Complete!'
         
-        print(f"✓ Burst analysis complete: {len(bursts)} groups found")
+        print(f"Burst analysis complete: {len(bursts)} groups found")
         
         return result
         
