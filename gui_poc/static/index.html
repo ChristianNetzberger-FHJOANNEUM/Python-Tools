@@ -270,6 +270,93 @@
             background: rgba(239, 68, 68, 0.8);
         }
         
+        /* Project Cards */
+        .project-card {
+            background: rgba(59, 130, 246, 0.1);
+            border: 2px solid rgba(59, 130, 246, 0.3);
+            border-radius: 12px;
+            padding: 20px;
+            transition: all 0.3s ease;
+        }
+        
+        .project-card:hover {
+            transform: translateY(-5px);
+            background: rgba(59, 130, 246, 0.15);
+            box-shadow: 0 8px 24px rgba(59, 130, 246, 0.2);
+        }
+        
+        .project-header {
+            margin-bottom: 15px;
+        }
+        
+        .project-name {
+            font-size: 1.2rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #fff;
+        }
+        
+        .project-meta {
+            display: flex;
+            gap: 15px;
+            font-size: 0.9rem;
+            color: #888;
+        }
+        
+        .project-info {
+            padding: 12px 0;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            margin-bottom: 15px;
+        }
+        
+        .project-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .project-btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: all 0.2s;
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+            min-width: 80px;
+        }
+        
+        .project-btn:hover {
+            background: rgba(255,255,255,0.2);
+            transform: translateY(-2px);
+        }
+        
+        .project-btn.primary {
+            background: linear-gradient(135deg, #4ade80, #3b82f6);
+        }
+        
+        .project-btn.danger {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+        }
+        
+        .project-btn.danger:hover {
+            background: rgba(239, 68, 68, 0.3);
+        }
+        
+        @media (max-width: 768px) {
+            .project-actions {
+                flex-direction: column;
+            }
+            
+            .project-btn {
+                width: 100%;
+            }
+        }
+        
         .modal {
             position: fixed;
             top: 0;
@@ -1169,18 +1256,36 @@
 <body>
     <div id="app">
         <header>
-            <h1>
-                <span>📸</span>
-                <span>Photo Tool PoC</span>
-            </h1>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h1 style="margin: 0;">
+                    <span>📸</span>
+                    <span>Photo Tool PoC</span>
+                </h1>
+                
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="font-size: 0.9rem; color: #888;">Workspace:</span>
+                    <select v-model="currentWorkspace" @change="switchWorkspace"
+                            style="background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 8px 16px; border-radius: 6px; font-size: 0.9rem; cursor: pointer; min-width: 200px;">
+                        <option v-for="ws in workspaces" :key="ws.path" :value="ws.path" style="background: #1a1a1a;">
+                            {{ ws.name }}
+                        </option>
+                    </select>
+                </div>
+            </div>
             
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div class="tabs">
                     <button class="tab" :class="{ active: currentView === 'photos' }" @click="currentView = 'photos'">
-                        All Photos
+                        📸 Photos
                     </button>
                     <button class="tab" :class="{ active: currentView === 'bursts' }" @click="switchToBursts">
-                        Bursts {{ bursts.length > 0 ? `(${bursts.length})` : '' }}
+                        📦 Bursts {{ bursts.length > 0 ? `(${bursts.length})` : '' }}
+                    </button>
+                    <button class="tab" :class="{ active: currentView === 'projects' }" @click="switchToProjects">
+                        📁 Projects {{ projects.length > 0 ? `(${projects.length})` : '' }}
+                    </button>
+                    <button class="tab" :class="{ active: currentView === 'workspaces' }" @click="switchToWorkspaces">
+                        🗂️ Workspaces
                     </button>
                 </div>
                 
@@ -1567,6 +1672,85 @@
             </div>
         </div>
         
+        <!-- Projects View -->
+        <div v-if="currentView === 'projects'">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px;">
+                <h2 style="font-size: 1.5rem; margin: 0;">📁 Projects</h2>
+                <button @click="showNewProjectModal = true"
+                        style="background: linear-gradient(135deg, #4ade80, #3b82f6); color: #fff; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 1rem;">
+                    ✨ New Project
+                </button>
+            </div>
+            
+            <div v-if="loadingProjects" class="loading">
+                <div class="spinner"></div>
+                <div>Loading projects...</div>
+            </div>
+            
+            <div v-if="projectError" class="error">
+                <strong>Error:</strong> {{ projectError }}
+            </div>
+            
+            <div v-if="projects.length === 0 && !loadingProjects" class="loading">
+                <div style="font-size: 3rem; margin-bottom: 20px;">📁</div>
+                <div>No projects yet</div>
+                <div style="margin-top: 10px; font-size: 0.9rem; color: #666;">
+                    Create a project to save photo selections and export settings
+                </div>
+                <button @click="showNewProjectModal = true"
+                        style="margin-top: 20px; background: linear-gradient(135deg, #4ade80, #3b82f6); color: #fff; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: 600;">
+                    ✨ Create First Project
+                </button>
+            </div>
+            
+            <!-- Project Cards -->
+            <div v-if="projects.length > 0" class="grid">
+                <div v-for="project in projects" 
+                     :key="project.id" 
+                     class="project-card">
+                    
+                    <div class="project-header">
+                        <div class="project-name">{{ project.name }}</div>
+                        <div class="project-meta">
+                            <span>📊 {{ project.photo_count || 0 }} photos</span>
+                            <span v-if="project.has_music">🎵</span>
+                        </div>
+                    </div>
+                    
+                    <div class="project-info">
+                        <div style="font-size: 0.85rem; color: #888;">
+                            <div>Created: {{ formatDate(project.created) }}</div>
+                            <div v-if="project.updated !== project.created">
+                                Updated: {{ formatDate(project.updated) }}
+                            </div>
+                            <div v-if="project.export_count > 0">
+                                Exports: {{ project.export_count }}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="project-actions">
+                        <button @click="loadProject(project.id)" 
+                                class="project-btn primary">
+                            📂 Load
+                        </button>
+                        <button @click="exportProject(project.id)" 
+                                class="project-btn">
+                            📤 Export
+                        </button>
+                        <button @click="editProject(project.id)" 
+                                class="project-btn">
+                            ✏️ Edit
+                        </button>
+                        <button @click="confirmDeleteProject(project.id)" 
+                                class="project-btn danger">
+                            🗑️ Delete
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
         <!-- Lightbox -->
         <div v-if="showLightbox && lightboxPhoto" class="lightbox" @click.self="closeLightbox">
             <div class="lightbox-header">
@@ -1746,6 +1930,201 @@
             </div>
         </div>
         
+        <!-- Workspaces View -->
+        <div v-if="currentView === 'workspaces'">
+            <h2 style="font-size: 1.5rem; margin-bottom: 30px;">🗂️ Workspace & Folder Management</h2>
+            
+            <!-- Current Workspace Info -->
+            <div style="background: rgba(59, 130, 246, 0.1); border: 2px solid rgba(59, 130, 246, 0.3); border-radius: 12px; padding: 20px; margin-bottom: 30px;">
+                <div style="font-size: 1.2rem; font-weight: 600; margin-bottom: 15px;">
+                    Current Workspace
+                </div>
+                <div style="font-size: 1rem; color: #aaa; margin-bottom: 10px;">
+                    {{ currentWorkspace || 'No workspace selected' }}
+                </div>
+                <div v-if="workspaceFolders.length > 0" style="font-size: 0.9rem; color: #888;">
+                    {{ workspaceFolders.filter(f => f.enabled).length }} of {{ workspaceFolders.length }} folders active
+                    | {{ totalActivePhotos }} photos
+                </div>
+            </div>
+            
+            <!-- Media Folders -->
+            <div style="margin-bottom: 30px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h3 style="font-size: 1.2rem; margin: 0;">📁 Media Folders</h3>
+                    <button @click="showAddFolderModal = true"
+                            style="background: rgba(74, 222, 128, 0.2); border: 2px solid rgba(74, 222, 128, 0.5); color: #4ade80; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.9rem;">
+                        + Add Folder
+                    </button>
+                </div>
+                
+                <div v-if="loadingFolders" class="loading">
+                    <div class="spinner"></div>
+                    <div>Loading folders...</div>
+                </div>
+                
+                <div v-if="workspaceFolders.length === 0 && !loadingFolders" class="loading">
+                    <div style="font-size: 2rem; margin-bottom: 15px;">📁</div>
+                    <div>No folders configured</div>
+                    <div style="margin-top: 10px; font-size: 0.9rem; color: #666;">
+                        Add media folders to start scanning photos
+                    </div>
+                </div>
+                
+                <!-- Folder List -->
+                <div v-if="workspaceFolders.length > 0" style="display: flex; flex-direction: column; gap: 12px;">
+                    <div v-for="folder in workspaceFolders" 
+                         :key="folder.path"
+                         style="background: rgba(255,255,255,0.05); border: 2px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 15px; transition: all 0.3s;"
+                         :style="{ 
+                             borderColor: folder.enabled ? 'rgba(74, 222, 128, 0.3)' : 'rgba(255,255,255,0.1)',
+                             background: folder.enabled ? 'rgba(74, 222, 128, 0.05)' : 'rgba(255,255,255,0.05)'
+                         }">
+                        <div style="display: flex; align-items: center; gap: 15px;">
+                            <label style="display: flex; align-items: center; cursor: pointer; flex: 1;">
+                                <input type="checkbox" 
+                                       :checked="folder.enabled"
+                                       @change="toggleFolder(folder.path, $event.target.checked)"
+                                       style="width: 24px; height: 24px; cursor: pointer; accent-color: #4ade80; margin-right: 15px;">
+                                
+                                <div style="flex: 1;">
+                                    <div style="font-size: 1rem; font-weight: 500; margin-bottom: 5px; color: #fff;">
+                                        {{ folder.path }}
+                                    </div>
+                                    <div style="font-size: 0.85rem; color: #888;">
+                                        <span v-if="folder.photo_count > 0">{{ folder.photo_count }} photos</span>
+                                        <span v-else>Not scanned yet</span>
+                                        <span v-if="!folder.exists" style="color: #ef4444; margin-left: 10px;">⚠️ Folder not found</span>
+                                    </div>
+                                </div>
+                            </label>
+                            
+                            <div style="display: flex; gap: 8px;">
+                                <button @click="removeFolder(folder.path)"
+                                        style="background: rgba(239, 68, 68, 0.2); border: none; color: #ef4444; padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem;">
+                                    🗑️ Remove
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div v-if="workspaceFolders.length > 0" 
+                     style="margin-top: 20px; padding: 15px; background: rgba(59, 130, 246, 0.1); border-radius: 8px; font-size: 0.9rem;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                        <span>Active Folders:</span>
+                        <span style="font-weight: 600; color: #4ade80;">{{ workspaceFolders.filter(f => f.enabled).length }}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                        <span>Inactive Folders:</span>
+                        <span style="font-weight: 600; color: #888;">{{ workspaceFolders.filter(f => !f.enabled).length }}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.1);">
+                        <span>Total Photos (active):</span>
+                        <span style="font-weight: 600; color: #3b82f6;">{{ totalActivePhotos }}</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Workspace List -->
+            <div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h3 style="font-size: 1.2rem; margin: 0;">🗂️ All Workspaces</h3>
+                    <button @click="showAddWorkspaceModal = true"
+                            style="background: linear-gradient(135deg, #4ade80, #3b82f6); color: #fff; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.9rem;">
+                        ✨ New Workspace
+                    </button>
+                </div>
+                
+                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px;">
+                    <div v-for="workspace in workspaces" 
+                         :key="workspace.path"
+                         style="background: rgba(255,255,255,0.05); border: 2px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 20px; transition: all 0.3s;"
+                         :style="{ 
+                             borderColor: workspace.path === currentWorkspace ? 'rgba(74, 222, 128, 0.5)' : 'rgba(255,255,255,0.1)',
+                             background: workspace.path === currentWorkspace ? 'rgba(74, 222, 128, 0.1)' : 'rgba(255,255,255,0.05)'
+                         }">
+                        <div style="margin-bottom: 15px;">
+                            <div style="font-size: 1.1rem; font-weight: 600; margin-bottom: 8px;">
+                                {{ workspace.name }}
+                                <span v-if="workspace.path === currentWorkspace" style="color: #4ade80; font-size: 0.8rem; margin-left: 8px;">● ACTIVE</span>
+                            </div>
+                            <div style="font-size: 0.85rem; color: #888; font-family: monospace;">
+                                {{ workspace.path }}
+                            </div>
+                        </div>
+                        
+                        <div style="display: flex; gap: 8px;">
+                            <button v-if="workspace.path !== currentWorkspace"
+                                    @click="switchToWorkspace(workspace.path)"
+                                    style="flex: 1; background: linear-gradient(135deg, #4ade80, #3b82f6); color: #fff; border: none; padding: 10px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.9rem;">
+                                Switch
+                            </button>
+                            <button v-else
+                                    disabled
+                                    style="flex: 1; background: rgba(74, 222, 128, 0.3); color: #fff; border: none; padding: 10px; border-radius: 6px; cursor: not-allowed; font-weight: 600; font-size: 0.9rem;">
+                                ✓ Current
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- New Project Modal -->
+        <div v-if="showNewProjectModal" class="modal" @click.self="showNewProjectModal = false">
+            <div class="modal-content" style="max-width: 600px;">
+                <div class="modal-header">
+                    <div class="modal-title">✨ New Project</div>
+                    <button class="close-btn" @click="showNewProjectModal = false">×</button>
+                </div>
+                
+                <div style="padding: 20px 0;">
+                    <p style="color: #888; margin-bottom: 20px;">
+                        Save current photo selection and export settings as a project.
+                    </p>
+                    
+                    <div style="margin-bottom: 20px;">
+                        <label style="display: block; margin-bottom: 8px; color: #aaa; font-size: 0.9rem;">
+                            Project Name *
+                        </label>
+                        <input v-model="newProjectName"
+                               type="text"
+                               placeholder="e.g., Vacation 2026 - Best Moments"
+                               style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 12px; border-radius: 8px; font-size: 1rem; outline: none;">
+                    </div>
+                    
+                    <div style="margin-bottom: 20px;">
+                        <label style="display: block; margin-bottom: 8px; color: #aaa; font-size: 0.9rem;">
+                            Selection Mode
+                        </label>
+                        <select v-model="newProjectMode"
+                                style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 12px; border-radius: 8px; font-size: 1rem; outline: none; cursor: pointer;">
+                            <option value="filter" style="background: #1a1a1a;">Filter (Dynamic - updates with new photos)</option>
+                            <option value="explicit" style="background: #1a1a1a;">Explicit (Static - fixed photo list)</option>
+                            <option value="hybrid" style="background: #1a1a1a;">Hybrid (Filter + manual adjustments)</option>
+                        </select>
+                    </div>
+                    
+                    <div style="background: rgba(59, 130, 246, 0.1); padding: 15px; border-radius: 8px; border: 1px solid rgba(59, 130, 246, 0.3); margin-bottom: 20px;">
+                        <div style="font-size: 0.85rem; color: #aaa; margin-bottom: 8px;">Will save:</div>
+                        <div style="font-size: 0.9rem;">
+                            ✓ {{ filteredPhotos.length }} photos ({{ newProjectMode }})<br>
+                            ✓ Current filters<br>
+                            ✓ Export settings<br>
+                            <span v-if="exportMusicFiles.trim()">✓ Music tracks<br></span>
+                        </div>
+                    </div>
+                    
+                    <button @click="saveNewProject" 
+                            :disabled="!newProjectName.trim() || savingProject"
+                            style="width: 100%; background: linear-gradient(135deg, #4ade80, #3b82f6); color: white; border: none; padding: 14px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 1rem; transition: all 0.3s;">
+                        {{ savingProject ? 'Saving...' : '💾 Save Project' }}
+                    </button>
+                </div>
+            </div>
+        </div>
+        
         <!-- Export Modal -->
         <div v-if="showExportModal" class="modal" @click.self="showExportModal = false">
             <div class="modal-content" style="max-width: 600px;">
@@ -1780,6 +2159,58 @@
                         </select>
                     </div>
                     
+                    <!-- 🆕 Slideshow Settings -->
+                    <div style="background: rgba(138, 43, 226, 0.1); padding: 15px; border-radius: 8px; border: 1px solid rgba(138, 43, 226, 0.3); margin-bottom: 20px;">
+                        <div style="font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                            <span>🎬</span> Slideshow Settings
+                        </div>
+                        
+                        <label style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px; cursor: pointer;">
+                            <input type="checkbox" v-model="exportSlideshowEnabled" 
+                                   style="width: 18px; height: 18px; cursor: pointer; accent-color: #8a2be2;">
+                            <span style="font-size: 0.9rem;">Enable Slideshow Mode</span>
+                        </label>
+                        
+                        <div v-if="exportSlideshowEnabled">
+                            <label style="display: block; margin-bottom: 8px; color: #aaa; font-size: 0.85rem;">
+                                Duration per Photo
+                            </label>
+                            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
+                                <input type="range" v-model.number="exportSlideshowDuration" 
+                                       min="2" max="15" step="1"
+                                       style="flex: 1; accent-color: #8a2be2;">
+                                <span style="min-width: 50px; font-weight: 600;">{{ exportSlideshowDuration }}s</span>
+                            </div>
+                            
+                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                                <input type="checkbox" v-model="exportSmartTVMode" 
+                                       style="width: 18px; height: 18px; cursor: pointer; accent-color: #8a2be2;">
+                                <span style="font-size: 0.85rem;">📺 Smart TV Mode (larger buttons)</span>
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <!-- 🆕 Music Settings -->
+                    <div style="background: rgba(59, 130, 246, 0.1); padding: 15px; border-radius: 8px; border: 1px solid rgba(59, 130, 246, 0.3); margin-bottom: 20px;">
+                        <div style="font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                            <span>🎵</span> Background Music (Optional)
+                        </div>
+                        
+                        <p style="font-size: 0.85rem; color: #888; margin-bottom: 12px;">
+                            Add music file paths (MP3 recommended), one per line:
+                        </p>
+                        
+                        <textarea v-model="exportMusicFiles"
+                                  placeholder="C:/Music/track1.mp3&#10;C:/Music/track2.mp3"
+                                  rows="3"
+                                  style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.2); color: #fff; padding: 10px; border-radius: 6px; font-size: 0.9rem; font-family: monospace; resize: vertical;">
+                        </textarea>
+                        
+                        <div style="font-size: 0.75rem; color: #666; margin-top: 8px;">
+                            💡 Tip: Use absolute paths like C:/Music/song.mp3
+                        </div>
+                    </div>
+                    
                     <div style="background: rgba(74, 222, 128, 0.1); padding: 15px; border-radius: 8px; border: 1px solid rgba(74, 222, 128, 0.3); margin-bottom: 20px;">
                         <div style="font-size: 0.85rem; color: #aaa; margin-bottom: 8px;">Will export:</div>
                         <div style="font-size: 0.9rem;">
@@ -1787,7 +2218,10 @@
                             ✓ Ratings & Color Labels<br>
                             ✓ Keywords/Tags<br>
                             ✓ Optimized images<br>
-                            ✓ Standalone HTML file
+                            ✓ Standalone HTML file<br>
+                            <span v-if="exportSlideshowEnabled">✓ 🎬 Slideshow ({{ exportSlideshowDuration }}s per photo)<br></span>
+                            <span v-if="exportMusicFiles.trim()">✓ 🎵 Background Music ({{ exportMusicFiles.split('\n').filter(f => f.trim()).length }} track(s))<br></span>
+                            <span v-if="exportSmartTVMode">✓ 📺 Smart TV optimized<br></span>
                         </div>
                     </div>
                     
@@ -1804,11 +2238,181 @@
                         </div>
                     </div>
                     
+                    <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                        <button @click="showNewProjectModal = true; showExportModal = false;" 
+                                style="flex: 1; background: rgba(59, 130, 246, 0.2); border: 2px solid rgba(59, 130, 246, 0.5); color: #3b82f6; padding: 12px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.9rem; transition: all 0.3s;">
+                            💾 Save as Project
+                        </button>
+                    </div>
+                    
                     <button @click="exportGallery" 
                             :disabled="exporting"
                             style="width: 100%; background: linear-gradient(135deg, #4ade80, #3b82f6); color: white; border: none; padding: 14px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 1rem; transition: all 0.3s;">
                         {{ exporting ? 'Exporting...' : '📦 Export Gallery' }}
                     </button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Add Folder Modal -->
+        <div v-if="showAddFolderModal" class="modal" @click.self="showAddFolderModal = false">
+            <div class="modal-content" style="max-width: 500px;">
+                <div class="modal-header">
+                    <div class="modal-title">📁 Add Media Folder</div>
+                    <button class="close-btn" @click="showAddFolderModal = false">×</button>
+                </div>
+                
+                <div style="padding: 20px 0;">
+                    <p style="color: #888; margin-bottom: 20px;">
+                        Add a folder containing photos/videos to this workspace.
+                    </p>
+                    
+                    <div style="margin-bottom: 20px;">
+                        <label style="display: block; margin-bottom: 8px; color: #aaa; font-size: 0.9rem;">
+                            Folder Path
+                        </label>
+                        <div style="display: flex; gap: 10px;">
+                            <input v-model="newFolderPath"
+                                   type="text"
+                                   placeholder="C:/Photos/2025"
+                                   style="flex: 1; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 12px; border-radius: 8px; font-size: 0.95rem; font-family: monospace; outline: none;">
+                            <button @click="openFolderBrowserForAdd"
+                                    style="background: rgba(59, 130, 246, 0.2); border: 2px solid rgba(59, 130, 246, 0.5); color: #3b82f6; padding: 12px 20px; border-radius: 8px; cursor: pointer; font-weight: 600; white-space: nowrap;">
+                                📁 Browse
+                            </button>
+                        </div>
+                        <div style="font-size: 0.75rem; color: #666; margin-top: 6px;">
+                            💡 Use absolute path like: D:/Photos/2025 or C:/Users/Name/Pictures
+                        </div>
+                    </div>
+                    
+                    <button @click="addFolder" 
+                            :disabled="!newFolderPath.trim()"
+                            style="width: 100%; background: linear-gradient(135deg, #4ade80, #3b82f6); color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 1rem;">
+                        ✓ Add Folder
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Add Workspace Modal -->
+        <div v-if="showAddWorkspaceModal" class="modal" @click.self="showAddWorkspaceModal = false">
+            <div class="modal-content" style="max-width: 500px;">
+                <div class="modal-header">
+                    <div class="modal-title">✨ New Workspace</div>
+                    <button class="close-btn" @click="showAddWorkspaceModal = false">×</button>
+                </div>
+                
+                <div style="padding: 20px 0;">
+                    <p style="color: #888; margin-bottom: 20px;">
+                        Create a new workspace to organize photos by theme, time period, or project.
+                    </p>
+                    
+                    <div style="margin-bottom: 20px;">
+                        <label style="display: block; margin-bottom: 8px; color: #aaa; font-size: 0.9rem;">
+                            Workspace Name
+                        </label>
+                        <input v-model="newWorkspaceName"
+                               type="text"
+                               placeholder="e.g., Vacation 2020-2025"
+                               style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 12px; border-radius: 8px; font-size: 1rem; outline: none;">
+                    </div>
+                    
+                    <div style="margin-bottom: 20px;">
+                        <label style="display: block; margin-bottom: 8px; color: #aaa; font-size: 0.9rem;">
+                            Workspace Path
+                        </label>
+                        <div style="display: flex; gap: 10px;">
+                            <input v-model="newWorkspacePath"
+                                   type="text"
+                                   placeholder="C:/PhotoTool_Vacation"
+                                   style="flex: 1; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 12px; border-radius: 8px; font-size: 0.95rem; font-family: monospace; outline: none;">
+                            <button @click="openFolderBrowserForWorkspace"
+                                    style="background: rgba(59, 130, 246, 0.2); border: 2px solid rgba(59, 130, 246, 0.5); color: #3b82f6; padding: 12px 20px; border-radius: 8px; cursor: pointer; font-weight: 600; white-space: nowrap;">
+                                📁 Browse
+                            </button>
+                        </div>
+                        <div style="font-size: 0.75rem; color: #666; margin-top: 6px;">
+                            💡 Folder will be created if it doesn't exist
+                        </div>
+                    </div>
+                    
+                    <button @click="addWorkspace" 
+                            :disabled="!newWorkspaceName.trim() || !newWorkspacePath.trim()"
+                            style="width: 100%; background: linear-gradient(135deg, #4ade80, #3b82f6); color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 1rem;">
+                        ✨ Create Workspace
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- File Browser Modal -->
+        <div v-if="showFileBrowser" class="modal" @click.self="closeBrowser">
+            <div class="modal-content" style="max-width: 700px; max-height: 80vh; display: flex; flex-direction: column;">
+                <div class="modal-header">
+                    <div class="modal-title">📁 Select Folder</div>
+                    <button class="close-btn" @click="closeBrowser">×</button>
+                </div>
+                
+                <div style="flex: 1; overflow: hidden; display: flex; flex-direction: column; padding: 20px 0;">
+                    <!-- Breadcrumb / Current Path -->
+                    <div style="background: rgba(255,255,255,0.05); border: 2px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 12px; margin-bottom: 15px; font-family: monospace; font-size: 0.9rem; color: #aaa; overflow-x: auto; white-space: nowrap;">
+                        <span v-if="browserIsRoot" style="color: #3b82f6;">💿 Drives</span>
+                        <span v-else style="color: #4ade80;">{{ browserCurrentPath || '/' }}</span>
+                    </div>
+                    
+                    <!-- Navigation Buttons -->
+                    <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                        <button v-if="browserParentPath !== null && !browserIsRoot" 
+                                @click="browseFolders(browserParentPath)"
+                                style="flex: 1; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 10px; border-radius: 6px; cursor: pointer; font-weight: 600;">
+                            ⬆️ Up
+                        </button>
+                        <button v-if="!browserIsRoot && browserCurrentPath" 
+                                @click="selectCurrentBrowserPath"
+                                style="flex: 1; background: rgba(74, 222, 128, 0.2); border: 2px solid rgba(74, 222, 128, 0.5); color: #4ade80; padding: 10px; border-radius: 6px; cursor: pointer; font-weight: 600;">
+                            ✓ Select This Folder
+                        </button>
+                    </div>
+                    
+                    <!-- Loading State -->
+                    <div v-if="browserLoading" style="flex: 1; display: flex; align-items: center; justify-content: center; color: #888;">
+                        <div class="spinner"></div>
+                        <span style="margin-left: 15px;">Loading...</span>
+                    </div>
+                    
+                    <!-- Folder List -->
+                    <div v-else style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;">
+                        <div v-if="browserFolders.length === 0" style="text-align: center; color: #666; padding: 40px;">
+                            📂 Empty folder
+                        </div>
+                        
+                        <div v-for="folder in browserFolders" 
+                             :key="folder.path"
+                             @click="folder.is_accessible ? browseFolders(folder.path) : null"
+                             style="background: rgba(255,255,255,0.05); border: 2px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 12px 15px; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 12px;"
+                             :style="{ 
+                                 cursor: folder.is_accessible ? 'pointer' : 'not-allowed',
+                                 opacity: folder.is_accessible ? 1 : 0.5
+                             }"
+                             @mouseover="$event.currentTarget.style.background = 'rgba(59, 130, 246, 0.1)'; $event.currentTarget.style.borderColor = 'rgba(59, 130, 246, 0.3)'"
+                             @mouseout="$event.currentTarget.style.background = 'rgba(255,255,255,0.05)'; $event.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)'">
+                            <div style="font-size: 1.5rem;">
+                                {{ browserIsRoot ? '💿' : (folder.is_accessible ? '📁' : '🔒') }}
+                            </div>
+                            <div style="flex: 1; overflow: hidden;">
+                                <div style="font-weight: 600; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                    {{ folder.name }}
+                                </div>
+                                <div v-if="!browserIsRoot" style="font-size: 0.75rem; color: #666; font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                    {{ folder.path }}
+                                </div>
+                            </div>
+                            <div v-if="folder.is_accessible" style="color: #3b82f6; font-size: 1.2rem;">
+                                ▶
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1927,6 +2531,10 @@
                     showExportModal: false,
                     exportTitle: '',
                     exportTemplate: 'photoswipe',
+                    exportSlideshowEnabled: true,      // 🆕 Slideshow enabled by default
+                    exportSlideshowDuration: 5,        // 🆕 5 seconds per photo
+                    exportSmartTVMode: false,          // 🆕 Smart TV mode
+                    exportMusicFiles: '',              // 🆕 Music file paths (newline separated)
                     exporting: false,
                     exportProgress: {
                         show: false,
@@ -1934,6 +2542,33 @@
                         total: 0,
                         message: ''
                     },
+                    // Projects
+                    projects: [],
+                    loadingProjects: false,
+                    projectError: null,
+                    showNewProjectModal: false,
+                    newProjectName: '',
+                    newProjectMode: 'filter',
+                    savingProject: false,
+                    currentProject: null,
+                    // Workspaces
+                    workspaces: [],
+                    currentWorkspace: null,
+                    workspaceFolders: [],
+                    loadingFolders: false,
+                    showAddFolderModal: false,
+                    showAddWorkspaceModal: false,
+                    newFolderPath: '',
+                    newWorkspaceName: '',
+                    newWorkspacePath: '',
+                    // File Browser
+                    showFileBrowser: false,
+                    browserCurrentPath: '',
+                    browserParentPath: null,
+                    browserFolders: [],
+                    browserIsRoot: false,
+                    browserLoading: false,
+                    browserCallback: null,
                     // Lightbox
                     showLightbox: false,
                     lightboxPhoto: null,
@@ -2074,6 +2709,12 @@
                     return this.allKeywords
                         .filter(k => k.name.toLowerCase().includes(input))
                         .slice(0, 10);
+                },
+                
+                totalActivePhotos() {
+                    return this.workspaceFolders
+                        .filter(f => f.enabled)
+                        .reduce((sum, f) => sum + (f.photo_count || 0), 0);
                 }
             },
             methods: {
@@ -2179,6 +2820,480 @@
                     if (this.bursts.length === 0) {
                         await this.loadBursts();
                     }
+                },
+                
+                async switchToProjects() {
+                    this.currentView = 'projects';
+                    if (this.projects.length === 0) {
+                        await this.loadProjects();
+                    }
+                },
+                
+                async switchToWorkspaces() {
+                    this.currentView = 'workspaces';
+                    await this.loadWorkspaces();
+                    await this.loadWorkspaceFolders();
+                },
+                
+                async loadWorkspaces() {
+                    try {
+                        const res = await fetch('/api/workspaces');
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        this.workspaces = data.workspaces || [];
+                        this.currentWorkspace = data.current;
+                    } catch (err) {
+                        console.error('Error loading workspaces:', err);
+                    }
+                },
+                
+                async loadWorkspaceFolders() {
+                    this.loadingFolders = true;
+                    
+                    try {
+                        const res = await fetch('/api/workspace/folders');
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        this.workspaceFolders = data.folders || [];
+                    } catch (err) {
+                        console.error('Error loading folders:', err);
+                    } finally {
+                        this.loadingFolders = false;
+                    }
+                },
+                
+                async toggleFolder(folderPath, enabled) {
+                    try {
+                        const res = await fetch('/api/workspace/folders/toggle', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                path: folderPath,
+                                enabled: enabled
+                            })
+                        });
+                        
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        // Update local state
+                        const folder = this.workspaceFolders.find(f => f.path === folderPath);
+                        if (folder) {
+                            folder.enabled = enabled;
+                        }
+                        
+                        // Reload photos if on photos tab
+                        if (this.currentView === 'photos') {
+                            await this.loadPhotos();
+                        }
+                        
+                    } catch (err) {
+                        alert(`Failed to toggle folder: ${err.message}`);
+                        console.error('Error toggling folder:', err);
+                    }
+                },
+                
+                async addFolder() {
+                    if (!this.newFolderPath.trim()) {
+                        alert('Please enter a folder path');
+                        return;
+                    }
+                    
+                    try {
+                        const res = await fetch('/api/workspace/folders/add', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                path: this.newFolderPath
+                            })
+                        });
+                        
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        this.newFolderPath = '';
+                        this.showAddFolderModal = false;
+                        
+                        // Reload folders
+                        await this.loadWorkspaceFolders();
+                        
+                        alert('✓ Folder added successfully!');
+                        
+                    } catch (err) {
+                        alert(`Failed to add folder: ${err.message}`);
+                        console.error('Error adding folder:', err);
+                    }
+                },
+                
+                async removeFolder(folderPath) {
+                    if (!confirm(`Remove folder from workspace?\n\n${folderPath}\n\nThis will not delete any files.`)) {
+                        return;
+                    }
+                    
+                    alert('Remove folder - Feature coming in Phase 2!');
+                    // TODO: Implement in Phase 2
+                },
+                
+                async switchToWorkspace(path) {
+                    try {
+                        const res = await fetch('/api/workspaces/switch', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ path: path })
+                        });
+                        
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        this.currentWorkspace = path;
+                        
+                        // Reload everything
+                        await this.loadWorkspaceFolders();
+                        await this.loadProjects();
+                        
+                        // Switch to photos view
+                        this.currentView = 'photos';
+                        await this.loadPhotos();
+                        
+                        alert(`✓ Switched to workspace`);
+                        
+                    } catch (err) {
+                        alert(`Failed to switch workspace: ${err.message}`);
+                        console.error('Error switching workspace:', err);
+                    }
+                },
+                
+                async addWorkspace() {
+                    if (!this.newWorkspaceName.trim() || !this.newWorkspacePath.trim()) {
+                        alert('Please enter workspace name and path');
+                        return;
+                    }
+                    
+                    try {
+                        const res = await fetch('/api/workspaces', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                path: this.newWorkspacePath,
+                                name: this.newWorkspaceName
+                            })
+                        });
+                        
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        this.newWorkspaceName = '';
+                        this.newWorkspacePath = '';
+                        this.showAddWorkspaceModal = false;
+                        
+                        // Reload workspaces
+                        await this.loadWorkspaces();
+                        
+                        alert('✓ Workspace added!');
+                    
+                    } catch (err) {
+                        alert(`Failed to add workspace: ${err.message}`);
+                        console.error('Error adding workspace:', err);
+                    }
+                },
+                
+                // ===== FILE BROWSER =====
+                
+                openFileBrowser(callback) {
+                    this.browserCallback = callback;
+                    this.browserCurrentPath = '';
+                    this.browserFolders = [];
+                    this.browserIsRoot = false;
+                    this.showFileBrowser = true;
+                    this.browseFolders('');
+                },
+                
+                async browseFolders(path) {
+                    this.browserLoading = true;
+                    try {
+                        const res = await fetch(`/api/browse/folders?path=${encodeURIComponent(path || '')}`);
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        this.browserCurrentPath = data.current_path;
+                        this.browserParentPath = data.parent;
+                        this.browserFolders = data.folders || [];
+                        this.browserIsRoot = data.is_root || false;
+                        
+                    } catch (err) {
+                        alert(`Failed to browse: ${err.message}`);
+                        console.error('Browse error:', err);
+                    } finally {
+                        this.browserLoading = false;
+                    }
+                },
+                
+                selectBrowserFolder(folderPath) {
+                    if (this.browserCallback) {
+                        this.browserCallback(folderPath);
+                    }
+                    this.closeBrowser();
+                },
+                
+                selectCurrentBrowserPath() {
+                    if (this.browserCurrentPath && this.browserCallback) {
+                        this.browserCallback(this.browserCurrentPath);
+                    }
+                    this.closeBrowser();
+                },
+                
+                closeBrowser() {
+                    this.showFileBrowser = false;
+                    this.browserCallback = null;
+                },
+                
+                openFolderBrowserForAdd() {
+                    this.openFileBrowser((path) => {
+                        this.newFolderPath = path;
+                    });
+                },
+                
+                openFolderBrowserForWorkspace() {
+                    this.openFileBrowser((path) => {
+                        this.newWorkspacePath = path;
+                    });
+                },
+                
+                // ===== END FILE BROWSER =====
+                
+                async switchWorkspace() {
+                    // Called when dropdown changes
+                    if (this.currentWorkspace) {
+                        await this.switchToWorkspace(this.currentWorkspace);
+                    }
+                },
+                
+                async loadProjects() {
+                    this.loadingProjects = true;
+                    this.projectError = null;
+                    
+                    try {
+                        const res = await fetch('/api/projects');
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        this.projects = data.projects || [];
+                    } catch (err) {
+                        this.projectError = `Failed to load projects: ${err.message}`;
+                        console.error('Error loading projects:', err);
+                    } finally {
+                        this.loadingProjects = false;
+                    }
+                },
+                
+                async saveNewProject() {
+                    if (!this.newProjectName.trim()) {
+                        alert('Please enter a project name');
+                        return;
+                    }
+                    
+                    this.savingProject = true;
+                    
+                    try {
+                        // Collect current filters
+                        const filters = {
+                            ratings: Object.keys(this.filters.ratings).filter(r => this.filters.ratings[r]).map(Number),
+                            colors: this.filters.colors.length > 0 ? this.filters.colors : null,
+                            keywords: this.filters.keywords.length > 0 ? this.filters.keywords : null,
+                            in_bursts: this.filters.inBursts || null
+                        };
+                        
+                        // Get photo IDs if explicit mode
+                        const photoIds = this.newProjectMode === 'explicit' ? 
+                            this.filteredPhotos.map(p => p.id) : null;
+                        
+                        // Collect export settings
+                        const exportSettings = {
+                            slideshow_enabled: this.exportSlideshowEnabled,
+                            slideshow_duration: this.exportSlideshowDuration,
+                            smart_tv_mode: this.exportSmartTVMode,
+                            template: this.exportTemplate,
+                            music_files: this.exportMusicFiles.split('\n').map(f => f.trim()).filter(f => f)
+                        };
+                        
+                        const res = await fetch('/api/projects', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                name: this.newProjectName,
+                                selection_mode: this.newProjectMode,
+                                filters: this.newProjectMode !== 'explicit' ? filters : null,
+                                photo_ids: photoIds,
+                                export_settings: exportSettings
+                            })
+                        });
+                        
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        // Reset form
+                        this.newProjectName = '';
+                        this.newProjectMode = 'filter';
+                        this.showNewProjectModal = false;
+                        
+                        // Reload projects
+                        await this.loadProjects();
+                        
+                        alert(`✓ Project "${data.project.name}" saved successfully!`);
+                        
+                    } catch (err) {
+                        alert(`Failed to save project: ${err.message}`);
+                        console.error('Error saving project:', err);
+                    } finally {
+                        this.savingProject = false;
+                    }
+                },
+                
+                async loadProject(projectId) {
+                    try {
+                        const res = await fetch(`/api/projects/${projectId}`);
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        const project = data.project;
+                        this.currentProject = project;
+                        
+                        // Restore filters
+                        if (project.filters) {
+                            // Reset filters first
+                            Object.keys(this.filters.ratings).forEach(r => {
+                                this.filters.ratings[r] = false;
+                            });
+                            this.filters.colors = [];
+                            this.filters.keywords = [];
+                            this.filters.inBursts = false;
+                            
+                            // Apply project filters
+                            if (project.filters.ratings) {
+                                project.filters.ratings.forEach(r => {
+                                    this.filters.ratings[r] = true;
+                                });
+                            }
+                            if (project.filters.colors) {
+                                this.filters.colors = project.filters.colors;
+                            }
+                            if (project.filters.keywords) {
+                                this.filters.keywords = project.filters.keywords;
+                            }
+                            if (project.filters.in_bursts) {
+                                this.filters.inBursts = true;
+                            }
+                        }
+                        
+                        // Restore export settings
+                        if (project.export_settings) {
+                            this.exportSlideshowEnabled = project.export_settings.slideshow_enabled ?? true;
+                            this.exportSlideshowDuration = project.export_settings.slideshow_duration ?? 5;
+                            this.exportSmartTVMode = project.export_settings.smart_tv_mode ?? false;
+                            this.exportTemplate = project.export_settings.template ?? 'photoswipe';
+                            this.exportMusicFiles = project.export_settings.music_files ? 
+                                project.export_settings.music_files.join('\n') : '';
+                        }
+                        
+                        // Switch to photos view
+                        this.currentView = 'photos';
+                        
+                        // Reload photos to apply filters
+                        await this.loadPhotos();
+                        
+                        alert(`✓ Project "${project.name}" loaded!\n\n${this.filteredPhotos.length} photos selected`);
+                        
+                    } catch (err) {
+                        alert(`Failed to load project: ${err.message}`);
+                        console.error('Error loading project:', err);
+                    }
+                },
+                
+                async exportProject(projectId) {
+                    try {
+                        // Load project first
+                        await this.loadProject(projectId);
+                        
+                        // Open export modal
+                        this.openExportModal();
+                        
+                    } catch (err) {
+                        alert(`Failed to export project: ${err.message}`);
+                        console.error('Error exporting project:', err);
+                    }
+                },
+                
+                async editProject(projectId) {
+                    alert('Edit project - coming soon!');
+                    // TODO: Implement edit functionality
+                },
+                
+                async confirmDeleteProject(projectId) {
+                    const project = this.projects.find(p => p.id === projectId);
+                    if (!project) return;
+                    
+                    if (!confirm(`Delete project "${project.name}"?\n\nThis cannot be undone.`)) {
+                        return;
+                    }
+                    
+                    try {
+                        const res = await fetch(`/api/projects/${projectId}`, {
+                            method: 'DELETE'
+                        });
+                        
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        // Reload projects
+                        await this.loadProjects();
+                        
+                        alert(`✓ Project "${project.name}" deleted`);
+                        
+                    } catch (err) {
+                        alert(`Failed to delete project: ${err.message}`);
+                        console.error('Error deleting project:', err);
+                    }
+                },
+                
+                formatDate(isoString) {
+                    if (!isoString) return '';
+                    const date = new Date(isoString);
+                    return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
                 },
                 
                 async rate(photo, rating) {
@@ -2420,6 +3535,12 @@
                             .replace(/[^a-z0-9]+/g, '-')
                             .replace(/^-|-$/g, '');
                         
+                        // Parse music files (newline separated)
+                        const musicFiles = this.exportMusicFiles
+                            .split('\n')
+                            .map(f => f.trim())
+                            .filter(f => f.length > 0);
+                        
                         const res = await fetch('/api/export/gallery', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -2427,7 +3548,12 @@
                                 photo_ids: photoIds,
                                 title: this.exportTitle,
                                 output_name: outputName,
-                                template: this.exportTemplate
+                                template: this.exportTemplate,
+                                // 🆕 NEW PARAMETERS
+                                slideshow_enabled: this.exportSlideshowEnabled,
+                                slideshow_duration: this.exportSlideshowDuration,
+                                smart_tv_mode: this.exportSmartTVMode,
+                                music_files: musicFiles.length > 0 ? musicFiles : undefined
                             })
                         });
                         
@@ -2437,7 +3563,17 @@
                             throw new Error(data.error);
                         }
                         
-                        alert(`✓ Gallery exported successfully!\n\nPhotos: ${data.photo_count}\nLocation: ${data.gallery_path}\n\nOpen: ${data.index_html}`);
+                        let message = `✓ Gallery exported successfully!\n\n`;
+                        message += `Photos: ${data.photo_count}\n`;
+                        if (data.music_count > 0) {
+                            message += `🎵 Music tracks: ${data.music_count}\n`;
+                        }
+                        if (this.exportSlideshowEnabled) {
+                            message += `🎬 Slideshow: ${this.exportSlideshowDuration}s per photo\n`;
+                        }
+                        message += `\nLocation: ${data.gallery_path}\n\nOpen: ${data.index_html}`;
+                        
+                        alert(message);
                         
                         this.showExportModal = false;
                         
@@ -2761,7 +3897,8 @@
                 await Promise.all([
                     this.loadPhotos(),
                     this.loadStats(),
-                    this.loadKeywords()
+                    this.loadKeywords(),
+                    this.loadWorkspaces()
                 ]);
                 
                 // Preload bursts in background

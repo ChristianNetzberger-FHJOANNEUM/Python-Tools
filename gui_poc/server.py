@@ -16,7 +16,7 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from photo_tool.io import scan_multiple_directories, filter_by_type
-from photo_tool.config import load_config
+from photo_tool.config import load_config, save_config
 from photo_tool.workspace import Workspace
 from photo_tool.actions.rating import get_rating, get_rating_with_comment
 from photo_tool.actions.metadata import (
@@ -29,9 +29,39 @@ from photo_tool.actions.metadata import (
     get_all_keywords
 )
 from photo_tool.actions.export import export_gallery, _export_progress
+from photo_tool.projects import ProjectManager
+from photo_tool.workspace.manager import (
+    WorkspaceManager, 
+    get_workspace_folders,
+    toggle_folder,
+    get_enabled_folders
+)
 
 app = Flask(__name__, static_folder='static')
 CORS(app)  # Enable CORS for development
+
+# Workspace manager (global)
+workspace_manager = WorkspaceManager()
+
+# Current workspace path (can be changed)
+_current_workspace_path = Path("C:/PhotoTool_Test")
+
+# Add current workspace if not already registered
+if not any(ws['path'] == str(_current_workspace_path) for ws in workspace_manager.list_workspaces()):
+    workspace_manager.add_workspace(_current_workspace_path, "Test Workspace")
+
+def get_current_workspace():
+    """Get current workspace path"""
+    global _current_workspace_path
+    current = workspace_manager.get_current_workspace()
+    if current:
+        _current_workspace_path = Path(current)
+    return _current_workspace_path
+
+# Project manager (initialized per workspace)
+def get_project_manager():
+    """Get project manager for current workspace"""
+    return ProjectManager(get_current_workspace())
 
 # Cache for burst analysis
 _burst_cache = {
@@ -66,18 +96,24 @@ def get_photos():
     """
     try:
         # Load workspace and config
-        workspace_path = Path("C:/PhotoTool_Test")
+        workspace_path = get_current_workspace()
         ws = Workspace(workspace_path)
         config = load_config(ws.config_file)
+        
+        # Get only enabled folders
+        enabled_folders = get_enabled_folders(workspace_path)
+        if not enabled_folders:
+            # Fallback to all folders if none enabled
+            enabled_folders = config.scan.roots
         
         # Get query params
         from flask import request
         limit = int(request.args.get('limit', 100))
         offset = int(request.args.get('offset', 0))
         
-        # Scan for media
+        # Scan for media (only enabled folders)
         all_media = scan_multiple_directories(
-            config.scan.roots,
+            enabled_folders,
             config.scan.extensions,
             config.scan.recurse,
             show_progress=False
@@ -278,7 +314,11 @@ def export_gallery_api():
         "photo_ids": ["path1", "path2"],
         "title": "Gallery Title",
         "output_name": "gallery-name",
-        "template": "photoswipe" or "simple"
+        "template": "photoswipe" or "simple",
+        "music_files": ["path/to/music1.mp3", "path/to/music2.mp3"],  // optional
+        "slideshow_enabled": true,  // optional, default true
+        "slideshow_duration": 5,  // optional, seconds per photo
+        "smart_tv_mode": false  // optional, optimize for TV
     }
     """
     try:
@@ -290,12 +330,17 @@ def export_gallery_api():
         title = data.get('title', 'Photo Gallery')
         output_name = data.get('output_name', 'gallery')
         template = data.get('template', 'photoswipe')
+        music_files = data.get('music_files', [])
+        slideshow_enabled = data.get('slideshow_enabled', True)
+        slideshow_duration = data.get('slideshow_duration', 5)
+        smart_tv_mode = data.get('smart_tv_mode', False)
         
         if not photo_ids:
             return jsonify({'error': 'No photos selected'}), 400
         
         # Convert IDs to Path objects
         photo_paths = [Path(photo_id) for photo_id in photo_ids]
+        music_paths = [Path(mf) for mf in music_files if Path(mf).exists()] if music_files else None
         
         # Export gallery in background thread
         workspace_path = Path("C:/PhotoTool_Test")
@@ -312,7 +357,11 @@ def export_gallery_api():
                     template=template,
                     max_image_size=2000,
                     thumbnail_size=400,
-                    include_metadata=True
+                    include_metadata=True,
+                    music_files=music_paths,
+                    slideshow_enabled=slideshow_enabled,
+                    slideshow_duration=slideshow_duration,
+                    smart_tv_mode=smart_tv_mode
                 )
             except Exception as e:
                 result['error'] = str(e)
@@ -331,7 +380,8 @@ def export_gallery_api():
             'success': True,
             'gallery_path': str(gallery_dir),
             'index_html': str(gallery_dir / 'index.html'),
-            'photo_count': len(photo_ids)
+            'photo_count': len(photo_ids),
+            'music_count': len(music_paths) if music_paths else 0
         })
     
     except Exception as e:
@@ -511,10 +561,10 @@ def _compute_bursts_cached(workspace_path, force=False):
     
     # Use cache if valid
     if not force and _burst_cache['data'] is not None and _burst_cache['config_mtime'] == config_mtime:
-        print(f"✓ Using cached burst data (computed at {_burst_cache['computed_at']})")
+        print(f"Using cached burst data (computed at {_burst_cache['computed_at']})")
         return _burst_cache['data']
     
-    print("⚡ Computing bursts (config changed or cache empty)...")
+    print("Computing bursts (config changed or cache empty)...")
     
     # Update progress
     _analysis_progress['status'] = 'running'
@@ -728,6 +778,427 @@ def get_burst_detail(burst_id):
         return jsonify({'error': str(e)}), 500
 
 
+# =============================================================================
+# WORKSPACE MANAGEMENT ENDPOINTS
+# =============================================================================
+
+@app.get('/api/workspaces')
+def get_workspaces_list():
+    """Get list of all registered workspaces"""
+    try:
+        workspaces = workspace_manager.list_workspaces()
+        current = workspace_manager.get_current_workspace()
+        
+        return jsonify({
+            'success': True,
+            'workspaces': workspaces,
+            'current': current
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.post('/api/workspaces')
+def add_workspace():
+    """
+    Add a new workspace
+    Body: {
+        "path": "C:/Path/To/Workspace",
+        "name": "Optional Name"
+    }
+    """
+    try:
+        from flask import request
+        
+        data = request.get_json()
+        path = Path(data.get('path'))
+        name = data.get('name')
+        
+        success = workspace_manager.add_workspace(path, name)
+        
+        if success:
+            return jsonify({'success': True})
+        else:
+            return jsonify({'error': 'Failed to add workspace'}), 500
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.post('/api/workspaces/switch')
+def switch_workspace():
+    """
+    Switch to a different workspace
+    Body: { "path": "C:/Path/To/Workspace" }
+    """
+    try:
+        from flask import request
+        global _current_workspace_path
+        
+        data = request.get_json()
+        path = data.get('path')
+        
+        success = workspace_manager.switch_workspace(path)
+        
+        if success:
+            _current_workspace_path = Path(path)
+            return jsonify({'success': True, 'current': path})
+        else:
+            return jsonify({'error': 'Failed to switch workspace'}), 500
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.get('/api/workspace/folders')
+def get_workspace_folders_api():
+    """Get folders for current workspace with enabled status"""
+    try:
+        workspace_path = get_current_workspace()
+        ws = Workspace(workspace_path)
+        config = load_config(ws.config_file)
+        
+        # Load enabled status
+        enabled_file = ws.root / "enabled_folders.json"
+        if enabled_file.exists():
+            import json
+            with open(enabled_file, 'r') as f:
+                enabled_status = json.load(f)
+        else:
+            enabled_status = {str(root): True for root in config.scan.roots}
+        
+        # Build folder list
+        folders = []
+        for root in config.scan.roots:
+            root_str = str(root)
+            folders.append({
+                'path': root_str,
+                'enabled': enabled_status.get(root_str, True),
+                'exists': Path(root).exists(),
+                'photo_count': 0  # TODO: Get from cache
+            })
+        
+        return jsonify({
+            'success': True,
+            'folders': folders,
+            'workspace': str(workspace_path)
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.post('/api/workspace/folders/toggle')
+def toggle_folder_api():
+    """
+    Toggle folder enabled status
+    Body: {
+        "path": "D:/Photos/2018-2020",
+        "enabled": true/false
+    }
+    """
+    try:
+        from flask import request
+        
+        data = request.get_json()
+        folder_path = data.get('path')
+        enabled = data.get('enabled', True)
+        
+        workspace_path = get_current_workspace()
+        success = toggle_folder(workspace_path, folder_path, enabled)
+        
+        if success:
+            return jsonify({'success': True})
+        else:
+            return jsonify({'error': 'Failed to toggle folder'}), 500
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.get('/api/browse/folders')
+def browse_folders():
+    """
+    Browse filesystem directories
+    Query params:
+        - path: Directory path to browse (defaults to user's home or drives on Windows)
+    Returns: { "current_path": "...", "parent": "...", "folders": [...] }
+    """
+    try:
+        from flask import request
+        import os
+        
+        requested_path = request.args.get('path', '')
+        
+        # If no path specified, list drives on Windows or home on Unix
+        if not requested_path:
+            if os.name == 'nt':  # Windows
+                import string
+                from ctypes import windll
+                
+                # Get available drives
+                drives = []
+                bitmask = windll.kernel32.GetLogicalDrives()
+                for letter in string.ascii_uppercase:
+                    if bitmask & 1:
+                        drive_path = f"{letter}:\\"
+                        if Path(drive_path).exists():
+                            drives.append({
+                                'name': f"{letter}:",
+                                'path': drive_path,
+                                'is_accessible': True
+                            })
+                    bitmask >>= 1
+                
+                return jsonify({
+                    'current_path': '',
+                    'parent': None,
+                    'folders': drives,
+                    'is_root': True
+                })
+            else:  # Unix-like
+                requested_path = str(Path.home())
+        
+        current_path = Path(requested_path).resolve()
+        
+        # Security check: ensure path exists and is accessible
+        if not current_path.exists():
+            return jsonify({'error': 'Path does not exist'}), 400
+        
+        if not current_path.is_dir():
+            return jsonify({'error': 'Path is not a directory'}), 400
+        
+        # Get parent path
+        parent = str(current_path.parent) if current_path.parent != current_path else None
+        
+        # List subdirectories
+        folders = []
+        try:
+            for item in sorted(current_path.iterdir()):
+                if item.is_dir():
+                    try:
+                        # Check if directory is accessible
+                        list(item.iterdir())
+                        is_accessible = True
+                    except PermissionError:
+                        is_accessible = False
+                    
+                    folders.append({
+                        'name': item.name,
+                        'path': str(item),
+                        'is_accessible': is_accessible
+                    })
+        except PermissionError:
+            return jsonify({'error': 'Permission denied'}), 403
+        
+        return jsonify({
+            'current_path': str(current_path),
+            'parent': parent,
+            'folders': folders,
+            'is_root': False
+        })
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.post('/api/workspace/folders/add')
+def add_folder_to_workspace():
+    """
+    Add a new folder to current workspace
+    Body: { "path": "D:/Photos/NewFolder" }
+    """
+    try:
+        from flask import request
+        
+        data = request.get_json()
+        folder_path = Path(data.get('path'))
+        
+        if not folder_path.exists():
+            return jsonify({'error': 'Folder does not exist'}), 400
+        
+        workspace_path = get_current_workspace()
+        ws = Workspace(workspace_path)
+        config = load_config(ws.config_file)
+        
+        # Add to scan roots if not already there
+        if folder_path not in config.scan.roots:
+            config.scan.roots.append(folder_path)
+            save_config(config, ws.config_file)
+            
+            logger.info(f"Added folder to workspace: {folder_path}")
+            return jsonify({'success': True})
+        else:
+            return jsonify({'error': 'Folder already exists'}), 400
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# =============================================================================
+# PROJECT MANAGEMENT ENDPOINTS
+# =============================================================================
+
+@app.get('/api/projects')
+def get_projects():
+    """Get all projects for current workspace"""
+    try:
+        pm = get_project_manager()
+        projects = pm.list_projects()
+        
+        return jsonify({
+            'success': True,
+            'projects': projects,
+            'total': len(projects)
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.get('/api/projects/<project_id>')
+def get_project(project_id):
+    """Get a specific project"""
+    try:
+        pm = get_project_manager()
+        project = pm.get_project(project_id)
+        
+        if not project:
+            return jsonify({'error': 'Project not found'}), 404
+        
+        return jsonify({
+            'success': True,
+            'project': project.to_dict()
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.post('/api/projects')
+def create_project():
+    """
+    Create a new project
+    Body: {
+        "name": "Project Name",
+        "selection_mode": "filter" | "explicit" | "hybrid",
+        "filters": {...},
+        "photo_ids": [...],
+        "export_settings": {...}
+    }
+    """
+    try:
+        from flask import request
+        
+        data = request.get_json()
+        
+        if not data.get('name'):
+            return jsonify({'error': 'Project name is required'}), 400
+        
+        pm = get_project_manager()
+        
+        project = pm.create_project(
+            name=data['name'],
+            selection_mode=data.get('selection_mode', 'filter'),
+            filters=data.get('filters'),
+            photo_ids=data.get('photo_ids'),
+            export_settings=data.get('export_settings')
+        )
+        
+        return jsonify({
+            'success': True,
+            'project': project.to_dict()
+        })
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.put('/api/projects/<project_id>')
+def update_project(project_id):
+    """Update an existing project"""
+    try:
+        from flask import request
+        
+        pm = get_project_manager()
+        project = pm.get_project(project_id)
+        
+        if not project:
+            return jsonify({'error': 'Project not found'}), 404
+        
+        data = request.get_json()
+        
+        # Update fields
+        if 'name' in data:
+            project.name = data['name']
+        if 'selection_mode' in data:
+            project.selection_mode = data['selection_mode']
+        if 'filters' in data:
+            from photo_tool.projects.manager import ProjectFilters
+            project.filters = ProjectFilters(**data['filters']) if data['filters'] else None
+        if 'photo_ids' in data:
+            project.photo_ids = data['photo_ids']
+        if 'manual_additions' in data:
+            project.manual_additions = data['manual_additions']
+        if 'manual_exclusions' in data:
+            project.manual_exclusions = data['manual_exclusions']
+        if 'export_settings' in data:
+            from photo_tool.projects.manager import ExportSettings
+            project.export_settings = ExportSettings(**data['export_settings']) if data['export_settings'] else None
+        
+        # Save
+        pm.save_project(project)
+        
+        return jsonify({
+            'success': True,
+            'project': project.to_dict()
+        })
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.delete('/api/projects/<project_id>')
+def delete_project(project_id):
+    """Delete a project"""
+    try:
+        pm = get_project_manager()
+        success = pm.delete_project(project_id)
+        
+        if success:
+            return jsonify({'success': True})
+        else:
+            return jsonify({'error': 'Failed to delete project'}), 500
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.post('/api/projects/<project_id>/export')
+def add_project_export_record(project_id):
+    """Add export record to project"""
+    try:
+        from flask import request
+        
+        pm = get_project_manager()
+        data = request.get_json()
+        
+        success = pm.add_export_record(project_id, data)
+        
+        if success:
+            return jsonify({'success': True})
+        else:
+            return jsonify({'error': 'Failed to add export record'}), 500
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 if __name__ == '__main__':
     import socket
     
@@ -739,18 +1210,18 @@ if __name__ == '__main__':
         local_ip = "localhost"
     
     print("\n" + "="*60)
-    print("🖼️  Photo Tool Web GUI - Server Starting")
+    print("Photo Tool Web GUI - Server Starting")
     print("="*60)
-    print(f"🖥️  PC Browser:       http://localhost:8000")
-    print(f"📺 Smart TV/Mobile:  http://{local_ip}:8000")
+    print(f"PC Browser:       http://localhost:8000")
+    print(f"Smart TV/Mobile:  http://{local_ip}:8000")
     print("="*60)
-    print("\n💡 For Smart TV access:")
+    print("\nFor Smart TV access:")
     print("   1. Make sure Windows Firewall allows port 8000")
     print("   2. Open Smart TV browser")
     print(f"   3. Navigate to: http://{local_ip}:8000")
-    print("\n⚠️  To enable firewall (run as Administrator):")
+    print("\nTo enable firewall (run as Administrator):")
     print('   netsh advfirewall firewall add rule name="Photo Tool Web GUI" dir=in action=allow protocol=TCP localport=8000')
-    print("\n▶️  Press Ctrl+C to stop\n")
+    print("\nPress Ctrl+C to stop\n")
     
     # Bind to all interfaces (0.0.0.0) for network access
     app.run(debug=True, port=8000, host='0.0.0.0')
