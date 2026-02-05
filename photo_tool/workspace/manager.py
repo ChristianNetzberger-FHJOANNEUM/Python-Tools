@@ -95,17 +95,19 @@ class WorkspaceManager:
         return self.current_workspace
     
     def add_workspace(self, path: Path, name: Optional[str] = None) -> bool:
-        """Add a workspace to the list"""
+        """Add a workspace to the list, creating it if it doesn't exist"""
         try:
             workspace = Workspace(path)
             
+            # If workspace doesn't exist, create it
             if not workspace.exists():
-                logger.error(f"Workspace does not exist: {path}")
-                return False
+                from ..workspace.init import create_workspace
+                logger.info(f"Creating new workspace: {path}")
+                create_workspace(path, scan_roots=[], force=False)
             
             path_str = str(path)
             
-            # Check if already exists
+            # Check if already exists in list
             if any(ws['path'] == path_str for ws in self.workspaces):
                 logger.info(f"Workspace already registered: {path}")
                 return True
