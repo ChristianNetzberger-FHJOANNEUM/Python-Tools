@@ -40,8 +40,10 @@ http://localhost:8000
 | `→` | Next photo |
 | `↑` | Increase speed (+1s) |
 | `↓` | Decrease speed (-1s) |
+| `T` | Cycle transitions |
+| `K` | Toggle Ken Burns 🎥 🆕 |
 | `L` | Toggle loop on/off |
-| `F` | Toggle fullscreen 🆕 |
+| `F` | Toggle fullscreen |
 | `ESC` | Exit fullscreen / Exit slideshow |
 
 ---

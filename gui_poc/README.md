@@ -48,6 +48,7 @@ Open: **http://localhost:8000**
 - 🎬 **NEW: Slideshow Mode** - Auto-play with fade transitions, controls & loop
 - ⛶ **NEW: True Fullscreen** - Browser Fullscreen API (like YouTube, no UI!)
 - 👻 **NEW: Auto-Hide Controls** - YouTube-style UX, controls vanish after 3s!
+- 🎨 **NEW: Advanced Transitions** - 9 effects! Slide, Zoom, Rotate, Ken Burns, Random!
 
 ### **Performance:**
 - ✅ **Caching** - Instant burst reload

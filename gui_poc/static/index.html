@@ -1025,11 +1025,110 @@
             align-items: center;
             justify-content: center;
             opacity: 0;
-            transition: opacity 1s ease-in-out;
         }
         
         .slideshow-image-container.active {
             opacity: 1;
+        }
+        
+        /* ========================================
+           TRANSITION ANIMATIONS
+           ======================================== */
+        
+        /* Fade (default) */
+        .slideshow-image-container.transition-fade {
+            transition: opacity 1s ease-in-out;
+        }
+        
+        /* Slide Left */
+        .slideshow-image-container.transition-slide-left.active {
+            animation: slideLeft var(--transition-speed, 1s) ease-out;
+        }
+        
+        @keyframes slideLeft {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        
+        /* Slide Right */
+        .slideshow-image-container.transition-slide-right.active {
+            animation: slideRight var(--transition-speed, 1s) ease-out;
+        }
+        
+        @keyframes slideRight {
+            from { transform: translateX(-100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        
+        /* Slide Up */
+        .slideshow-image-container.transition-slide-up.active {
+            animation: slideUp var(--transition-speed, 1s) ease-out;
+        }
+        
+        @keyframes slideUp {
+            from { transform: translateY(100%); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        
+        /* Slide Down */
+        .slideshow-image-container.transition-slide-down.active {
+            animation: slideDown var(--transition-speed, 1s) ease-out;
+        }
+        
+        @keyframes slideDown {
+            from { transform: translateY(-100%); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        
+        /* Zoom In */
+        .slideshow-image-container.transition-zoom-in.active {
+            animation: zoomIn var(--transition-speed, 1s) ease-out;
+        }
+        
+        @keyframes zoomIn {
+            from { transform: scale(0.7); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+        
+        /* Zoom Out */
+        .slideshow-image-container.transition-zoom-out.active {
+            animation: zoomOut var(--transition-speed, 1s) ease-out;
+        }
+        
+        @keyframes zoomOut {
+            from { transform: scale(1.3); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+        
+        /* Rotate */
+        .slideshow-image-container.transition-rotate.active {
+            animation: rotate var(--transition-speed, 1s) ease-out;
+        }
+        
+        @keyframes rotate {
+            from { transform: rotate(-90deg) scale(0.7); opacity: 0; }
+            to { transform: rotate(0) scale(1); opacity: 1; }
+        }
+        
+        /* Ken Burns Effect - Independent of transition! */
+        .slideshow-image-container.kenburns-enabled.active .slideshow-image {
+            animation: kenBurns var(--photo-duration, 5s) ease-out forwards;
+        }
+        
+        /* Keep Ken Burns position during fade-out (don't reset!) */
+        .slideshow-image-container.kenburns-enabled:not(.active) .slideshow-image {
+            /* Don't reset immediately - keep last position */
+            transform: scale(1.15) translate(var(--ken-x, -5%), var(--ken-y, -5%));
+            transition: none;
+        }
+        
+        @keyframes kenBurns {
+            0% { 
+                transform: scale(1) translate(0, 0); 
+            }
+            100% { 
+                transform: scale(1.15) translate(var(--ken-x, -5%), var(--ken-y, -5%)); 
+            }
         }
         
         .slideshow-image {
@@ -1688,10 +1787,21 @@
             </div>
             
             <div class="slideshow-main" @click="toggleSlideshowPlay">
+                <!-- Render all slides for smooth transitions -->
                 <div v-for="(photo, index) in slideshowPhotos" 
-                     :key="photo.id"
+                     :key="`slide-${index}-kb${slideshowSettings.kenBurns ? 1 : 0}`"
                      class="slideshow-image-container"
-                     :class="{ active: index === slideshowIndex }">
+                     :class="[
+                         { active: index === slideshowIndex },
+                         getTransitionClass(index),
+                         { 'kenburns-enabled': slideshowSettings.kenBurns }
+                     ]"
+                     :style="{
+                         '--transition-speed': slideshowSettings.transitionSpeed + 's',
+                         '--photo-duration': slideshowSettings.duration + 's',
+                         '--ken-x': getKenBurnsX(index) + '%',
+                         '--ken-y': getKenBurnsY(index) + '%'
+                     }">
                     <img :src="photo.full_image || photo.thumbnail" 
                          :alt="photo.name" 
                          class="slideshow-image">
@@ -1725,6 +1835,21 @@
                     
                     <div class="slideshow-settings">
                         <div class="slideshow-setting">
+                            <span>Effect:</span>
+                            <select v-model="slideshowSettings.transition">
+                                <option value="fade">Fade</option>
+                                <option value="slide-left">Slide Left</option>
+                                <option value="slide-right">Slide Right</option>
+                                <option value="slide-up">Slide Up</option>
+                                <option value="slide-down">Slide Down</option>
+                                <option value="zoom-in">Zoom In</option>
+                                <option value="zoom-out">Zoom Out</option>
+                                <option value="rotate">Rotate</option>
+                                <option value="random">🎲 Random</option>
+                            </select>
+                        </div>
+                        
+                        <div class="slideshow-setting">
                             <span>Speed:</span>
                             <select v-model="slideshowSettings.duration" @change="restartSlideshowIfPlaying">
                                 <option :value="2">2s</option>
@@ -1733,6 +1858,24 @@
                                 <option :value="7">7s</option>
                                 <option :value="10">10s</option>
                             </select>
+                        </div>
+                        
+                        <div class="slideshow-setting">
+                            <span>Transition:</span>
+                            <select v-model.number="slideshowSettings.transitionSpeed">
+                                <option :value="0.5">0.5s</option>
+                                <option :value="1">1s</option>
+                                <option :value="1.5">1.5s</option>
+                                <option :value="2">2s</option>
+                                <option :value="3">3s</option>
+                            </select>
+                        </div>
+                        
+                        <div class="slideshow-setting">
+                            <input type="checkbox" 
+                                   id="slideshow-kenburns" 
+                                   v-model="slideshowSettings.kenBurns">
+                            <label for="slideshow-kenburns" title="Slow zoom + pan during display">🎥 Ken Burns</label>
                         </div>
                         
                         <div class="slideshow-setting">
@@ -1948,8 +2091,10 @@
                     hideControls: false,
                     hideControlsTimeout: null,
                     slideshowSettings: {
-                        duration: 5,      // seconds per photo
-                        transition: 'fade',
+                        duration: 5,          // seconds per photo
+                        transition: 'fade',   // fade, slide-left, slide-right, zoom-in, rotate, random
+                        transitionSpeed: 1,   // seconds (0.5-3)
+                        kenBurns: false,      // Ken Burns effect (works with any transition!)
                         loop: true
                     },
                     // Filtering & Sorting
@@ -2580,6 +2725,7 @@
                     
                     this.showSlideshow = false;
                     this.slideshowPhotos = [];
+                    this.slideshowIndex = 0;
                     this.isFullscreen = false;
                     this.hideControls = false;
                     
@@ -2702,6 +2848,46 @@
                     this.startHideControlsTimer();
                 },
                 
+                // ========================================
+                // TRANSITION HELPERS
+                // ========================================
+                
+                getTransitionClass(index) {
+                    let transition = this.slideshowSettings.transition;
+                    
+                    // Random mode: pick different effect for each photo
+                    if (transition === 'random') {
+                        const effects = [
+                            'fade', 
+                            'slide-left', 
+                            'slide-right', 
+                            'slide-up', 
+                            'slide-down', 
+                            'zoom-in', 
+                            'zoom-out',
+                            'rotate'
+                        ];
+                        
+                        // Use index as seed for consistent random per photo
+                        const randomIndex = (index * 7) % effects.length;
+                        transition = effects[randomIndex];
+                    }
+                    
+                    return `transition-${transition}`;
+                },
+                
+                getKenBurnsX(index) {
+                    // Random pan direction for Ken Burns effect
+                    const directions = [-8, -5, -3, 0, 3, 5, 8];
+                    return directions[(index * 3) % directions.length];
+                },
+                
+                getKenBurnsY(index) {
+                    // Random pan direction for Ken Burns effect
+                    const directions = [-8, -5, -3, 0, 3, 5, 8];
+                    return directions[(index * 5) % directions.length];
+                },
+                
                 handleSlideshowKeyboard(e) {
                     if (!this.showSlideshow) return;
                     
@@ -2753,7 +2939,34 @@
                             e.preventDefault();
                             this.toggleFullscreen();
                             break;
+                        case 't':
+                        case 'T':
+                            // Cycle through transitions
+                            e.preventDefault();
+                            this.cycleTransition();
+                            break;
+                        case 'k':
+                        case 'K':
+                            // Toggle Ken Burns
+                            e.preventDefault();
+                            this.slideshowSettings.kenBurns = !this.slideshowSettings.kenBurns;
+                            break;
                     }
+                },
+                
+                cycleTransition() {
+                    const transitions = [
+                        'fade',
+                        'slide-left',
+                        'slide-right',
+                        'zoom-in',
+                        'rotate',
+                        'random'
+                    ];
+                    
+                    const currentIndex = transitions.indexOf(this.slideshowSettings.transition);
+                    const nextIndex = (currentIndex + 1) % transitions.length;
+                    this.slideshowSettings.transition = transitions[nextIndex];
                 }
             },
             
