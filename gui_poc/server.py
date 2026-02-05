@@ -173,6 +173,13 @@ def get_photos():
             capture_time = get_capture_time(photo.path, fallback_to_mtime=True)
             capture_time_str = capture_time.strftime('%Y-%m-%d %H:%M:%S') if capture_time else None
             
+            # Get blur scores for all methods
+            blur_scores = {
+                'laplacian': metadata.get('blur_score_laplacian'),
+                'tenengrad': metadata.get('blur_score_tenengrad'),
+                'roi': metadata.get('blur_score_roi')
+            }
+            
             result.append({
                 'id': str(photo.path),
                 'name': photo.path.name,
@@ -183,6 +190,8 @@ def get_photos():
                 'comment': metadata.get('comment', ''),
                 'keywords': metadata.get('keywords', []),
                 'capture_time': capture_time_str,
+                'blur_scores': blur_scores,  # All blur scores
+                'blur_method': metadata.get('blur_method', 'laplacian'),  # Last used method
                 'thumbnail': f"/thumbnails/{photo.path.stem}.jpg",
                 'full_image': f"/images/{photo.path.stem}{photo.path.suffix}"
             })
@@ -859,6 +868,338 @@ def get_burst_detail(burst_id):
 
 
 # =============================================================================
+# BLUR DETECTION ENDPOINTS
+# =============================================================================
+
+# Blur detection progress tracking
+_blur_progress = {
+    'status': 'idle',  # idle, running, complete, error
+    'progress': 0,
+    'total': 0,
+    'current_file': '',
+    'message': '',
+    'flagged_count': 0
+}
+
+@app.post('/api/quality/detect-blur')
+def detect_blur_photos():
+    """
+    Run blur detection on all photos - CALCULATES and STORES blur scores only
+    Does NOT flag photos automatically. Use /api/quality/apply-threshold to flag.
+    
+    Body: {
+        "force": false,  # Optional: force re-calculation even if scores exist
+        "method": "laplacian"  # Optional: laplacian, tenengrad, or roi
+    }
+    """
+    global _blur_progress
+    
+    try:
+        from flask import request
+        from photo_tool.analysis.similarity.blur import detect_blur, BlurMethod
+        from photo_tool.actions.metadata import set_metadata, get_metadata
+        
+        data = request.get_json() or {}
+        force = data.get('force', False)
+        method_str = data.get('method', 'laplacian').lower()
+        
+        # Convert string to enum
+        method_map = {
+            'laplacian': BlurMethod.LAPLACIAN,
+            'tenengrad': BlurMethod.TENENGRAD,
+            'roi': BlurMethod.ROI,
+            'variance': BlurMethod.VARIANCE
+        }
+        method = method_map.get(method_str, BlurMethod.LAPLACIAN)
+        
+        # Load workspace and current project
+        workspace_path = get_current_workspace()
+        ws = Workspace(workspace_path)
+        config = load_config(ws.config_file)
+        
+        # Get enabled folders
+        enabled_folders = get_enabled_folders(workspace_path)
+        if not enabled_folders:
+            enabled_folders = config.scan.roots
+        
+        # Get all photos
+        all_media = scan_multiple_directories(
+            enabled_folders,
+            config.scan.extensions,
+            config.scan.recurse,
+            show_progress=False
+        )
+        photos = filter_by_type(all_media, "photo")
+        
+        # Initialize progress
+        _blur_progress = {
+            'status': 'running',
+            'progress': 0,
+            'total': len(photos),
+            'current_file': '',
+            'message': 'Starting blur detection...',
+            'flagged_count': 0
+        }
+        
+        # Process photos - calculate and store scores
+        results = []
+        calculated_count = 0
+        skipped_count = 0
+        
+        for i, photo in enumerate(photos):
+            try:
+                _blur_progress['current_file'] = photo.path.name
+                _blur_progress['progress'] = i + 1
+                _blur_progress['message'] = f'Analyzing {photo.path.name}...'
+                
+                # Check if blur score already exists for this method
+                existing_meta = get_metadata(photo.path)
+                score_key = f'blur_score_{method_str}'  # Method-specific key
+                has_blur_score = score_key in existing_meta and existing_meta[score_key] is not None
+                
+                if has_blur_score and not force:
+                    # Skip - already has score for this method
+                    blur_score = existing_meta[score_key]
+                    skipped_count += 1
+                else:
+                    # Calculate blur score with selected method
+                    blur_score = detect_blur(photo.path, method=method)
+                    
+                    # Store in metadata with method-specific key
+                    set_metadata(photo.path, {
+                        score_key: float(blur_score),
+                        'blur_method': method_str  # Store which method was used
+                    })
+                    calculated_count += 1
+                
+                results.append({
+                    'path': str(photo.path),
+                    'name': photo.path.name,
+                    'blur_score': blur_score
+                })
+                
+            except Exception as e:
+                print(f"Error processing {photo.path.name}: {e}")
+                results.append({
+                    'path': str(photo.path),
+                    'name': photo.path.name,
+                    'error': str(e),
+                    'blur_score': None
+                })
+        
+        # Mark complete
+        _blur_progress['status'] = 'complete'
+        _blur_progress['message'] = f'Complete! Calculated {calculated_count}, skipped {skipped_count}.'
+        _blur_progress['progress'] = len(photos)
+        
+        return jsonify({
+            'success': True,
+            'total_analyzed': len(photos),
+            'calculated': calculated_count,
+            'skipped': skipped_count,
+            'method': method_str,
+            'results': results
+        })
+    
+    except Exception as e:
+        _blur_progress['status'] = 'error'
+        _blur_progress['message'] = str(e)
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.get('/api/quality/blur-progress')
+def get_blur_progress():
+    """Get current blur detection progress (SSE)"""
+    def generate():
+        last_progress = -1
+        while True:
+            # Send progress update
+            current = _blur_progress.copy()
+            
+            # Only send if changed
+            if current['progress'] != last_progress or current['status'] in ['complete', 'error']:
+                data = json.dumps(current)
+                yield f"data: {data}\n\n"
+                last_progress = current['progress']
+            
+            # Stop if complete or error
+            if current['status'] in ['complete', 'error', 'idle']:
+                break
+            
+            time.sleep(0.5)  # Update every 500ms
+    
+    return Response(stream_with_context(generate()), mimetype='text/event-stream')
+
+
+@app.get('/api/quality/blur-scores')
+def get_blur_scores():
+    """
+    Get blur scores for all photos in current workspace
+    Query params:
+        - method: laplacian, tenengrad, or roi (default: laplacian)
+    Returns: {
+        "scores": [{"path": "...", "blur_score": 123.45, "name": "..."}],
+        "histogram": {"0-50": 10, "50-100": 20, ...}
+    }
+    """
+    try:
+        from flask import request
+        from photo_tool.actions.metadata import get_metadata
+        
+        method = request.args.get('method', 'laplacian').lower()
+        score_key = f'blur_score_{method}'
+        
+        workspace_path = get_current_workspace()
+        ws = Workspace(workspace_path)
+        config = load_config(ws.config_file)
+        
+        # Get enabled folders
+        enabled_folders = get_enabled_folders(workspace_path)
+        if not enabled_folders:
+            enabled_folders = config.scan.roots
+        
+        # Get all photos
+        all_media = scan_multiple_directories(
+            enabled_folders,
+            config.scan.extensions,
+            config.scan.recurse,
+            show_progress=False
+        )
+        photos = filter_by_type(all_media, "photo")
+        
+        # Collect blur scores
+        scores = []
+        histogram = {
+            '0-50': 0,
+            '50-100': 0,
+            '100-150': 0,
+            '150-200': 0,
+            '200+': 0
+        }
+        
+        for photo in photos:
+            metadata = get_metadata(photo.path)
+            blur_score = metadata.get(score_key)
+            
+            if blur_score is not None:
+                scores.append({
+                    'path': str(photo.path),
+                    'name': photo.path.name,
+                    'blur_score': blur_score
+                })
+                
+                # Update histogram
+                if blur_score < 50:
+                    histogram['0-50'] += 1
+                elif blur_score < 100:
+                    histogram['50-100'] += 1
+                elif blur_score < 150:
+                    histogram['100-150'] += 1
+                elif blur_score < 200:
+                    histogram['150-200'] += 1
+                else:
+                    histogram['200+'] += 1
+        
+        return jsonify({
+            'success': True,
+            'scores': scores,
+            'histogram': histogram,
+            'total_with_scores': len(scores),
+            'total_photos': len(photos),
+            'method': method
+        })
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.post('/api/quality/apply-threshold')
+def apply_blur_threshold():
+    """
+    Apply blur threshold to flag photos based on their stored blur scores
+    Body: {
+        "threshold": 100.0,
+        "flag_color": "red",
+        "method": "laplacian"  # Optional: which method's scores to use
+    }
+    """
+    try:
+        from flask import request
+        from photo_tool.actions.metadata import get_metadata, set_color_label
+        
+        data = request.get_json()
+        threshold = float(data.get('threshold', 100.0))
+        flag_color = data.get('flag_color', 'red')
+        method = data.get('method', 'laplacian').lower()
+        score_key = f'blur_score_{method}'
+        
+        workspace_path = get_current_workspace()
+        ws = Workspace(workspace_path)
+        config = load_config(ws.config_file)
+        
+        # Get enabled folders
+        enabled_folders = get_enabled_folders(workspace_path)
+        if not enabled_folders:
+            enabled_folders = config.scan.roots
+        
+        # Get all photos
+        all_media = scan_multiple_directories(
+            enabled_folders,
+            config.scan.extensions,
+            config.scan.recurse,
+            show_progress=False
+        )
+        photos = filter_by_type(all_media, "photo")
+        
+        # Apply threshold
+        flagged_count = 0
+        unflagged_count = 0
+        changed_count = 0
+        
+        for photo in photos:
+            metadata = get_metadata(photo.path)
+            blur_score = metadata.get('blur_score')
+            current_color = metadata.get('color')
+            
+            if blur_score is not None:
+                should_be_flagged = blur_score < threshold
+                is_flagged = current_color == flag_color
+                
+                if should_be_flagged:
+                    flagged_count += 1
+                    if not is_flagged:
+                        # Need to flag it
+                        set_color_label(photo.path, flag_color)
+                        changed_count += 1
+                else:
+                    # Should NOT be flagged
+                    if is_flagged:
+                        # Remove flag
+                        set_color_label(photo.path, None)
+                        unflagged_count += 1
+                        changed_count += 1
+        
+        return jsonify({
+            'success': True,
+            'threshold': threshold,
+            'flag_color': flag_color,
+            'method': method,
+            'flagged_count': flagged_count,
+            'unflagged_count': unflagged_count,
+            'changed_count': changed_count
+        })
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+# =============================================================================
 # WORKSPACE MANAGEMENT ENDPOINTS
 # =============================================================================
 
@@ -1244,6 +1585,39 @@ def update_project(project_id):
         })
     
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.put('/api/projects/<project_id>/quality-settings')
+def update_project_quality_settings(project_id):
+    """Update quality detection settings for a project"""
+    try:
+        from flask import request
+        from photo_tool.projects.manager import QualityDetectionSettings
+        
+        pm = get_project_manager()
+        project = pm.get_project(project_id)
+        
+        if not project:
+            return jsonify({'error': 'Project not found'}), 404
+        
+        data = request.get_json()
+        
+        # Update quality settings
+        if 'quality_settings' in data:
+            project.quality_settings = QualityDetectionSettings(**data['quality_settings'])
+        
+        # Save
+        pm.save_project(project)
+        
+        return jsonify({
+            'success': True,
+            'quality_settings': project.quality_settings.__dict__ if project.quality_settings else None
+        })
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 

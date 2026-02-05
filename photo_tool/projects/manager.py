@@ -34,6 +34,21 @@ class ExportSettings:
 
 
 @dataclass
+class QualityDetectionSettings:
+    """Quality detection settings for blur and burst detection"""
+    # Blur detection
+    blur_detection_enabled: bool = True
+    blur_threshold: float = 100.0  # Laplacian variance threshold (lower = more blur)
+    blur_auto_flag_color: str = "red"  # Auto-assign color to blurry photos
+    
+    # Burst detection
+    burst_detection_enabled: bool = True
+    burst_time_threshold: int = 3  # Max seconds between burst photos
+    burst_similarity_threshold: float = 0.95  # Min similarity for burst grouping
+    burst_auto_organize: bool = False  # Auto-move bursts to subfolders
+
+
+@dataclass
 class Project:
     """Represents a photo project/collection"""
     id: str
@@ -50,6 +65,9 @@ class Project:
     
     # Export settings
     export_settings: Optional[ExportSettings] = None
+    
+    # Quality detection settings
+    quality_settings: Optional[QualityDetectionSettings] = None
     
     # Metadata
     exports: Optional[List[Dict[str, Any]]] = None
@@ -69,6 +87,8 @@ class Project:
             data['filters'] = ProjectFilters(**data['filters'])
         if 'export_settings' in data and data['export_settings']:
             data['export_settings'] = ExportSettings(**data['export_settings'])
+        if 'quality_settings' in data and data['quality_settings']:
+            data['quality_settings'] = QualityDetectionSettings(**data['quality_settings'])
         return cls(**data)
 
 
@@ -177,7 +197,8 @@ class ProjectManager:
         selection_mode: str,
         filters: Optional[Dict[str, Any]] = None,
         photo_ids: Optional[List[str]] = None,
-        export_settings: Optional[Dict[str, Any]] = None
+        export_settings: Optional[Dict[str, Any]] = None,
+        quality_settings: Optional[Dict[str, Any]] = None
     ) -> Project:
         """Create a new project"""
         
@@ -189,7 +210,7 @@ class ProjectManager:
         
         now = datetime.now().isoformat()
         
-        # Create project
+        # Create project with default quality settings
         project = Project(
             id=project_id,
             name=name,
@@ -199,6 +220,7 @@ class ProjectManager:
             filters=ProjectFilters(**filters) if filters else None,
             photo_ids=photo_ids,
             export_settings=ExportSettings(**export_settings) if export_settings else None,
+            quality_settings=QualityDetectionSettings(**quality_settings) if quality_settings else QualityDetectionSettings(),
             exports=[],
             stats={}
         )

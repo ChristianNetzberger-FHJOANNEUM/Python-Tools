@@ -1292,6 +1292,17 @@
                             {{ ws.name }}
                         </option>
                     </select>
+                    
+                    <span style="font-size: 0.9rem; color: #888; margin-left: 20px;">Project:</span>
+                    <select v-model="currentProjectId" @change="onProjectChange"
+                            style="background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 8px 16px; border-radius: 6px; font-size: 0.9rem; cursor: pointer; min-width: 200px;">
+                        <option :value="null" style="background: #1a1a1a;">
+                            No project selected
+                        </option>
+                        <option v-for="proj in projects" :key="proj.id" :value="proj.id" style="background: #1a1a1a;">
+                            {{ proj.name }}
+                        </option>
+                    </select>
                 </div>
             </div>
             
@@ -1336,6 +1347,10 @@
                 <div class="stat-card">
                     <div class="stat-value">{{ bursts.length }}</div>
                     <div>Burst Groups</div>
+                </div>
+                <div v-if="blurDetectionStats" class="stat-card" style="background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.3);">
+                    <div class="stat-value" style="color: #ef4444;">{{ blurDetectionStats.flagged_count }}</div>
+                    <div>Blurry Photos</div>
                 </div>
             </div>
         </header>
@@ -1477,6 +1492,133 @@
                 </div>
             </div>
             
+            <!-- Blur Detection Section -->
+            <div v-if="blurScores.length > 0" style="margin: 20px 0; padding: 20px; background: rgba(255,255,255,0.05); border-radius: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 15px;">
+                    <h3 style="font-size: 1.2rem; margin: 0;">🔍 Blur Threshold</h3>
+                    
+                    <!-- Method Selector -->
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <label style="color: #888; font-size: 0.9rem;">Method:</label>
+                        <select v-model="blurDetectionMethod" @change="onBlurMethodChange"
+                                style="background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 8px 12px; border-radius: 6px; font-size: 0.9rem; cursor: pointer;">
+                            <option value="laplacian" style="background: #1a1a1a;">Laplacian (Fast)</option>
+                            <option value="tenengrad" style="background: #1a1a1a;">Tenengrad (Sky-friendly)</option>
+                            <option value="roi" style="background: #1a1a1a;">ROI (Adaptive)</option>
+                        </select>
+                    </div>
+                    
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 0.9rem; cursor: pointer;">
+                        <input type="checkbox" v-model="blurThresholdEnabled" style="width: 18px; height: 18px;">
+                        Enable Auto-Flagging
+                    </label>
+                </div>
+                
+                <!-- Method Info -->
+                <div v-if="blurMethodInfo[blurDetectionMethod]" 
+                     style="padding: 10px 15px; background: rgba(74, 222, 128, 0.1); border-radius: 6px; border: 1px solid rgba(74, 222, 128, 0.2); margin-bottom: 15px;">
+                    <div style="font-size: 0.85rem; color: #4ade80;">
+                        <strong>{{ blurMethodInfo[blurDetectionMethod].name }}</strong> - 
+                        Range: {{ blurMethodInfo[blurDetectionMethod].range }} - 
+                        {{ blurMethodInfo[blurDetectionMethod].desc }}
+                    </div>
+                </div>
+                
+                <!-- Threshold Slider -->
+                <div style="margin-bottom: 20px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <label style="color: #888; font-size: 0.9rem;">
+                            Threshold: {{ blurThresholdValue }} 
+                            <span style="font-size: 0.8rem; color: #666;">
+                                ({{ blurThresholdValue === 0 ? 'Disabled' : blurThresholdValue < 20 ? 'Extremely Strict' : blurThresholdValue < 50 ? 'Very Strict' : blurThresholdValue < 100 ? 'Strict' : blurThresholdValue < 150 ? 'Balanced' : blurThresholdValue < 200 ? 'Lenient' : 'Very Lenient' }})
+                            </span>
+                        </label>
+                        <button @click="applyBlurThreshold" 
+                                :disabled="!blurThresholdEnabled || applyingThreshold"
+                                style="background: linear-gradient(135deg, #f59e0b, #ef4444); color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-weight: 600;"
+                                :style="{ opacity: (!blurThresholdEnabled || applyingThreshold) ? 0.5 : 1 }">
+                            {{ applyingThreshold ? '⏳ Applying...' : '🚩 Apply Threshold' }}
+                        </button>
+                    </div>
+                    <input type="range" v-model.number="blurThresholdValue" 
+                           :min="0" :max="getThresholdMax()" :step="getThresholdStep()"
+                           style="width: 100%; height: 8px; background: rgba(255,255,255,0.2); border-radius: 4px; outline: none;">
+                    <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: #666; margin-top: 4px;">
+                        <span>0 (None)</span>
+                        <span>Photos below {{ blurThresholdValue }} will be flagged</span>
+                        <span>{{ getThresholdMax() }} (All)</span>
+                    </div>
+                </div>
+                
+                <!-- Blur Histogram -->
+                <div v-if="blurHistogram" style="padding: 15px; background: rgba(255,255,255,0.03); border-radius: 8px;">
+                    <h4 style="font-size: 1rem; margin-bottom: 15px; color: #888;">Blur Score Distribution</h4>
+                    <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px;">
+                        <div v-for="(count, range) in blurHistogram" :key="range"
+                             style="text-align: center; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 6px;"
+                             :style="{ 
+                                 borderBottom: shouldRangeBeBlurred(range) ? '3px solid #ef4444' : '3px solid transparent'
+                             }">
+                            <div style="font-size: 1.5rem; font-weight: bold; color: #4ade80;">{{ count }}</div>
+                            <div style="font-size: 0.75rem; color: #888; margin-top: 4px;">{{ range }}</div>
+                            <div v-if="shouldRangeBeBlurred(range)" 
+                                 style="font-size: 0.7rem; color: #ef4444; margin-top: 4px;">
+                                🚩 Flagged
+                            </div>
+                        </div>
+                    </div>
+                    <div style="margin-top: 15px; padding: 10px; background: rgba(74, 222, 128, 0.1); border-radius: 6px; border: 1px solid rgba(74, 222, 128, 0.2);">
+                        <div style="color: #4ade80; font-size: 0.85rem;">
+                            ℹ️ {{ blurScores.length }} photos have blur scores. Adjust threshold slider to flag blurry photos.
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Calculate Blur Scores Button -->
+            <div v-if="photos.length > 0 && blurScores.length === 0" 
+                 style="margin: 20px 0; padding: 30px; text-align: center; background: rgba(255,255,255,0.05); border-radius: 12px; border: 2px dashed rgba(255,255,255,0.2);">
+                <div style="font-size: 2rem; margin-bottom: 15px;">🔍</div>
+                <h3 style="font-size: 1.2rem; margin-bottom: 10px;">Blur Detection Not Run</h3>
+                <p style="color: #888; margin-bottom: 15px; font-size: 0.9rem;">
+                    Calculate blur scores once, then adjust threshold slider to flag blurry photos
+                </p>
+                
+                <!-- Method Selector -->
+                <div style="margin-bottom: 20px;">
+                    <select v-model="blurDetectionMethod"
+                            style="background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 10px 16px; border-radius: 6px; font-size: 0.9rem; cursor: pointer;">
+                        <option value="laplacian" style="background: #1a1a1a;">Laplacian (Fast, general)</option>
+                        <option value="tenengrad" style="background: #1a1a1a;">Tenengrad (Better for sky)</option>
+                        <option value="roi" style="background: #1a1a1a;">ROI (Adaptive, ignores sky)</option>
+                    </select>
+                    <div style="margin-top: 8px; font-size: 0.8rem; color: #666;">
+                        {{ blurMethodInfo[blurDetectionMethod].desc }}
+                    </div>
+                </div>
+                
+                <button @click="runBlurDetection"
+                        :disabled="blurDetectionRunning"
+                        style="background: linear-gradient(135deg, #f59e0b, #ef4444); color: white; border: none; padding: 12px 32px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 1rem;"
+                        :style="{ opacity: blurDetectionRunning ? 0.5 : 1 }">
+                    {{ blurDetectionRunning ? '⏳ Calculating...' : '🔍 Calculate Blur Scores (' + blurDetectionMethod.toUpperCase() + ')' }}
+                </button>
+                
+                <!-- Progress Bar -->
+                <div v-if="blurDetectionProgress && blurDetectionProgress.status === 'running'" 
+                     style="margin-top: 20px; max-width: 600px; margin-left: auto; margin-right: auto;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 0.85rem;">
+                        <span style="color: #888;">{{ blurDetectionProgress.current_file }}</span>
+                        <span style="color: #4ade80;">{{ blurDetectionProgress.progress }} / {{ blurDetectionProgress.total }}</span>
+                    </div>
+                    <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden;">
+                        <div style="height: 100%; background: linear-gradient(90deg, #f59e0b, #ef4444); transition: width 0.3s ease;"
+                             :style="{ width: (blurDetectionProgress.progress / blurDetectionProgress.total * 100) + '%' }">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
             <div v-if="loading && photos.length === 0" class="loading">
                 <div class="spinner"></div>
                 <div>Loading photos...</div>
@@ -1510,6 +1652,18 @@
                         <div class="photo-name" :title="photo.name">{{ photo.name }}</div>
                         <div v-if="photo.capture_time" style="font-size: 0.7rem; color: #888; margin-top: 2px;">
                             {{ formatCaptureTime(photo.capture_time) }}
+                        </div>
+                        
+                        <!-- Blur Score Display -->
+                        <div v-if="getPhotoBlurScore(photo) !== null" 
+                             style="font-size: 0.75rem; margin-top: 4px; padding: 4px 8px; background: rgba(255,255,255,0.1); border-radius: 4px; display: inline-block; font-weight: 600;"
+                             :style="{ 
+                                 color: getBlurScoreColor(getPhotoBlurScore(photo)),
+                                 borderLeft: '3px solid ' + getBlurScoreColor(getPhotoBlurScore(photo))
+                             }"
+                             :title="getBlurScoreTooltip(photo)">
+                            🔍 {{ Math.round(getPhotoBlurScore(photo)) }} 
+                            <span style="font-size: 0.65rem; opacity: 0.7;">{{ blurDetectionMethod.substring(0, 3).toUpperCase() }}</span>
                         </div>
                         
                         <div class="stars" @click.stop>
@@ -1772,6 +1926,176 @@
                             🗑️ Delete
                         </button>
                     </div>
+                </div>
+            </div>
+            
+            <!-- Quality Detection Section -->
+            <div v-if="currentProjectId" style="margin-top: 40px; background: rgba(255,255,255,0.05); padding: 30px; border-radius: 12px;">
+                <h2 style="font-size: 1.5rem; margin-bottom: 20px;">✨ Quality Detection Settings</h2>
+                <p style="color: #888; margin-bottom: 25px; font-size: 0.9rem;">
+                    Configure blur and burst detection parameters for this project. These settings affect photo selection and gallery exports.
+                </p>
+                
+                <!-- Blur Detection Section -->
+                <div style="background: rgba(255,255,255,0.05); padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+                    <h3 style="font-size: 1.2rem; margin-bottom: 15px; display: flex; align-items: center; gap: 10px;">
+                        🔍 Blur Detection
+                        <label style="margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 0.9rem; font-weight: normal;">
+                            <input type="checkbox" v-model="qualitySettings.blur_detection_enabled" style="width: 18px; height: 18px;">
+                            Enabled
+                        </label>
+                    </h3>
+                    
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 20px;">
+                        <div>
+                            <label style="display: block; margin-bottom: 8px; color: #888; font-size: 0.9rem;">
+                                Blur Threshold ({{ qualitySettings.blur_threshold }})
+                            </label>
+                            <input type="range" v-model.number="qualitySettings.blur_threshold" 
+                                   min="50" max="200" step="5"
+                                   style="width: 100%; height: 6px; background: rgba(255,255,255,0.2); border-radius: 3px; outline: none;">
+                            <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: #666; margin-top: 4px;">
+                                <span>50 (Strict)</span>
+                                <span>200 (Lenient)</span>
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <label style="display: block; margin-bottom: 8px; color: #888; font-size: 0.9rem;">
+                                Auto-flag Color
+                            </label>
+                            <select v-model="qualitySettings.blur_auto_flag_color"
+                                    style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 10px; border-radius: 6px; font-size: 0.9rem;">
+                                <option value="red" style="background: #1a1a1a;">🔴 Red</option>
+                                <option value="yellow" style="background: #1a1a1a;">🟡 Yellow</option>
+                                <option value="blue" style="background: #1a1a1a;">🔵 Blue</option>
+                                <option value="purple" style="background: #1a1a1a;">🟣 Purple</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <!-- Blur Detection Action -->
+                    <div style="margin-top: 20px;">
+                        <div style="padding: 15px; background: rgba(74, 222, 128, 0.1); border-radius: 6px; border: 1px solid rgba(74, 222, 128, 0.2); margin-bottom: 15px;">
+                            <div style="color: #4ade80; font-size: 0.9rem; margin-bottom: 8px;">
+                                ℹ️ <strong>Blur Detection Workflow:</strong>
+                            </div>
+                            <div style="color: #888; font-size: 0.85rem;">
+                                1. Select detection method (Laplacian, Tenengrad, or ROI)<br>
+                                2. Calculate blur scores once for all photos<br>
+                                3. Go to Photos tab and adjust threshold slider to flag blurry photos<br>
+                                4. Compare methods by calculating with different methods!
+                            </div>
+                        </div>
+                        
+                        <!-- Method Selector -->
+                        <div style="margin-bottom: 15px;">
+                            <label style="display: block; margin-bottom: 8px; color: #888; font-size: 0.9rem;">
+                                Detection Method:
+                            </label>
+                            <select v-model="blurDetectionMethod"
+                                    style="width: 100%; max-width: 400px; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 10px; border-radius: 6px; font-size: 0.9rem;">
+                                <option value="laplacian" style="background: #1a1a1a;">Laplacian Variance (Fast, 0-300)</option>
+                                <option value="tenengrad" style="background: #1a1a1a;">Tenengrad/Sobel (Better for sky, 0-50)</option>
+                                <option value="roi" style="background: #1a1a1a;">ROI-based (Adaptive, ignores sky, 0-300)</option>
+                            </select>
+                            <div style="margin-top: 8px; font-size: 0.8rem; color: #666;">
+                                {{ blurMethodInfo[blurDetectionMethod].desc }}
+                            </div>
+                        </div>
+                        
+                        <button @click="runBlurDetection"
+                                :disabled="blurDetectionRunning || !qualitySettings.blur_detection_enabled"
+                                style="background: linear-gradient(135deg, #f59e0b, #ef4444); color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 1rem; transition: all 0.2s;"
+                                :style="{ opacity: (blurDetectionRunning || !qualitySettings.blur_detection_enabled) ? 0.5 : 1 }">
+                            {{ blurDetectionRunning ? '⏳ Calculating...' : '🔍 Calculate Blur Scores (' + blurDetectionMethod.toUpperCase() + ')' }}
+                        </button>
+                        
+                        <!-- Progress Bar (Projects Tab) -->
+                        <div v-if="blurDetectionProgress && blurDetectionProgress.status === 'running'" 
+                             style="margin-top: 20px; padding: 15px; background: rgba(255,255,255,0.1); border-radius: 8px; max-width: 600px;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 0.9rem;">
+                                <span style="color: #888; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 70%;">
+                                    📄 {{ blurDetectionProgress.current_file }}
+                                </span>
+                                <span style="color: #4ade80; font-weight: 600;">
+                                    {{ blurDetectionProgress.progress }} / {{ blurDetectionProgress.total }}
+                                </span>
+                            </div>
+                            <div style="width: 100%; height: 10px; background: rgba(255,255,255,0.1); border-radius: 5px; overflow: hidden;">
+                                <div style="height: 100%; background: linear-gradient(90deg, #f59e0b, #ef4444); transition: width 0.3s ease;"
+                                     :style="{ width: blurDetectionProgress.total > 0 ? (blurDetectionProgress.progress / blurDetectionProgress.total * 100) + '%' : '0%' }">
+                                </div>
+                            </div>
+                            <div style="margin-top: 8px; font-size: 0.85rem; color: #888; text-align: center;">
+                                {{ blurDetectionProgress.message }}
+                            </div>
+                        </div>
+                        
+                        <div v-if="blurScores.length > 0 && (!blurDetectionProgress || blurDetectionProgress.status !== 'running')" 
+                             style="margin-top: 10px; font-size: 0.85rem; color: #4ade80;">
+                            ✓ {{ blurScores.length }} photos have blur scores. Go to Photos tab to adjust threshold.
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Burst Detection Section -->
+                <div style="background: rgba(255,255,255,0.05); padding: 20px; border-radius: 8px;">
+                    <h3 style="font-size: 1.2rem; margin-bottom: 15px; display: flex; align-items: center; gap: 10px;">
+                        📦 Burst Detection
+                        <label style="margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 0.9rem; font-weight: normal;">
+                            <input type="checkbox" v-model="qualitySettings.burst_detection_enabled" style="width: 18px; height: 18px;">
+                            Enabled
+                        </label>
+                    </h3>
+                    
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;">
+                        <div>
+                            <label style="display: block; margin-bottom: 8px; color: #888; font-size: 0.9rem;">
+                                Time Threshold ({{ qualitySettings.burst_time_threshold }}s)
+                            </label>
+                            <input type="range" v-model.number="qualitySettings.burst_time_threshold" 
+                                   min="1" max="10" step="1"
+                                   style="width: 100%; height: 6px; background: rgba(255,255,255,0.2); border-radius: 3px; outline: none;">
+                            <div style="font-size: 0.75rem; color: #666; margin-top: 4px;">
+                                Max seconds between photos in a burst
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <label style="display: block; margin-bottom: 8px; color: #888; font-size: 0.9rem;">
+                                Similarity Threshold ({{ (qualitySettings.burst_similarity_threshold * 100).toFixed(0) }}%)
+                            </label>
+                            <input type="range" v-model.number="qualitySettings.burst_similarity_threshold" 
+                                   min="0.80" max="0.99" step="0.01"
+                                   style="width: 100%; height: 6px; background: rgba(255,255,255,0.2); border-radius: 3px; outline: none;">
+                            <div style="font-size: 0.75rem; color: #666; margin-top: 4px;">
+                                Minimum similarity for burst grouping
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div style="margin-top: 15px; padding: 12px; background: rgba(74, 222, 128, 0.1); border-radius: 6px; border: 1px solid rgba(74, 222, 128, 0.2);">
+                        <div style="color: #4ade80; font-size: 0.9rem;">
+                            ℹ️ Burst detection is currently running automatically. Settings will be applied on next scan.
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Save Settings Button -->
+                <div style="margin-top: 20px; text-align: right;">
+                    <button @click="saveQualitySettings"
+                            style="background: linear-gradient(135deg, #4ade80, #3b82f6); color: white; border: none; padding: 12px 32px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 1rem;">
+                        💾 Save Settings
+                    </button>
+                </div>
+            </div>
+            
+            <div v-if="!currentProjectId && projects.length > 0" 
+                 style="margin-top: 40px; padding: 40px; text-align: center; background: rgba(255,255,255,0.05); border-radius: 12px; border: 2px dashed rgba(255,255,255,0.2);">
+                <div style="font-size: 2rem; margin-bottom: 15px;">📁</div>
+                <div style="font-size: 1.1rem; color: #888;">
+                    Select a project from the dropdown above to configure quality detection settings
                 </div>
             </div>
         </div>
@@ -2542,6 +2866,20 @@
                         message: ''
                     },
                     burstsFromCache: false,
+                    // Blur Detection
+                    blurDetectionRunning: false,
+                    blurDetectionProgress: null,
+                    blurScores: [],
+                    blurHistogram: null,
+                    blurThresholdValue: 0,
+                    blurThresholdEnabled: false,
+                    applyingThreshold: false,
+                    blurDetectionMethod: 'laplacian',  // Selected method
+                    blurMethodInfo: {
+                        laplacian: { name: 'Laplacian Variance', range: '0-300', desc: 'Fast, general purpose' },
+                        tenengrad: { name: 'Tenengrad (Sobel)', range: '0-50', desc: 'Better for sky/homogeneous areas' },
+                        roi: { name: 'ROI-based', range: '0-300', desc: 'Adaptive, focuses on interesting areas' }
+                    },
                     // Keywords
                     allKeywords: [],
                     keywordInput: '',
@@ -2571,6 +2909,17 @@
                     newProjectMode: 'filter',
                     savingProject: false,
                     currentProject: null,
+                    currentProjectId: null,
+                    // Quality detection settings
+                    qualitySettings: {
+                        blur_detection_enabled: true,
+                        blur_threshold: 100.0,
+                        blur_auto_flag_color: 'red',
+                        burst_detection_enabled: true,
+                        burst_time_threshold: 3,
+                        burst_similarity_threshold: 0.95
+                    },
+                    blurDetectionStats: null,
                     // Workspaces
                     workspaces: [],
                     currentWorkspace: null,
@@ -2819,6 +3168,288 @@
                         this.burstProgress.message = progress.message;
                         
                         console.log(`Progress: ${progress.message} (${progress.progress}/${progress.total})`);
+                        
+                        if (progress.status === 'complete' || progress.status === 'error') {
+                            eventSource.close();
+                        }
+                    };
+                    
+                    eventSource.onerror = () => {
+                        eventSource.close();
+                    };
+                },
+                
+                async runBlurDetection() {
+                    if (this.blurDetectionRunning) return;
+                    
+                    try {
+                        this.blurDetectionRunning = true;
+                        this.blurDetectionProgress = {
+                            status: 'running',
+                            progress: 0,
+                            total: 1,  // Start with 1 to show progress bar
+                            message: 'Starting blur detection...',
+                            current_file: 'Initializing...'
+                        };
+                        
+                        // Start progress monitoring FIRST
+                        this.monitorBlurProgress();
+                        
+                        // Small delay to ensure EventSource is connected
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                        
+                        // Trigger blur detection (calculates and stores scores only)
+                        const res = await fetch('/api/quality/detect-blur', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                force: false,  // Don't recalculate if already exists
+                                method: this.blurDetectionMethod  // Use selected method
+                            })
+                        });
+                        
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        console.log(`✓ Blur scores calculated: ${data.calculated} new, ${data.skipped} skipped`);
+                        
+                        // Load blur scores and histogram
+                        await this.loadBlurScores();
+                        
+                        // Store statistics
+                        this.blurDetectionStats = {
+                            total_analyzed: data.total_analyzed,
+                            calculated: data.calculated,
+                            skipped: data.skipped
+                        };
+                        
+                        // Enable threshold slider
+                        this.blurThresholdEnabled = true;
+                        
+                        // Update progress to complete
+                        this.blurDetectionProgress = {
+                            status: 'complete',
+                            progress: data.total_analyzed,
+                            total: data.total_analyzed,
+                            message: `Complete! Calculated ${data.calculated}, skipped ${data.skipped}.`,
+                            current_file: ''
+                        };
+                        
+                        alert(`✓ Blur scores calculated (${this.blurDetectionMethod.toUpperCase()})!\n\nNew: ${data.calculated}\nSkipped: ${data.skipped}\n\nNow go to Photos tab and adjust the threshold slider to flag blurry photos.`);
+                        
+                    } catch (err) {
+                        console.error('Error running blur detection:', err);
+                        this.blurDetectionProgress = {
+                            status: 'error',
+                            message: 'Error: ' + err.message,
+                            progress: 0,
+                            total: 1
+                        };
+                        alert(`Error: ${err.message}`);
+                    } finally {
+                        this.blurDetectionRunning = false;
+                    }
+                },
+                
+                async loadBlurScores() {
+                    try {
+                        const res = await fetch(`/api/quality/blur-scores?method=${this.blurDetectionMethod}`);
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        this.blurScores = data.scores || [];
+                        this.blurHistogram = data.histogram || null;
+                        
+                        console.log(`✓ Loaded ${this.blurScores.length} blur scores (${this.blurDetectionMethod})`);
+                        
+                    } catch (err) {
+                        console.error('Error loading blur scores:', err);
+                    }
+                },
+                
+                async onBlurMethodChange() {
+                    // Reload blur scores when method changes
+                    await this.loadBlurScores();
+                    
+                    // Adjust threshold based on method
+                    if (this.blurDetectionMethod === 'tenengrad') {
+                        // Tenengrad has lower range (0-50)
+                        if (this.blurThresholdValue > 50) {
+                            this.blurThresholdValue = 25;
+                        }
+                    }
+                    
+                    console.log(`✓ Switched to ${this.blurDetectionMethod} method`);
+                },
+                
+                async applyBlurThreshold() {
+                    if (!this.blurThresholdEnabled || this.applyingThreshold) return;
+                    
+                    try {
+                        this.applyingThreshold = true;
+                        
+                        const res = await fetch('/api/quality/apply-threshold', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                threshold: this.blurThresholdValue,
+                                flag_color: this.qualitySettings.blur_auto_flag_color,
+                                method: this.blurDetectionMethod
+                            })
+                        });
+                        
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        console.log(`✓ Threshold applied: ${data.flagged_count} total flagged, ${data.unflagged_count} unflagged, ${data.changed_count} changed`);
+                        
+                        // Update blur detection stats for header
+                        this.blurDetectionStats = {
+                            ...this.blurDetectionStats,
+                            flagged_count: data.flagged_count
+                        };
+                        
+                        // Reload photos to show updated flags
+                        await this.loadPhotos();
+                        
+                        alert(`✓ Threshold ${this.blurThresholdValue} applied (${this.blurDetectionMethod.toUpperCase()})!\n\nTotal flagged (blur < ${this.blurThresholdValue}): ${data.flagged_count}\nUnflagged: ${data.unflagged_count}\nChanged: ${data.changed_count}`);
+                        
+                    } catch (err) {
+                        console.error('Error applying threshold:', err);
+                        alert(`Error: ${err.message}`);
+                    } finally {
+                        this.applyingThreshold = false;
+                    }
+                },
+                
+                shouldRangeBeBlurred(range) {
+                    // Determine if a histogram range should be flagged based on threshold
+                    if (!this.blurThresholdEnabled) return false;
+                    
+                    const threshold = this.blurThresholdValue;
+                    
+                    // Parse range (e.g., "0-50", "50-100", "200+")
+                    if (range === '200+') {
+                        return threshold > 200;
+                    }
+                    
+                    const parts = range.split('-');
+                    if (parts.length === 2) {
+                        const max = parseInt(parts[1]);
+                        return max <= threshold;
+                    }
+                    
+                    return false;
+                },
+                
+                getThresholdMax() {
+                    // Return max threshold value based on method
+                    if (this.blurDetectionMethod === 'tenengrad') {
+                        return 50;  // Tenengrad has lower range
+                    }
+                    return 300;  // Laplacian and ROI
+                },
+                
+                getThresholdStep() {
+                    // Return step size based on method
+                    if (this.blurDetectionMethod === 'tenengrad') {
+                        return 1;  // Finer control for tenengrad
+                    }
+                    return 5;  // Coarser for larger ranges
+                },
+                
+                async onProjectChange() {
+                    if (!this.currentProjectId) {
+                        this.currentProject = null;
+                        return;
+                    }
+                    
+                    try {
+                        const res = await fetch(`/api/projects/${this.currentProjectId}`);
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        this.currentProject = data.project;
+                        
+                        // Load quality settings
+                        if (data.project.quality_settings) {
+                            this.qualitySettings = { ...data.project.quality_settings };
+                        } else {
+                            // Use defaults
+                            this.qualitySettings = {
+                                blur_detection_enabled: true,
+                                blur_threshold: 100.0,
+                                blur_auto_flag_color: 'red',
+                                burst_detection_enabled: true,
+                                burst_time_threshold: 3,
+                                burst_similarity_threshold: 0.95
+                            };
+                        }
+                        
+                        console.log(`✓ Loaded project: ${data.project.name}`);
+                        
+                    } catch (err) {
+                        console.error('Error loading project:', err);
+                        alert(`Failed to load project: ${err.message}`);
+                    }
+                },
+                
+                async saveQualitySettings() {
+                    if (!this.currentProjectId) {
+                        alert('Please select a project first');
+                        return;
+                    }
+                    
+                    try {
+                        const res = await fetch(`/api/projects/${this.currentProjectId}/quality-settings`, {
+                            method: 'PUT',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                quality_settings: this.qualitySettings
+                            })
+                        });
+                        
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        alert('✓ Quality settings saved successfully!');
+                        console.log('✓ Quality settings saved');
+                        
+                    } catch (err) {
+                        console.error('Error saving quality settings:', err);
+                        alert(`Failed to save settings: ${err.message}`);
+                    }
+                },
+                
+                monitorBlurProgress() {
+                    const eventSource = new EventSource('/api/quality/blur-progress');
+                    
+                    eventSource.onmessage = (event) => {
+                        const progress = JSON.parse(event.data);
+                        this.blurDetectionProgress = progress;
+                        
+                        console.log(`Blur detection: ${progress.message} (${progress.progress}/${progress.total})`);
                         
                         if (progress.status === 'complete' || progress.status === 'error') {
                             eventSource.close();
@@ -3505,6 +4136,50 @@
                     return colors[color] || '#888';
                 },
                 
+                getPhotoBlurScore(photo) {
+                    // Get blur score for currently selected method
+                    if (!photo.blur_scores) return null;
+                    return photo.blur_scores[this.blurDetectionMethod];
+                },
+                
+                getBlurScoreTooltip(photo) {
+                    if (!photo.blur_scores) return '';
+                    
+                    const currentScore = photo.blur_scores[this.blurDetectionMethod];
+                    const tooltip = [`${this.blurDetectionMethod.toUpperCase()}: ${currentScore ? Math.round(currentScore) : 'N/A'} - ${this.getBlurScoreLabel(currentScore || 0)}`];
+                    
+                    // Show all available scores
+                    if (photo.blur_scores.laplacian && this.blurDetectionMethod !== 'laplacian') {
+                        tooltip.push(`LAP: ${Math.round(photo.blur_scores.laplacian)}`);
+                    }
+                    if (photo.blur_scores.tenengrad && this.blurDetectionMethod !== 'tenengrad') {
+                        tooltip.push(`TEN: ${Math.round(photo.blur_scores.tenengrad)}`);
+                    }
+                    if (photo.blur_scores.roi && this.blurDetectionMethod !== 'roi') {
+                        tooltip.push(`ROI: ${Math.round(photo.blur_scores.roi)}`);
+                    }
+                    
+                    return tooltip.join(' | ');
+                },
+                
+                getBlurScoreColor(score) {
+                    // Return color based on blur score
+                    if (score < 50) return '#ef4444';      // Red - Very Blurry
+                    if (score < 100) return '#fb923c';     // Orange - Blurry
+                    if (score < 150) return '#fbbf24';     // Yellow - Acceptable
+                    if (score < 200) return '#4ade80';     // Green - Sharp
+                    return '#22c55e';                       // Bright Green - Very Sharp
+                },
+                
+                getBlurScoreLabel(score) {
+                    // Return label based on blur score
+                    if (score < 50) return 'Very Blurry';
+                    if (score < 100) return 'Blurry';
+                    if (score < 150) return 'Acceptable';
+                    if (score < 200) return 'Sharp';
+                    return 'Very Sharp';
+                },
+                
                 async loadKeywords() {
                     try {
                         const res = await fetch('/api/keywords');
@@ -3976,7 +4651,9 @@
                     this.loadPhotos(),
                     this.loadStats(),
                     this.loadKeywords(),
-                    this.loadWorkspaces()
+                    this.loadWorkspaces(),
+                    this.loadProjects(),
+                    this.loadBlurScores()
                 ]);
                 
                 // Preload bursts in background
