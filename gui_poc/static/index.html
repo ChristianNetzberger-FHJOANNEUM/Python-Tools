@@ -112,6 +112,11 @@
             to { transform: rotate(360deg); }
         }
         
+        @keyframes pulse-scan {
+            0% { left: -50%; }
+            100% { left: 100%; }
+        }
+        
         .grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
@@ -1308,6 +1313,9 @@
             
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div class="tabs">
+                    <button class="tab" :class="{ active: currentView === 'media' }" @click="switchToMedia">
+                        📱 Media Manager
+                    </button>
                     <button class="tab" :class="{ active: currentView === 'photos' }" @click="switchToPhotosView">
                         📸 Photos
                     </button>
@@ -1344,9 +1352,9 @@
                     <div class="stat-value">{{ stats.rated_photos }}</div>
                     <div>Rated</div>
                 </div>
-                <div class="stat-card">
-                    <div class="stat-value">{{ bursts.length }}</div>
-                    <div>Burst Groups</div>
+                <div v-if="burstStats.total > 0" class="stat-card" style="background: rgba(251, 191, 36, 0.2); border: 1px solid rgba(251, 191, 36, 0.3);">
+                    <div class="stat-value" style="color: #fbbf24;">{{ burstStats.total }}</div>
+                    <div>Burst Photos</div>
                 </div>
                 <div v-if="blurDetectionStats" class="stat-card" style="background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.3);">
                     <div class="stat-value" style="color: #ef4444;">{{ blurDetectionStats.flagged_count }}</div>
@@ -1355,8 +1363,174 @@
             </div>
         </header>
         
+        <!-- Media Manager View -->
+        <div v-if="currentView === 'media'">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px;">
+                <div>
+                    <h2 style="font-size: 1.5rem; margin: 0 0 10px 0;">📱 Media Manager</h2>
+                    <p style="color: #888; font-size: 0.9rem; margin: 0;">
+                        Register and scan all your media folders. Pre-scanned folders load instantly in workspaces.
+                    </p>
+                </div>
+                <button @click="showAddMediaFolderModal = true"
+                        style="background: linear-gradient(135deg, #4ade80, #3b82f6); color: #fff; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 1rem;">
+                    ➕ Add Media Folder
+                </button>
+                <button @click="showConfigInfo"
+                        style="background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 1rem;">
+                    📋 Show Config
+                </button>
+            </div>
+            
+            <!-- Media Folders List -->
+            <div v-if="mediaFolders.length === 0 && !loadingMedia" class="loading">
+                <div style="font-size: 3rem; margin-bottom: 20px;">📱</div>
+                <div>No media folders registered yet</div>
+                <div style="margin-top: 10px; font-size: 0.9rem; color: #666;">
+                    Add your photo/video folders to enable pre-scanning and fast workspace creation
+                </div>
+                <button @click="showAddMediaFolderModal = true"
+                        style="margin-top: 20px; background: linear-gradient(135deg, #4ade80, #3b82f6); color: #fff; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: 600;">
+                    ➕ Add First Media Folder
+                </button>
+            </div>
+            
+            <div v-if="loadingMedia" class="loading">
+                <div class="spinner"></div>
+                <div>Loading media folders...</div>
+            </div>
+            
+            <!-- Media Folders Grid -->
+            <div v-if="mediaFolders.length > 0" style="display: grid; gap: 20px;">
+                <div v-for="folder in mediaFolders" :key="folder.path"
+                     style="background: rgba(255,255,255,0.05); border-radius: 12px; padding: 20px; border: 2px solid rgba(255,255,255,0.1);"
+                     :style="{ borderColor: !isFolderAvailable(folder) ? 'rgba(239, 68, 68, 0.5)' : 'rgba(255,255,255,0.1)' }">
+                    
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
+                        <div style="flex: 1;">
+                            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                                <h3 style="font-size: 1.2rem; margin: 0;">{{ folder.name }}</h3>
+                                <span style="font-size: 0.75rem; padding: 4px 8px; border-radius: 4px; background: rgba(255,255,255,0.1);"
+                                      :style="{ background: getCategoryColor(folder.category) }">
+                                    {{ getCategoryIcon(folder.category) }} {{ folder.category.toUpperCase() }}
+                                </span>
+                                <span v-if="!isFolderAvailable(folder)"
+                                      style="font-size: 0.75rem; padding: 4px 8px; border-radius: 4px; background: rgba(239, 68, 68, 0.2); color: #ef4444;">
+                                    ⚠️ OFFLINE
+                                </span>
+                                <span v-if="folder.is_scanned"
+                                      style="font-size: 0.75rem; padding: 4px 8px; border-radius: 4px; background: rgba(74, 222, 128, 0.2); color: #4ade80;">
+                                    ✓ SCANNED
+                                </span>
+                            </div>
+                            <div style="font-size: 0.85rem; color: #888; font-family: monospace; margin-bottom: 8px;">
+                                {{ folder.path }}
+                            </div>
+                            <div v-if="folder.volume_label" style="font-size: 0.8rem; color: #666;">
+                                Volume: {{ folder.volume_label }} (Serial: {{ folder.volume_serial }})
+                            </div>
+                        </div>
+                        
+                        <div style="display: flex; gap: 10px;">
+                            <button @click="scanMediaFolder(folder.path)"
+                                    :disabled="!isFolderAvailable(folder) || isScanningFolder(folder.path)"
+                                    style="background: linear-gradient(135deg, #f59e0b, #ef4444); color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-weight: 600;"
+                                    :style="{ opacity: (!isFolderAvailable(folder) || isScanningFolder(folder.path)) ? 0.5 : 1 }">
+                                {{ isScanningFolder(folder.path) ? '⏳ Scanning...' : '🔍 Scan' }}
+                            </button>
+                            <button @click="removeMediaFolder(folder.path)"
+                                    style="background: rgba(239, 68, 68, 0.2); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-weight: 600;">
+                                🗑️
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- Scan Progress - ALWAYS VISIBLE DURING SCAN -->
+                    <div v-if="isScanningFolder(folder.path)"
+                         style="margin-top: 15px; padding: 15px; background: rgba(255,255,255,0.05); border-radius: 8px; border: 2px solid rgba(245, 158, 11, 0.5);">
+                        <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                            <div class="spinner" style="width: 20px; height: 20px; margin-right: 10px;"></div>
+                            <div style="font-weight: bold; color: #f59e0b;">Scanning in Progress...</div>
+                        </div>
+                        
+                        <!-- Progress Info -->
+                        <div v-if="scanProgress">
+                            <!-- When we have total count -->
+                            <div v-if="scanProgress.total > 0">
+                                <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 0.9rem;">
+                                    <span style="color: #888;">{{ scanProgress.current_file || 'Processing...' }}</span>
+                                    <span style="color: #4ade80;">{{ scanProgress.completed }} / {{ scanProgress.total }}</span>
+                                </div>
+                                <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden;">
+                                    <div style="height: 100%; background: linear-gradient(90deg, #f59e0b, #ef4444); transition: width 0.3s ease;"
+                                         :style="{ width: (scanProgress.completed / scanProgress.total * 100) + '%' }">
+                                    </div>
+                                </div>
+                                <div style="margin-top: 8px; display: flex; justify-content: space-between; font-size: 0.8rem; color: #888;">
+                                    <span>{{ scanProgress.current_analyzer || 'blur' }}</span>
+                                    <span>{{ scanProgress.photos_per_second || 0 }} photos/sec</span>
+                                    <span>ETA: {{ scanProgress.estimated_remaining_seconds || '?' }}s</span>
+                                </div>
+                            </div>
+                            
+                            <!-- During initialization (total = 0) -->
+                            <div v-else>
+                                <div style="color: #888; font-size: 0.9rem; margin-bottom: 8px;">
+                                    {{ scanProgress.current_file || 'Discovering photos...' }}
+                                </div>
+                                <!-- Indeterminate progress bar (pulse effect) -->
+                                <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden; position: relative;">
+                                    <div style="position: absolute; height: 100%; width: 50%; background: linear-gradient(90deg, transparent, #f59e0b, #ef4444, transparent); animation: pulse-scan 1.5s ease-in-out infinite;">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Fallback if no progress data -->
+                        <div v-else style="color: #888; font-size: 0.9rem;">
+                            Initializing scan...
+                        </div>
+                    </div>
+                    
+                    <!-- Folder Stats -->
+                    <div v-if="folder.is_scanned" style="margin-top: 15px; display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px;">
+                        <div style="padding: 10px; background: rgba(255,255,255,0.03); border-radius: 6px; text-align: center;">
+                            <div style="font-size: 1.3rem; font-weight: bold; color: #4ade80;">{{ folder.total_photos }}</div>
+                            <div style="font-size: 0.75rem; color: #666;">Photos</div>
+                        </div>
+                        <div v-if="folder.scan_coverage && folder.scan_coverage.blur"
+                             style="padding: 10px; background: rgba(255,255,255,0.03); border-radius: 6px; text-align: center;">
+                            <div style="font-size: 1.3rem; font-weight: bold; color: #4ade80;">{{ Math.round(folder.scan_coverage.blur) }}%</div>
+                            <div style="font-size: 0.75rem; color: #666;">Blur Scanned</div>
+                        </div>
+                        <div v-if="folder.scan_date"
+                             style="padding: 10px; background: rgba(255,255,255,0.03); border-radius: 6px; text-align: center;">
+                            <div style="font-size: 0.85rem; color: #888;">{{ formatDate(folder.scan_date) }}</div>
+                            <div style="font-size: 0.75rem; color: #666;">Last Scan</div>
+                        </div>
+                    </div>
+                    
+                    <div v-if="folder.notes" style="margin-top: 15px; padding: 10px; background: rgba(255,255,255,0.03); border-radius: 6px; font-size: 0.85rem; color: #888; border-left: 3px solid #4ade80;">
+                        {{ folder.notes }}
+                    </div>
+                </div>
+            </div>
+        </div>
+        
         <!-- All Photos View -->
         <div v-if="currentView === 'photos'">
+            <!-- Action Bar -->
+            <div v-if="photos.length > 0" style="display: flex; justify-content: flex-end; margin-bottom: 15px; gap: 10px;">
+                <button @click="resetAllRatings"
+                        style="background: rgba(239, 68, 68, 0.2); border: 2px solid rgba(239, 68, 68, 0.5); color: #ef4444; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.9rem;">
+                    🗑️ Reset All Ratings
+                </button>
+                <button @click="resetAllColors"
+                        style="background: rgba(239, 68, 68, 0.2); border: 2px solid rgba(239, 68, 68, 0.5); color: #ef4444; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.9rem;">
+                    🗑️ Reset All Colors
+                </button>
+            </div>
+            
             <!-- Filter Bar -->
             <div v-if="photos.length > 0" class="filter-bar">
                 <div class="filter-section">
@@ -1646,6 +1820,13 @@
                          class="color-label-badge"
                          :class="photo.color"
                          :style="{ background: getColorHex(photo.color) }">
+                    </div>
+                    
+                    <!-- Burst Badge (top-right) -->
+                    <div v-if="photo.burst && photo.burst.is_burst"
+                         style="position: absolute; top: 8px; right: 8px; background: rgba(251, 191, 36, 0.9); color: #000; padding: 4px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; backdrop-filter: blur(4px);"
+                         :title="`Burst group (${photo.burst.group_size} photos)`">
+                        📸 {{ photo.burst.group_size }}
                     </div>
                     
                     <div class="photo-info">
@@ -2342,7 +2523,9 @@
                                     </div>
                                     <div style="font-size: 0.85rem; color: #888;">
                                         <span v-if="folder.photo_count > 0">{{ folder.photo_count }} photos</span>
-                                        <span v-else>Not scanned yet</span>
+                                        <span v-else-if="folder.is_scanned === false">Not scanned yet</span>
+                                        <span v-else>No photos found</span>
+                                        <span v-if="folder.is_scanned" style="color: #4ade80; margin-left: 10px;">✓ Scanned</span>
                                         <span v-if="!folder.exists" style="color: #ef4444; margin-left: 10px;">⚠️ Folder not found</span>
                                     </div>
                                 </div>
@@ -2644,6 +2827,177 @@
             </div>
         </div>
         
+        <!-- Config Info Modal -->
+        <div v-if="showConfigModal" class="modal-overlay" @click.self="showConfigModal = false">
+            <div class="modal-content" style="max-width: 900px; max-height: 80vh; overflow-y: auto;">
+                <div class="modal-header">
+                    <h2 style="margin: 0;">📋 Configuration Files</h2>
+                    <button @click="showConfigModal = false" style="background: none; border: none; font-size: 1.5rem; color: #888; cursor: pointer;">×</button>
+                </div>
+                
+                <div v-if="!configInfo" style="padding: 40px; text-align: center; color: #888;">
+                    <div style="font-size: 2rem; margin-bottom: 10px;">⏳</div>
+                    <div>Loading configuration info...</div>
+                </div>
+                
+                <div v-if="configInfo" style="padding: 20px;">
+                    <!-- Global Config Root -->
+                    <div style="background: rgba(255,255,255,0.05); padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                        <h3 style="margin: 0 0 10px 0; color: #4ade80;">🌍 Global Configuration</h3>
+                        <div style="font-family: 'Courier New', monospace; font-size: 0.9rem; color: #888; margin-bottom: 5px;">
+                            {{ configInfo.global_config.root }}
+                        </div>
+                        <div style="display: flex; gap: 10px;">
+                            <span :style="{color: configInfo.global_config.exists ? '#4ade80' : '#ef4444'}">
+                                {{ configInfo.global_config.exists ? '✓ Exists' : '✗ Not Found' }}
+                            </span>
+                        </div>
+                    </div>
+                    
+                    <!-- Media Manager -->
+                    <div style="background: rgba(255,255,255,0.05); padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                        <h3 style="margin: 0 0 10px 0; color: #3b82f6;">📱 Media Manager</h3>
+                        <div style="font-family: 'Courier New', monospace; font-size: 0.85rem; color: #888; margin-bottom: 5px;">
+                            {{ configInfo.media_manager.config_file }}
+                        </div>
+                        <div style="display: flex; gap: 15px; align-items: center;">
+                            <span :style="{color: configInfo.media_manager.exists ? '#4ade80' : '#ef4444'}">
+                                {{ configInfo.media_manager.exists ? '✓ Exists' : '✗ Not Found' }}
+                            </span>
+                            <span style="color: #888;">Size: {{ configInfo.media_manager.size }}</span>
+                            <span style="color: #fbbf24;">{{ configInfo.media_manager.folder_count }} folders</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Workspace Registry -->
+                    <div style="background: rgba(255,255,255,0.05); padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                        <h3 style="margin: 0 0 10px 0; color: #8b5cf6;">🗂️ Workspace Registry</h3>
+                        <div style="font-family: 'Courier New', monospace; font-size: 0.85rem; color: #888; margin-bottom: 5px;">
+                            {{ configInfo.workspace_registry.config_file }}
+                        </div>
+                        <div style="display: flex; gap: 15px; align-items: center;">
+                            <span :style="{color: configInfo.workspace_registry.exists ? '#4ade80' : '#ef4444'}">
+                                {{ configInfo.workspace_registry.exists ? '✓ Exists' : '✗ Not Found' }}
+                            </span>
+                            <span style="color: #888;">Size: {{ configInfo.workspace_registry.size }}</span>
+                            <span style="color: #fbbf24;">{{ configInfo.workspace_registry.workspace_count }} workspaces</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Current Workspace -->
+                    <div v-if="configInfo.current_workspace" style="background: rgba(139,92,246,0.1); padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid rgba(139,92,246,0.3);">
+                        <h3 style="margin: 0 0 10px 0; color: #8b5cf6;">📂 Current Workspace Config</h3>
+                        <div style="font-family: 'Courier New', monospace; font-size: 0.85rem; color: #888; margin-bottom: 8px;">
+                            <strong>Workspace:</strong> {{ configInfo.current_workspace.path }}
+                        </div>
+                        <div style="font-family: 'Courier New', monospace; font-size: 0.85rem; color: #888; margin-bottom: 5px;">
+                            <strong>Config:</strong> {{ configInfo.current_workspace.config_file }}
+                        </div>
+                        <div style="display: flex; gap: 15px; align-items: center;">
+                            <span :style="{color: configInfo.current_workspace.exists ? '#4ade80' : '#ef4444'}">
+                                {{ configInfo.current_workspace.exists ? '✓ Exists' : '✗ Not Found' }}
+                            </span>
+                            <span style="color: #888;">Size: {{ configInfo.current_workspace.size }}</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Sidecar Files -->
+                    <div v-if="configInfo.sidecars && configInfo.sidecars.length > 0" style="background: rgba(255,255,255,0.05); padding: 15px; border-radius: 8px;">
+                        <h3 style="margin: 0 0 15px 0; color: #fbbf24;">📄 Sidecar Files (.phototool.json)</h3>
+                        <div v-for="sidecar in configInfo.sidecars" :key="sidecar.folder" style="background: rgba(0,0,0,0.3); padding: 12px; border-radius: 6px; margin-bottom: 10px;">
+                            <div style="font-family: 'Courier New', monospace; font-size: 0.85rem; color: #888; margin-bottom: 5px;">
+                                {{ sidecar.folder }}
+                            </div>
+                            <div style="display: flex; gap: 15px; align-items: center;">
+                                <span style="color: #fbbf24;">{{ sidecar.sidecar_count }} sidecars</span>
+                                <span v-if="sidecar.name" style="color: #888;">{{ sidecar.name }}</span>
+                                <span v-if="sidecar.category" :style="{
+                                    color: sidecar.category === 'usb' ? '#ec4899' : 
+                                           sidecar.category === 'network' ? '#06b6d4' : '#4ade80'
+                                }">{{ sidecar.category }}</span>
+                                <span v-if="sidecar.enabled !== undefined" :style="{color: sidecar.enabled ? '#4ade80' : '#888'}">
+                                    {{ sidecar.enabled ? '✓ Enabled' : 'Disabled' }}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Add Media Folder Modal -->
+        <div v-if="showAddMediaFolderModal" class="modal-overlay" @click.self="showAddMediaFolderModal = false">
+            <div class="modal-content" style="max-width: 600px;">
+                <div class="modal-header">
+                    <h2 style="margin: 0;">➕ Add Media Folder</h2>
+                    <button @click="showAddMediaFolderModal = false" style="background: none; border: none; font-size: 1.5rem; color: #888; cursor: pointer;">×</button>
+                </div>
+                
+                <div class="modal-body">
+                    <p style="color: #888; margin-bottom: 20px; font-size: 0.9rem;">
+                        Register a media folder for pre-scanning. Scanned folders load instantly in workspaces.
+                    </p>
+                    
+                    <div style="margin-bottom: 20px;">
+                        <label style="display: block; margin-bottom: 8px; color: #888;">Folder Path *</label>
+                        <div style="display: flex; gap: 10px;">
+                            <input v-model="newMediaFolderPath" 
+                                   type="text" 
+                                   placeholder="C:/Photos/2024/" 
+                                   style="flex: 1; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 10px; border-radius: 6px; font-size: 0.9rem;">
+                            <button @click="openFileBrowserForMediaFolder"
+                                    style="background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 10px 16px; border-radius: 6px; cursor: pointer;">
+                                📁 Browse
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div style="margin-bottom: 20px;">
+                        <label style="display: block; margin-bottom: 8px; color: #888;">Name (Optional)</label>
+                        <input v-model="newMediaFolderName" 
+                               type="text" 
+                               placeholder="Leave empty to use folder name" 
+                               style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 10px; border-radius: 6px; font-size: 0.9rem;">
+                    </div>
+                    
+                    <div style="margin-bottom: 20px;">
+                        <label style="display: block; margin-bottom: 8px; color: #888;">Category</label>
+                        <select v-model="newMediaFolderCategory"
+                                style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 10px; border-radius: 6px; font-size: 0.9rem; cursor: pointer;">
+                            <option value="internal" style="background: #1a1a1a;">💾 Internal Drive (C:, D:)</option>
+                            <option value="usb" style="background: #1a1a1a;">🔌 USB/External Drive</option>
+                            <option value="network" style="background: #1a1a1a;">🌐 Network/NAS</option>
+                            <option value="cloud" style="background: #1a1a1a;">☁️ Cloud Storage</option>
+                            <option value="other" style="background: #1a1a1a;">📂 Other</option>
+                        </select>
+                        <div style="margin-top: 8px; font-size: 0.8rem; color: #666;">
+                            USB drives: Volume serial number will be stored for re-detection after drive letter changes
+                        </div>
+                    </div>
+                    
+                    <div style="margin-bottom: 20px;">
+                        <label style="display: block; margin-bottom: 8px; color: #888;">Notes (Optional)</label>
+                        <textarea v-model="newMediaFolderNotes" 
+                                  placeholder="e.g., 'Lumix S5 DCIM from Trekking Trip 2024'" 
+                                  rows="3"
+                                  style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 10px; border-radius: 6px; font-size: 0.9rem; resize: vertical;">
+                        </textarea>
+                    </div>
+                    
+                    <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                        <button @click="showAddMediaFolderModal = false"
+                                style="background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 0.9rem;">
+                            Cancel
+                        </button>
+                        <button @click="addMediaFolder"
+                                style="background: linear-gradient(135deg, #4ade80, #3b82f6); color: #fff; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.9rem;">
+                            ➕ Add Folder
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
         <!-- Add Workspace Modal -->
         <div v-if="showAddWorkspaceModal" class="modal" @click.self="showAddWorkspaceModal = false">
             <div class="modal-content" style="max-width: 500px;">
@@ -2654,7 +3008,8 @@
                 
                 <div style="padding: 20px 0;">
                     <p style="color: #888; margin-bottom: 20px;">
-                        Create a new workspace to organize photos by theme, time period, or project.
+                        Create a new workspace to organize photos by theme, time period, or project.<br>
+                        The workspace will be created as a subfolder with the workspace name.
                     </p>
                     
                     <div style="margin-bottom: 20px;">
@@ -2669,12 +3024,12 @@
                     
                     <div style="margin-bottom: 20px;">
                         <label style="display: block; margin-bottom: 8px; color: #aaa; font-size: 0.9rem;">
-                            Workspace Path
+                            Parent Folder
                         </label>
                         <div style="display: flex; gap: 10px;">
                             <input v-model="newWorkspacePath"
                                    type="text"
-                                   placeholder="C:/PhotoTool_Vacation"
+                                   placeholder="C:/PhotoTool"
                                    style="flex: 1; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 12px; border-radius: 8px; font-size: 0.95rem; font-family: monospace; outline: none;">
                             <button @click="openFolderBrowserForWorkspace"
                                     style="background: rgba(59, 130, 246, 0.2); border: 2px solid rgba(59, 130, 246, 0.5); color: #3b82f6; padding: 12px 20px; border-radius: 8px; cursor: pointer; font-weight: 600; white-space: nowrap;">
@@ -2682,7 +3037,7 @@
                             </button>
                         </div>
                         <div style="font-size: 0.75rem; color: #666; margin-top: 6px;">
-                            💡 Folder will be created if it doesn't exist
+                            💡 Workspace will be created as: <strong>{{ newWorkspacePath }}{{ newWorkspacePath && (newWorkspacePath.endsWith('/') || newWorkspacePath.endsWith('\\')) ? '' : '/' }}{{ newWorkspaceName }}</strong>
                         </div>
                     </div>
                     
@@ -2920,6 +3275,10 @@
                         burst_similarity_threshold: 0.95
                     },
                     blurDetectionStats: null,
+                    burstStats: {
+                        total: 0,
+                        groups: 0
+                    },
                     // Workspaces
                     workspaces: [],
                     currentWorkspace: null,
@@ -2930,6 +3289,19 @@
                     newFolderPath: '',
                     newWorkspaceName: '',
                     newWorkspacePath: '',
+                    // Media Manager
+                    mediaFolders: [],
+                    loadingMedia: false,
+                    mediaError: null,
+                    showAddMediaFolderModal: false,
+                    newMediaFolderPath: '',
+                    newMediaFolderName: '',
+                    newMediaFolderCategory: 'internal',
+                    newMediaFolderNotes: '',
+                    currentScanningFolder: null,
+                    scanProgress: null,
+                    showConfigModal: false,
+                    configInfo: null,
                     // File Browser
                     showFileBrowser: false,
                     browserCurrentPath: '',
@@ -3111,12 +3483,22 @@
                         this.totalPhotos = data.total;
                         this.offset += data.photos.length;
                         
+                        // Update burst stats
+                        this.updateBurstStats();
+                        
                     } catch (err) {
                         this.error = err.message;
                         console.error('Error loading photos:', err);
                     } finally {
                         this.loading = false;
                     }
+                },
+                
+                updateBurstStats() {
+                    const burstPhotos = this.photos.filter(p => p.burst && p.burst.is_burst);
+                    this.burstStats.total = burstPhotos.length;
+                    // Group size estimation (approximate)
+                    this.burstStats.groups = burstPhotos.length > 0 ? Math.ceil(burstPhotos.length / 3) : 0;
                 },
                 
                 async loadBursts(force = false) {
@@ -3494,6 +3876,277 @@
                     await this.loadWorkspaceFolders();
                 },
                 
+                async switchToMedia() {
+                    this.currentView = 'media';
+                    await this.loadMediaFolders();
+                },
+                
+                async loadMediaFolders() {
+                    this.loadingMedia = true;
+                    this.mediaError = null;
+                    
+                    try {
+                        const res = await fetch('/api/media/folders');
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        this.mediaFolders = data.folders || [];
+                        console.log(`✓ Loaded ${this.mediaFolders.length} media folders`);
+                    } catch (err) {
+                        this.mediaError = `Failed to load media folders: ${err.message}`;
+                        console.error('Error loading media folders:', err);
+                    } finally {
+                        this.loadingMedia = false;
+                    }
+                },
+                
+                async addMediaFolder() {
+                    if (!this.newMediaFolderPath.trim()) {
+                        alert('Please enter a folder path');
+                        return;
+                    }
+                    
+                    try {
+                        const res = await fetch('/api/media/folders', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                path: this.newMediaFolderPath,
+                                name: this.newMediaFolderName || null,
+                                category: this.newMediaFolderCategory,
+                                notes: this.newMediaFolderNotes || null
+                            })
+                        });
+                        
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        // Reset form
+                        this.newMediaFolderPath = '';
+                        this.newMediaFolderName = '';
+                        this.newMediaFolderCategory = 'internal';
+                        this.newMediaFolderNotes = '';
+                        this.showAddMediaFolderModal = false;
+                        
+                        // Reload
+                        await this.loadMediaFolders();
+                        
+                        alert('✓ Media folder added successfully!');
+                    } catch (err) {
+                        alert(`Error: ${err.message}`);
+                        console.error('Error adding media folder:', err);
+                    }
+                },
+                
+                async removeMediaFolder(folderPath) {
+                    if (!confirm(`Remove media folder?\n\n${folderPath}\n\nThis will NOT delete any files, only remove from registry.`)) {
+                        return;
+                    }
+                    
+                    try {
+                        const res = await fetch(`/api/media/folders/${encodeURIComponent(folderPath)}`, {
+                            method: 'DELETE'
+                        });
+                        
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        await this.loadMediaFolders();
+                        console.log('✓ Media folder removed');
+                    } catch (err) {
+                        alert(`Error: ${err.message}`);
+                        console.error('Error removing media folder:', err);
+                    }
+                },
+                
+                async showConfigInfo() {
+                    try {
+                        this.configInfo = null;
+                        this.showConfigModal = true;
+                        
+                        const response = await fetch('/api/system/config-info');
+                        if (!response.ok) {
+                            throw new Error('Failed to load config info');
+                        }
+                        
+                        this.configInfo = await response.json();
+                    } catch (error) {
+                        alert(`Error loading config: ${error.message}`);
+                        this.showConfigModal = false;
+                    }
+                },
+                
+                async scanMediaFolder(folderPath) {
+                    try {
+                        this.currentScanningFolder = folderPath;
+                        
+                        // Initialize progress with proper structure
+                        this.scanProgress = {
+                            status: 'running',
+                            total: 0,
+                            completed: 0,
+                            current_file: 'Initializing scan...',
+                            current_analyzer: '',
+                            photos_per_second: 0,
+                            estimated_remaining_seconds: 0,
+                            elapsed_seconds: 0,
+                            error_count: 0
+                        };
+                        
+                        // Start progress monitoring BEFORE triggering scan
+                        this.monitorScanProgress(folderPath);
+                        
+                        // Small delay to let SSE connection establish
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                        
+                        // Trigger scan with both blur and burst analyzers
+                        const res = await fetch(`/api/media/folders/${encodeURIComponent(folderPath)}/scan`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                analyzers: ['blur', 'burst'],  // Enable both analyzers
+                                force: false,
+                                threads: 4
+                            })
+                        });
+                        
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        console.log('✓ Scan started for', folderPath);
+                    } catch (err) {
+                        alert(`Error: ${err.message}`);
+                        console.error('Error starting scan:', err);
+                        this.currentScanningFolder = null;
+                        this.scanProgress = null;
+                    }
+                },
+                
+                monitorScanProgress(folderPath) {
+                    const eventSource = new EventSource(`/api/media/folders/${encodeURIComponent(folderPath)}/scan-progress`);
+                    
+                    eventSource.onmessage = (event) => {
+                        const progress = JSON.parse(event.data);
+                        this.scanProgress = progress;
+                        
+                        console.log(`Scan: ${progress.current_file} (${progress.completed}/${progress.total})`);
+                        
+                        if (progress.status === 'complete') {
+                            eventSource.close();
+                            this.currentScanningFolder = null;
+                            this.loadMediaFolders();  // Reload to show updated status
+                            alert(`✓ Scan complete!\n\nAnalyzed ${progress.completed} photos`);
+                        } else if (progress.status === 'error') {
+                            eventSource.close();
+                            this.currentScanningFolder = null;
+                            alert(`Error during scan: ${progress.message}`);
+                        }
+                    };
+                    
+                    eventSource.onerror = () => {
+                        eventSource.close();
+                        this.currentScanningFolder = null;
+                    };
+                },
+                
+                isFolderAvailable(folder) {
+                    // Check if folder path exists (will be checked server-side)
+                    // For now, just check offline flag
+                    return folder.path && folder.path.length > 0;
+                },
+                
+                isScanningFolder(folderPath) {
+                    return this.currentScanningFolder === folderPath;
+                },
+                
+                getCategoryColor(category) {
+                    const colors = {
+                        internal: 'rgba(74, 222, 128, 0.2)',
+                        usb: 'rgba(251, 191, 36, 0.2)',
+                        network: 'rgba(59, 130, 246, 0.2)',
+                        cloud: 'rgba(168, 85, 247, 0.2)',
+                        other: 'rgba(156, 163, 175, 0.2)'
+                    };
+                    return colors[category] || colors.other;
+                },
+                
+                getCategoryIcon(category) {
+                    const icons = {
+                        internal: '💾',
+                        usb: '🔌',
+                        network: '🌐',
+                        cloud: '☁️',
+                        other: '📂'
+                    };
+                    return icons[category] || icons.other;
+                },
+                
+                formatDate(isoString) {
+                    if (!isoString) return 'N/A';
+                    const date = new Date(isoString);
+                    return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                },
+                
+                async resetAllRatings() {
+                    if (!confirm(`Reset ALL star ratings for ${this.filteredPhotos.length} visible photos?\n\nThis cannot be undone!`)) {
+                        return;
+                    }
+                    
+                    try {
+                        let updated = 0;
+                        for (const photo of this.filteredPhotos) {
+                            if (photo.rating > 0) {
+                                await fetch(`/api/photos/${encodeURIComponent(photo.id)}/rating`, {
+                                    method: 'PUT',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ rating: 0 })
+                                });
+                                photo.rating = 0;
+                                updated++;
+                            }
+                        }
+                        
+                        await this.loadStats();
+                        alert(`✓ Reset ${updated} star ratings`);
+                    } catch (err) {
+                        alert(`Error: ${err.message}`);
+                        console.error('Error resetting ratings:', err);
+                    }
+                },
+                
+                async resetAllColors() {
+                    if (!confirm(`Reset ALL color labels for ${this.filteredPhotos.length} visible photos?\n\nThis cannot be undone!`)) {
+                        return;
+                    }
+                    
+                    try {
+                        let updated = 0;
+                        for (const photo of this.filteredPhotos) {
+                            if (photo.color) {
+                                await this.setColor(photo, null);
+                                updated++;
+                            }
+                        }
+                        
+                        alert(`✓ Reset ${updated} color labels`);
+                    } catch (err) {
+                        alert(`Error: ${err.message}`);
+                        console.error('Error resetting colors:', err);
+                    }
+                },
+                
                 async loadWorkspaces() {
                     try {
                         const res = await fetch('/api/workspaces');
@@ -3615,12 +4268,69 @@
                 },
                 
                 async removeFolder(folderPath) {
-                    if (!confirm(`Remove folder from workspace?\n\n${folderPath}\n\nThis will not delete any files.`)) {
+                    if (!confirm(`Remove folder from workspace?\n\n${folderPath}\n\nThis will NOT delete any files, only remove from workspace configuration.`)) {
                         return;
                     }
                     
-                    alert('Remove folder - Feature coming in Phase 2!');
-                    // TODO: Implement in Phase 2
+                    try {
+                        const res = await fetch('/api/workspace/folders/remove', {
+                            method: 'DELETE',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ path: folderPath })
+                        });
+                        
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        // Reload folders
+                        await this.loadWorkspaceFolders();
+                        
+                        // Reset photo list
+                        this.photos = [];
+                        this.offset = 0;
+                        
+                        console.log('✓ Folder removed from workspace');
+                    } catch (err) {
+                        alert(`Error: ${err.message}`);
+                        console.error('Error removing folder:', err);
+                    }
+                },
+                
+                async deleteWorkspace(path) {
+                    if (path === this.currentWorkspace) {
+                        alert('Cannot delete the currently active workspace. Please switch to another workspace first.');
+                        return;
+                    }
+                    
+                    const workspace = this.workspaces.find(w => w.path === path);
+                    const workspaceName = workspace ? workspace.name : path;
+                    
+                    if (!confirm(`Delete workspace "${workspaceName}"?\n\nPath: ${path}\n\nThis will NOT delete any photos, only remove the workspace configuration.`)) {
+                        return;
+                    }
+                    
+                    try {
+                        const res = await fetch(`/api/workspaces/${encodeURIComponent(path)}`, {
+                            method: 'DELETE'
+                        });
+                        
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        // Reload workspaces
+                        await this.loadWorkspaces();
+                        
+                        alert(`✓ Workspace "${workspaceName}" deleted`);
+                    } catch (err) {
+                        alert(`Error: ${err.message}`);
+                        console.error('Error deleting workspace:', err);
+                    }
                 },
                 
                 async switchToWorkspace(path) {
@@ -3665,12 +4375,19 @@
                     }
                     
                     try {
+                        // Create workspace path: parent_path/workspace_name
+                        const parentPath = this.newWorkspacePath;
+                        const workspaceName = this.newWorkspaceName.trim();
+                        const fullWorkspacePath = parentPath.endsWith('/') || parentPath.endsWith('\\') 
+                            ? parentPath + workspaceName 
+                            : parentPath + '/' + workspaceName;
+                        
                         const res = await fetch('/api/workspaces', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
-                                path: this.newWorkspacePath,
-                                name: this.newWorkspaceName
+                                path: fullWorkspacePath,
+                                name: workspaceName
                             })
                         });
                         
@@ -3680,7 +4397,7 @@
                             throw new Error(data.error);
                         }
                         
-                        const newWorkspacePath = this.newWorkspacePath;
+                        const newWorkspacePath = fullWorkspacePath;
                         
                         this.newWorkspaceName = '';
                         this.newWorkspacePath = '';
@@ -3762,6 +4479,12 @@
                 openFolderBrowserForWorkspace() {
                     this.openFileBrowser((path) => {
                         this.newWorkspacePath = path;
+                    });
+                },
+                
+                openFileBrowserForMediaFolder() {
+                    this.openFileBrowser((path) => {
+                        this.newMediaFolderPath = path;
                     });
                 },
                 

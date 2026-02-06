@@ -36,12 +36,19 @@ from photo_tool.workspace.manager import (
     toggle_folder,
     get_enabled_folders
 )
+from photo_tool.util.logging import get_logger
+
+logger = get_logger("gui_server")
 
 app = Flask(__name__, static_folder='static')
 CORS(app)  # Enable CORS for development
 
 # Workspace manager (global)
 workspace_manager = WorkspaceManager()
+
+# Media manager (global)
+from photo_tool.media import MediaManager
+media_manager = MediaManager()
 
 # Current workspace path (can be changed)
 _current_workspace_path = Path("C:/PhotoTool_Test")
@@ -115,7 +122,7 @@ def get_photos():
         all_media = scan_multiple_directories(
             enabled_folders,
             config.scan.extensions,
-            config.scan.recurse,
+            recursive=config.scan.recurse,
             show_progress=False
         )
         
@@ -180,6 +187,23 @@ def get_photos():
                 'roi': metadata.get('blur_score_roi')
             }
             
+            # Get burst info from sidecar
+            from photo_tool.prescan import SidecarManager
+            burst_info = None
+            try:
+                sidecar = SidecarManager(photo.path)
+                if sidecar.exists:
+                    sidecar.load()
+                    burst_data = sidecar.get('analyses.burst', {})
+                    if burst_data and burst_data.get('is_burst_candidate'):
+                        burst_info = {
+                            'is_burst': True,
+                            'group_size': burst_data.get('burst_group_size', 1),
+                            'neighbor_count': len(burst_data.get('burst_neighbors', []))
+                        }
+            except:
+                pass
+            
             result.append({
                 'id': str(photo.path),
                 'name': photo.path.name,
@@ -192,6 +216,7 @@ def get_photos():
                 'capture_time': capture_time_str,
                 'blur_scores': blur_scores,  # All blur scores
                 'blur_method': metadata.get('blur_method', 'laplacian'),  # Last used method
+                'burst': burst_info,  # Burst information
                 'thumbnail': f"/thumbnails/{photo.path.stem}.jpg",
                 'full_image': f"/images/{photo.path.stem}{photo.path.suffix}"
             })
@@ -333,7 +358,7 @@ def get_all_keywords_api():
         all_media = scan_multiple_directories(
             config.scan.roots,
             config.scan.extensions,
-            config.scan.recurse,
+            recursive=config.scan.recurse,
             show_progress=False
         )
         
@@ -611,7 +636,7 @@ def get_stats():
         all_media = scan_multiple_directories(
             enabled_folders,
             config.scan.extensions,
-            config.scan.recurse,
+            recursive=config.scan.recurse,
             show_progress=False
         )
         
@@ -675,7 +700,7 @@ def _compute_bursts_cached(workspace_path, force=False):
         all_media = scan_multiple_directories(
             config.scan.roots,
             config.scan.extensions,
-            config.scan.recurse,
+            recursive=config.scan.recurse,
             show_progress=False
         )
         
@@ -926,7 +951,7 @@ def detect_blur_photos():
         all_media = scan_multiple_directories(
             enabled_folders,
             config.scan.extensions,
-            config.scan.recurse,
+            recursive=config.scan.recurse,
             show_progress=False
         )
         photos = filter_by_type(all_media, "photo")
@@ -1064,7 +1089,7 @@ def get_blur_scores():
         all_media = scan_multiple_directories(
             enabled_folders,
             config.scan.extensions,
-            config.scan.recurse,
+            recursive=config.scan.recurse,
             show_progress=False
         )
         photos = filter_by_type(all_media, "photo")
@@ -1150,7 +1175,7 @@ def apply_blur_threshold():
         all_media = scan_multiple_directories(
             enabled_folders,
             config.scan.extensions,
-            config.scan.recurse,
+            recursive=config.scan.recurse,
             show_progress=False
         )
         photos = filter_by_type(all_media, "photo")
@@ -1200,8 +1225,257 @@ def apply_blur_threshold():
 
 
 # =============================================================================
+# MEDIA MANAGER ENDPOINTS
+# =============================================================================
+
+# Scanner progress tracking
+_scan_progress = {
+    'status': 'idle',
+    'total': 0,
+    'completed': 0,
+    'current_file': '',
+    'current_analyzer': '',
+    'elapsed_seconds': 0,
+    'estimated_remaining_seconds': 0,
+    'photos_per_second': 0,
+    'error_count': 0
+}
+
+@app.get('/api/media/folders')
+def get_media_folders():
+    """Get all registered media folders"""
+    try:
+        folders = media_manager.list_folders()
+        available = media_manager.get_available_folders()
+        unavailable = media_manager.get_unavailable_folders()
+        
+        return jsonify({
+            'success': True,
+            'folders': folders,
+            'available_count': len(available),
+            'unavailable_count': len(unavailable)
+        })
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.post('/api/media/folders')
+def add_media_folder():
+    """
+    Add a media folder to the registry
+    Body: {
+        "path": "C:/Photos/2024/",
+        "name": "Optional Name",
+        "category": "internal|usb|network|cloud",
+        "notes": "Optional notes"
+    }
+    """
+    try:
+        from flask import request
+        
+        data = request.get_json()
+        path = Path(data.get('path'))
+        name = data.get('name')
+        category = data.get('category')
+        notes = data.get('notes')
+        
+        success = media_manager.add_folder(path, name, category, notes)
+        
+        if success:
+            return jsonify({
+                'success': True,
+                'folder': media_manager.get_folder(str(path)).to_dict()
+            })
+        else:
+            return jsonify({'error': 'Failed to add media folder (may already exist)'}), 400
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.delete('/api/media/folders/<path:folder_path>')
+def remove_media_folder(folder_path):
+    """Remove a media folder from registry"""
+    try:
+        success = media_manager.remove_folder(folder_path)
+        
+        if success:
+            return jsonify({'success': True})
+        else:
+            return jsonify({'error': 'Folder not found'}), 404
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.get('/api/media/folders/<path:folder_path>/status')
+def get_folder_scan_status(folder_path):
+    """Get scan status for a media folder"""
+    try:
+        folder = media_manager.get_folder(folder_path)
+        
+        if not folder:
+            return jsonify({'error': 'Folder not found'}), 404
+        
+        return jsonify({
+            'success': True,
+            'is_scanned': folder.is_scanned,
+            'scan_date': folder.scan_date,
+            'scan_coverage': folder.scan_coverage or {},
+            'is_available': Path(folder.path).exists()
+        })
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.post('/api/media/folders/<path:folder_path>/scan')
+def scan_media_folder(folder_path):
+    """
+    Trigger pre-scan of a media folder
+    Body: {
+        "analyzers": ["blur", "burst"],  # Optional
+        "force": false,                   # Force rescan
+        "threads": 4                      # Parallel threads
+    }
+    """
+    global _scan_progress
+    
+    try:
+        from flask import request
+        # Lazy import to avoid circular dependencies
+        import sys
+        import importlib
+        
+        # Import scanner module
+        scanner_module = importlib.import_module('photo_tool.prescan.scanner')
+        FolderScanner = scanner_module.FolderScanner
+        
+        data = request.get_json() or {}
+        analyzers = data.get('analyzers', ['blur'])
+        force = data.get('force', False)
+        threads = data.get('threads', 4)
+        
+        folder = media_manager.get_folder(folder_path)
+        if not folder:
+            return jsonify({'error': 'Folder not found'}), 404
+        
+        # Initialize progress
+        _scan_progress = {
+            'status': 'running',
+            'total': 0,
+            'completed': 0,
+            'current_file': 'Initializing...',
+            'current_analyzer': '',
+            'elapsed_seconds': 0,
+            'estimated_remaining_seconds': 0,
+            'photos_per_second': 0,
+            'error_count': 0
+        }
+        
+        def progress_callback(progress):
+            global _scan_progress
+            _scan_progress = progress
+        
+        # Run scan in background thread
+        def run_scan():
+            try:
+                scanner = FolderScanner(
+                    Path(folder.path),
+                    analyzers=analyzers,
+                    threads=threads,
+                    skip_existing=not force,
+                    progress_callback=progress_callback
+                )
+                
+                results = scanner.scan()
+                
+                # Update media manager
+                coverage = {}
+                for analyzer in analyzers:
+                    coverage[analyzer] = 100.0  # 100% if scan completed
+                
+                media_manager.update_scan_status(
+                    folder.path,
+                    is_scanned=True,
+                    scan_coverage=coverage,
+                    stats={'photos': results['total']}
+                )
+                
+                _scan_progress['status'] = 'complete'
+                _scan_progress['message'] = f"Complete! Scanned {results['scanned']}, skipped {results['skipped']}"
+            
+            except Exception as e:
+                logger.error(f"Scan error: {e}")
+                _scan_progress['status'] = 'error'
+                _scan_progress['message'] = str(e)
+        
+        thread = threading.Thread(target=run_scan, daemon=True)
+        thread.start()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Scan started',
+            'folder': folder.path
+        })
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.get('/api/media/folders/<path:folder_path>/scan-progress')
+def get_scan_progress(folder_path):
+    """Get scan progress (SSE)"""
+    def generate():
+        last_progress = -1
+        while True:
+            current = _scan_progress.copy()
+            
+            # Send if changed
+            if current['completed'] != last_progress or current['status'] in ['complete', 'error']:
+                data = json.dumps(current)
+                yield f"data: {data}\n\n"
+                last_progress = current['completed']
+            
+            # Stop if complete
+            if current['status'] in ['complete', 'error', 'idle']:
+                break
+            
+            time.sleep(0.5)
+    
+    return Response(stream_with_context(generate()), mimetype='text/event-stream')
+
+
+# =============================================================================
 # WORKSPACE MANAGEMENT ENDPOINTS
 # =============================================================================
+
+@app.delete('/api/workspaces/<path:workspace_path>')
+def delete_workspace(workspace_path):
+    """Delete a workspace"""
+    try:
+        success = workspace_manager.remove_workspace(workspace_path)
+        
+        if success:
+            return jsonify({'success': True})
+        else:
+            return jsonify({'error': 'Workspace not found or could not be deleted'}), 404
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 @app.get('/api/workspaces')
 def get_workspaces_list():
@@ -1293,11 +1567,32 @@ def get_workspace_folders_api():
         folders = []
         for root in config.scan.roots:
             root_str = str(root)
+            
+            # Check media manager for scan status
+            photo_count = 0
+            is_scanned = False
+            media_folder = media_manager.get_folder(root_str)
+            if media_folder:
+                photo_count = media_folder.total_photos
+                is_scanned = media_folder.is_scanned
+            else:
+                # Fallback: count sidecar files
+                try:
+                    from photo_tool.prescan.sidecar import SidecarManager
+                    root_path = Path(root)
+                    if root_path.exists():
+                        sidecar_count = len(list(root_path.rglob(f"*{SidecarManager.SIDECAR_SUFFIX}")))
+                        photo_count = sidecar_count
+                        is_scanned = sidecar_count > 0
+                except:
+                    pass
+            
             folders.append({
                 'path': root_str,
                 'enabled': enabled_status.get(root_str, True),
                 'exists': Path(root).exists(),
-                'photo_count': 0  # TODO: Get from cache
+                'photo_count': photo_count,
+                'is_scanned': is_scanned
             })
         
         return jsonify({
@@ -1418,6 +1713,60 @@ def browse_folders():
             'parent': parent,
             'folders': folders,
             'is_root': False
+        })
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.delete('/api/workspace/folders/remove')
+def remove_folder_from_workspace():
+    """
+    Remove a folder from current workspace
+    Body: { "path": "E:/Photos/" }
+    """
+    try:
+        from flask import request
+        
+        data = request.get_json()
+        folder_path = data.get('path')
+        
+        if not folder_path:
+            return jsonify({'error': 'Missing folder path'}), 400
+        
+        workspace = Workspace(_current_workspace_path)
+        
+        # Get current folders
+        folders = get_workspace_folders(_current_workspace_path)
+        
+        # Find and remove the folder
+        folders = [f for f in folders if f != str(Path(folder_path).resolve())]
+        
+        # Save updated config
+        workspace.config['media_folders'] = folders
+        workspace.save_config()
+        
+        # Also remove from enabled folders
+        enabled_folders_file = workspace.path / "enabled_folders.json"
+        if enabled_folders_file.exists():
+            try:
+                with open(enabled_folders_file, 'r', encoding='utf-8') as f:
+                    enabled = json.load(f)
+                
+                enabled = [f for f in enabled if f != str(Path(folder_path).resolve())]
+                
+                with open(enabled_folders_file, 'w', encoding='utf-8') as f:
+                    json.dump(enabled, f, indent=2)
+            except:
+                pass
+        
+        logger.info(f"Removed folder from workspace: {folder_path}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Folder removed from workspace'
         })
     
     except Exception as e:
@@ -1654,6 +2003,108 @@ def add_project_export_record(project_id):
             return jsonify({'error': 'Failed to add export record'}), 500
     
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.get('/api/system/config-info')
+def get_config_info():
+    """Get configuration file locations and structure"""
+    try:
+        from pathlib import Path
+        import os
+        
+        home = Path.home()
+        config_root = home / ".photo_tool"
+        
+        # Get file sizes
+        def get_size(path: Path) -> int:
+            return path.stat().st_size if path.exists() else 0
+        
+        def format_size(size_bytes: int) -> str:
+            for unit in ['B', 'KB', 'MB', 'GB']:
+                if size_bytes < 1024:
+                    return f"{size_bytes:.1f} {unit}"
+                size_bytes /= 1024
+            return f"{size_bytes:.1f} TB"
+        
+        # Count sidecar files
+        def count_sidecars(folder_path: str) -> int:
+            try:
+                path = Path(folder_path)
+                if not path.exists():
+                    return 0
+                # Match both naming conventions:
+                # - New: .PHOTONAME.phototool.json (with leading dot)
+                # - Current: PHOTONAME.JPG.phototool.json (no leading dot)
+                sidecars = list(path.rglob('*.phototool.json'))
+                return len(sidecars)
+            except:
+                return 0
+        
+        # Build config structure
+        config_info = {
+            'global_config': {
+                'root': str(config_root),
+                'exists': config_root.exists(),
+                'files': []
+            },
+            'media_manager': {
+                'config_file': str(media_manager.config_file),
+                'exists': media_manager.config_file.exists(),
+                'size': format_size(get_size(media_manager.config_file)),
+                'folder_count': len(media_manager.folders)
+            },
+            'workspace_registry': {
+                'config_file': str(workspace_manager.workspaces_file),
+                'exists': workspace_manager.workspaces_file.exists(),
+                'size': format_size(get_size(workspace_manager.workspaces_file)),
+                'workspace_count': len(workspace_manager.workspaces)
+            },
+            'current_workspace': None,
+            'sidecars': []
+        }
+        
+        # Current workspace info
+        if workspace_manager.current_workspace:
+            ws_path = Path(workspace_manager.current_workspace)
+            config_path = ws_path / "config.yaml"
+            
+            config_info['current_workspace'] = {
+                'path': str(ws_path),
+                'config_file': str(config_path),
+                'exists': config_path.exists(),
+                'size': format_size(get_size(config_path))
+            }
+            
+            # Get folders from workspace and count their sidecars
+            config = load_config(config_path) if config_path.exists() else None
+            if config and hasattr(config, 'folders'):
+                for folder in config.folders:
+                    folder_path = folder.get('path', '')
+                    if folder_path:
+                        sidecar_count = count_sidecars(folder_path)
+                        config_info['sidecars'].append({
+                            'folder': folder_path,
+                            'sidecar_count': sidecar_count,
+                            'enabled': folder.get('enabled', True)
+                        })
+        
+        # Media folders sidecar counts
+        for media_folder in media_manager.folders:
+            # Check if not already in workspace sidecars
+            if not any(s['folder'] == media_folder.path for s in config_info['sidecars']):
+                sidecar_count = count_sidecars(media_folder.path)
+                config_info['sidecars'].append({
+                    'folder': media_folder.path,
+                    'sidecar_count': sidecar_count,
+                    'name': media_folder.name,
+                    'category': media_folder.category
+                })
+        
+        return jsonify(config_info)
+        
+    except Exception as e:
+        logger.error(f"Error getting config info: {e}")
         return jsonify({'error': str(e)}), 500
 
 
