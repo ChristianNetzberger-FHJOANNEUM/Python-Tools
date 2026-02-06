@@ -29,7 +29,7 @@ from photo_tool.actions.metadata import (
     get_all_keywords
 )
 from photo_tool.actions.export import export_gallery, _export_progress
-from photo_tool.projects import ProjectManager
+from photo_tool.projects import ProjectManager, ProjectSidecarManager
 from photo_tool.workspace.manager import (
     WorkspaceManager, 
     get_workspace_folders,
@@ -264,6 +264,7 @@ def rate_photo(photo_id):
     """
     Rate a photo
     Body: { "rating": 1-5, "comment": "optional" }
+    Query Params: { "project_id": "optional-project-id" }
     """
     try:
         from flask import request
@@ -276,19 +277,34 @@ def rate_photo(photo_id):
         # Decode photo path
         photo_path = Path(photo_id)
         
-        # Set rating (now via metadata system)
-        set_metadata(photo_path, {
-            'rating': rating,
-            'comment': comment if comment else None
-        })
+        # Check if project context
+        project_id = request.args.get('project_id')
+        
+        if project_id:
+            # Save to PROJECT sidecar
+            pm = get_project_manager()
+            project_dir = pm.projects_dir / project_id
+            psm = ProjectSidecarManager(project_dir)
+            psm.set_rating(photo_path, rating)
+            logger.info(f"Set project rating for {photo_path.name} in project {project_id}: {rating}")
+        else:
+            # Save to GLOBAL sidecar (legacy/fallback)
+            set_metadata(photo_path, {
+                'rating': rating,
+                'comment': comment if comment else None
+            })
+            logger.info(f"Set global rating for {photo_path.name}: {rating}")
         
         return jsonify({
             'success': True,
             'rating': rating,
-            'comment': comment
+            'comment': comment,
+            'target': 'project' if project_id else 'global'
         })
     
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
@@ -297,6 +313,7 @@ def set_photo_color(photo_id):
     """
     Set color label for a photo
     Body: { "color": "red" | "yellow" | "green" | "blue" | "purple" | null }
+    Query Params: { "project_id": "optional-project-id" }
     """
     try:
         from flask import request
@@ -307,15 +324,30 @@ def set_photo_color(photo_id):
         # Decode photo path
         photo_path = Path(photo_id)
         
-        # Set color
-        set_color_label(photo_path, color)
+        # Check if project context
+        project_id = request.args.get('project_id')
+        
+        if project_id:
+            # Save to PROJECT sidecar
+            pm = get_project_manager()
+            project_dir = pm.projects_dir / project_id
+            psm = ProjectSidecarManager(project_dir)
+            psm.set_color(photo_path, color)
+            logger.info(f"Set project color for {photo_path.name} in project {project_id}: {color}")
+        else:
+            # Save to GLOBAL sidecar
+            set_color_label(photo_path, color)
+            logger.info(f"Set global color for {photo_path.name}: {color}")
         
         return jsonify({
             'success': True,
-            'color': color
+            'color': color,
+            'target': 'project' if project_id else 'global'
         })
     
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
@@ -324,6 +356,7 @@ def update_photo_keywords(photo_id):
     """
     Update keywords for a photo
     Body: { "keywords": ["tag1", "tag2"] } or { "add": "tag" } or { "remove": "tag" }
+    Query Params: { "project_id": "optional-project-id" }
     """
     try:
         from flask import request
@@ -331,37 +364,52 @@ def update_photo_keywords(photo_id):
         data = request.get_json()
         photo_path = Path(photo_id)
         
-        if 'keywords' in data:
-            # Set complete keyword list
-            set_keywords(photo_path, data['keywords'])
-            metadata = get_metadata(photo_path)
+        # Check if project context
+        project_id = request.args.get('project_id')
+        
+        if project_id:
+            # Use PROJECT sidecar manager
+            pm = get_project_manager()
+            project_dir = pm.projects_dir / project_id
+            psm = ProjectSidecarManager(project_dir)
+            
+            if 'add' in data:
+                psm.add_keyword(photo_path, data['add'])
+                logger.info(f"Added project keyword '{data['add']}' to {photo_path.name}")
+            elif 'remove' in data:
+                psm.remove_keyword(photo_path, data['remove'])
+                logger.info(f"Removed project keyword '{data['remove']}' from {photo_path.name}")
+            
+            # Get merged keywords
+            global_meta = get_metadata(photo_path)
+            merged_meta = psm.merge_metadata(global_meta, photo_path)
+            
             return jsonify({
                 'success': True,
-                'keywords': metadata.get('keywords', [])
+                'keywords': merged_meta.get('keywords', []),
+                'target': 'project'
             })
-        
-        elif 'add' in data:
-            # Add single keyword
-            add_keyword(photo_path, data['add'])
-            metadata = get_metadata(photo_path)
-            return jsonify({
-                'success': True,
-                'keywords': metadata.get('keywords', [])
-            })
-        
-        elif 'remove' in data:
-            # Remove single keyword
-            remove_keyword(photo_path, data['remove'])
-            metadata = get_metadata(photo_path)
-            return jsonify({
-                'success': True,
-                'keywords': metadata.get('keywords', [])
-            })
-        
         else:
-            return jsonify({'error': 'Invalid request'}), 400
+            # Use GLOBAL sidecar (legacy)
+            if 'keywords' in data:
+                set_keywords(photo_path, data['keywords'])
+            elif 'add' in data:
+                add_keyword(photo_path, data['add'])
+            elif 'remove' in data:
+                remove_keyword(photo_path, data['remove'])
+            else:
+                return jsonify({'error': 'Invalid request'}), 400
+            
+            metadata = get_metadata(photo_path)
+            return jsonify({
+                'success': True,
+                'keywords': metadata.get('keywords', []),
+                'target': 'global'
+            })
     
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
@@ -521,7 +569,7 @@ def get_export_progress():
 def get_thumbnail(filename):
     """Serve thumbnail images"""
     try:
-        workspace_path = Path("C:/PhotoTool_Test")
+        workspace_path = get_current_workspace()
         thumb_dir = workspace_path / "cache" / "thumbnails"
         
         # Try to find thumbnail (case-insensitive)
@@ -537,21 +585,104 @@ def get_thumbnail(filename):
         if thumb_path.exists():
             return send_from_directory(thumb_dir, thumb_path.name)
         else:
-            # FALLBACK: Try to find and serve original image
-            # Search in scan roots
-            config = load_config(workspace_path / "config.yaml")
-            for root in config.scan.roots:
-                root_path = Path(root)
-                # Try different cases
-                for ext in ['.JPG', '.jpg', '.JPEG', '.jpeg']:
-                    original = root_path / f"{Path(filename).stem}{ext}"
-                    if original.exists():
-                        # Generate thumbnail on-the-fly using Pillow
+            # FALLBACK: Generate thumbnail on-the-fly from original image
+            # Get workspace folders
+            ws = Workspace(workspace_path)
+            config = load_config(ws.config_file)
+            
+            # Get all folders (both old and new structure)
+            folders_to_search = []
+            if config.folders:
+                folders_to_search = [Path(f['path']) for f in config.folders]
+            elif hasattr(config, 'scan') and hasattr(config.scan, 'roots'):
+                folders_to_search = [Path(root) for root in config.scan.roots]
+            
+            # Search for original file in all folders (recursively)
+            base_name = Path(filename).stem
+            for folder in folders_to_search:
+                if not folder.exists():
+                    continue
+                
+                # Try different cases and extensions
+                for ext in ['.JPG', '.jpg', '.JPEG', '.jpeg', '.PNG', '.png']:
+                    # Search recursively for the file
+                    for original in folder.rglob(f"{base_name}{ext}"):
+                        if original.exists():
+                            # Generate thumbnail on-the-fly using Pillow
+                            from PIL import Image
+                            from io import BytesIO
+                            from flask import send_file
+                            
+                            img = Image.open(original)
+                            
+                            # Apply EXIF orientation
+                            try:
+                                exif = img.getexif()
+                                if exif:
+                                    orientation = exif.get(0x0112)  # Orientation tag
+                                    if orientation:
+                                        if orientation == 3:
+                                            img = img.rotate(180, expand=True)
+                                        elif orientation == 6:
+                                            img = img.rotate(270, expand=True)
+                                        elif orientation == 8:
+                                            img = img.rotate(90, expand=True)
+                            except:
+                                pass
+                            
+                            img.thumbnail((300, 300), Image.Resampling.LANCZOS)
+                            
+                            # Convert to JPEG
+                            if img.mode in ('RGBA', 'LA', 'P'):
+                                img = img.convert('RGB')
+                            
+                            # Save to BytesIO
+                            img_io = BytesIO()
+                            img.save(img_io, 'JPEG', quality=85)
+                            img_io.seek(0)
+                            
+                            return send_file(img_io, mimetype='image/jpeg')
+            
+            return jsonify({'error': 'Thumbnail not found'}), 404
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.get('/images/<path:filename>')
+def get_full_image(filename):
+    """Serve full-size images for lightbox"""
+    try:
+        workspace_path = get_current_workspace()
+        ws = Workspace(workspace_path)
+        config = load_config(ws.config_file)
+        
+        # Get all folders (both old and new structure)
+        folders_to_search = []
+        if config.folders:
+            folders_to_search = [Path(f['path']) for f in config.folders]
+        elif hasattr(config, 'scan') and hasattr(config.scan, 'roots'):
+            folders_to_search = [Path(root) for root in config.scan.roots]
+        
+        # Search in all folders recursively
+        base_name = Path(filename).stem
+        file_ext = Path(filename).suffix
+        
+        for root_path in folders_to_search:
+            if not root_path.exists():
+                continue
+            # Try different cases and search recursively
+            for ext in ['.JPG', '.jpg', '.JPEG', '.jpeg', '.PNG', '.png']:
+                for image_path in root_path.rglob(f"{base_name}{ext}"):
+                    if image_path.exists():
+                        # Serve with optimized size (max 2500px)
                         from PIL import Image
                         from io import BytesIO
                         from flask import send_file
                         
-                        img = Image.open(original)
+                        img = Image.open(image_path)
                         
                         # Apply EXIF orientation (fix Samsung rotation issue)
                         try:
@@ -568,7 +699,10 @@ def get_thumbnail(filename):
                         except:
                             pass
                         
-                        img.thumbnail((300, 300), Image.Resampling.LANCZOS)
+                        # Resize if too large
+                        max_size = 2500
+                        if img.width > max_size or img.height > max_size:
+                            img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
                         
                         # Convert to JPEG
                         if img.mode in ('RGBA', 'LA', 'P'):
@@ -576,68 +710,10 @@ def get_thumbnail(filename):
                         
                         # Save to BytesIO
                         img_io = BytesIO()
-                        img.save(img_io, 'JPEG', quality=85)
+                        img.save(img_io, 'JPEG', quality=92)
                         img_io.seek(0)
                         
                         return send_file(img_io, mimetype='image/jpeg')
-            
-            return jsonify({'error': 'Thumbnail not found'}), 404
-    
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.get('/images/<path:filename>')
-def get_full_image(filename):
-    """Serve full-size images for lightbox"""
-    try:
-        workspace_path = Path("C:/PhotoTool_Test")
-        config = load_config(workspace_path / "config.yaml")
-        
-        # Search in scan roots
-        for root in config.scan.roots:
-            root_path = Path(root)
-            # Try different cases
-            for ext in ['.JPG', '.jpg', '.JPEG', '.jpeg', '.PNG', '.png']:
-                image_path = root_path / f"{Path(filename).stem}{ext}"
-                if image_path.exists():
-                    # Serve with optimized size (max 2500px)
-                    from PIL import Image
-                    from io import BytesIO
-                    from flask import send_file
-                    
-                    img = Image.open(image_path)
-                    
-                    # Apply EXIF orientation (fix Samsung rotation issue)
-                    try:
-                        exif = img.getexif()
-                        if exif:
-                            orientation = exif.get(0x0112)  # Orientation tag
-                            if orientation:
-                                if orientation == 3:
-                                    img = img.rotate(180, expand=True)
-                                elif orientation == 6:
-                                    img = img.rotate(270, expand=True)
-                                elif orientation == 8:
-                                    img = img.rotate(90, expand=True)
-                    except:
-                        pass
-                    
-                    # Resize if too large
-                    max_size = 2500
-                    if img.width > max_size or img.height > max_size:
-                        img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
-                    
-                    # Convert to JPEG
-                    if img.mode in ('RGBA', 'LA', 'P'):
-                        img = img.convert('RGB')
-                    
-                    # Save to BytesIO
-                    img_io = BytesIO()
-                    img.save(img_io, 'JPEG', quality=92)
-                    img_io.seek(0)
-                    
-                    return send_file(img_io, mimetype='image/jpeg')
         
         return jsonify({'error': 'Image not found'}), 404
     
@@ -1590,46 +1666,57 @@ def get_workspace_folders_api():
         ws = Workspace(workspace_path)
         config = load_config(ws.config_file)
         
-        # Load enabled status
-        enabled_file = ws.root / "enabled_folders.json"
-        if enabled_file.exists():
-            import json
-            with open(enabled_file, 'r') as f:
-                enabled_status = json.load(f)
-        else:
-            enabled_status = {str(root): True for root in config.scan.roots}
+        # Auto-migrate old structure to new if needed
+        if config.folders is None or (isinstance(config.folders, list) and len(config.folders) == 0):
+            if hasattr(config, 'scan') and hasattr(config.scan, 'roots') and config.scan.roots:
+                logger.info("Migrating old config structure to new folders format")
+                migrated_folders = []
+                for root in config.scan.roots:
+                    migrated_folders.append({
+                        'path': str(root),
+                        'enabled': True,  # Enable all existing folders by default
+                        'photo_count': 0,
+                        'video_count': 0,
+                        'audio_count': 0
+                    })
+                config.folders = migrated_folders
+                save_config(config, ws.config_file)
+                logger.info(f"Migrated {len(config.folders)} folders to new structure")
         
-        # Build folder list
+        # Build folder list from new structure
         folders = []
-        for root in config.scan.roots:
-            root_str = str(root)
-            
-            # Check media manager for scan status
-            photo_count = 0
-            is_scanned = False
-            media_folder = media_manager.get_folder(root_str)
-            if media_folder:
-                photo_count = media_folder.total_photos
-                is_scanned = media_folder.is_scanned
-            else:
-                # Fallback: count sidecar files
-                try:
-                    from photo_tool.prescan.sidecar import SidecarManager
-                    root_path = Path(root)
-                    if root_path.exists():
-                        sidecar_count = len(list(root_path.rglob(f"*{SidecarManager.SIDECAR_SUFFIX}")))
-                        photo_count = sidecar_count
-                        is_scanned = sidecar_count > 0
-                except:
-                    pass
-            
-            folders.append({
-                'path': root_str,
-                'enabled': enabled_status.get(root_str, True),
-                'exists': Path(root).exists(),
-                'photo_count': photo_count,
-                'is_scanned': is_scanned
-            })
+        if hasattr(config, 'folders') and config.folders:
+            for folder_config in config.folders:
+                folder_path = folder_config.get('path')
+                if not folder_path:
+                    continue
+                
+                # Check media manager for scan status
+                photo_count = 0
+                is_scanned = False
+                media_folder = media_manager.get_folder(folder_path)
+                if media_folder:
+                    photo_count = media_folder.total_photos
+                    is_scanned = media_folder.is_scanned
+                else:
+                    # Fallback: count sidecar files
+                    try:
+                        from photo_tool.prescan.sidecar import SidecarManager
+                        root_path = Path(folder_path)
+                        if root_path.exists():
+                            sidecar_count = len(list(root_path.rglob(f"*{SidecarManager.SIDECAR_SUFFIX}")))
+                            photo_count = sidecar_count
+                            is_scanned = sidecar_count > 0
+                    except:
+                        pass
+                
+                folders.append({
+                    'path': folder_path,
+                    'enabled': folder_config.get('enabled', True),
+                    'exists': Path(folder_path).exists(),
+                    'photo_count': photo_count,
+                    'is_scanned': is_scanned
+                })
         
         return jsonify({
             'success': True,
@@ -1638,6 +1725,8 @@ def get_workspace_folders_api():
         })
     
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
@@ -1658,14 +1747,30 @@ def toggle_folder_api():
         enabled = data.get('enabled', True)
         
         workspace_path = get_current_workspace()
-        success = toggle_folder(workspace_path, folder_path, enabled)
+        ws = Workspace(workspace_path)
+        config = load_config(ws.config_file)
         
-        if success:
-            return jsonify({'success': True})
+        # Update enabled status in config
+        if config.folders:
+            found = False
+            for folder in config.folders:
+                if isinstance(folder, dict) and folder.get('path') == folder_path:
+                    folder['enabled'] = enabled
+                    found = True
+                    break
+            
+            if found:
+                save_config(config, ws.config_file)
+                logger.info(f"Toggled folder {folder_path}: enabled={enabled}")
+                return jsonify({'success': True})
+            else:
+                return jsonify({'error': 'Folder not found in workspace'}), 404
         else:
-            return jsonify({'error': 'Failed to toggle folder'}), 500
+            return jsonify({'error': 'No folders configured'}), 400
     
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
@@ -1772,31 +1877,34 @@ def remove_folder_from_workspace():
         if not folder_path:
             return jsonify({'error': 'Missing folder path'}), 400
         
-        workspace = Workspace(_current_workspace_path)
+        ws = Workspace(_current_workspace_path)
         
-        # Get current folders
-        folders = get_workspace_folders(_current_workspace_path)
+        # Load config
+        config = load_config(ws.config_file)
         
-        # Find and remove the folder
-        folders = [f for f in folders if f != str(Path(folder_path).resolve())]
+        # Normalize path
+        normalized_path = str(Path(folder_path).resolve())
+        
+        # Remove from folders list
+        if hasattr(config, 'folders'):
+            config.folders = [f for f in config.folders if f.get('path') != normalized_path]
         
         # Save updated config
-        workspace.config['media_folders'] = folders
-        workspace.save_config()
+        save_config(config, ws.config_file)
         
-        # Also remove from enabled folders
-        enabled_folders_file = workspace.path / "enabled_folders.json"
+        # Also remove from enabled folders (legacy support)
+        enabled_folders_file = _current_workspace_path / "enabled_folders.json"
         if enabled_folders_file.exists():
             try:
                 with open(enabled_folders_file, 'r', encoding='utf-8') as f:
                     enabled = json.load(f)
                 
-                enabled = [f for f in enabled if f != str(Path(folder_path).resolve())]
+                enabled = [f for f in enabled if f != normalized_path]
                 
                 with open(enabled_folders_file, 'w', encoding='utf-8') as f:
                     json.dump(enabled, f, indent=2)
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"Could not update enabled_folders.json: {e}")
         
         logger.info(f"Removed folder from workspace: {folder_path}")
         
@@ -1830,21 +1938,38 @@ def add_folder_to_workspace():
         ws = Workspace(workspace_path)
         config = load_config(ws.config_file)
         
-        # Add to scan roots if not already there
-        if folder_path not in config.scan.roots:
-            config.scan.roots.append(folder_path)
-            save_config(config, ws.config_file)
-            
-            # Enable the folder by default
-            from photo_tool.workspace.manager import toggle_folder
-            toggle_folder(workspace_path, str(folder_path), enabled=True)
-            
-            print(f"Added folder to workspace: {folder_path}")
-            return jsonify({'success': True})
-        else:
-            return jsonify({'error': 'Folder already exists'}), 400
+        # Initialize folders list if not exists
+        if config.folders is None:
+            config.folders = []
+        
+        # Check if folder already exists
+        folder_path_str = str(folder_path.resolve())
+        existing_paths = [f.get('path') for f in config.folders if isinstance(f, dict)]
+        
+        if folder_path_str in existing_paths:
+            return jsonify({'error': 'Folder already exists in workspace'}), 400
+        
+        # Add to folders list
+        config.folders.append({
+            'path': folder_path_str,
+            'enabled': True,  # Enable by default
+            'photo_count': 0,
+            'video_count': 0,
+            'audio_count': 0
+        })
+        
+        save_config(config, ws.config_file)
+        
+        logger.info(f"Added folder to workspace: {folder_path}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Folder added to workspace'
+        })
     
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
@@ -1965,6 +2090,8 @@ def update_project(project_id):
             project.name = data['name']
         if 'selection_mode' in data:
             project.selection_mode = data['selection_mode']
+        if 'folders' in data:
+            project.folders = data['folders']  # Save folder selection
         if 'filters' in data:
             from photo_tool.projects.manager import ProjectFilters
             project.filters = ProjectFilters(**data['filters']) if data['filters'] else None
@@ -1977,6 +2104,9 @@ def update_project(project_id):
         if 'export_settings' in data:
             from photo_tool.projects.manager import ExportSettings
             project.export_settings = ExportSettings(**data['export_settings']) if data['export_settings'] else None
+        if 'quality_settings' in data:
+            from photo_tool.projects.manager import QualityDetectionSettings
+            project.quality_settings = QualityDetectionSettings(**data['quality_settings']) if data['quality_settings'] else None
         
         # Save
         pm.save_project(project)
@@ -2065,7 +2195,7 @@ def get_project_media(project_id):
         # Get enabled folders from project
         enabled_folders = []
         if project.folders:
-            enabled_folders = [f['path'] for f in project.folders if f.get('enabled', False)]
+            enabled_folders = [Path(f['path']) for f in project.folders if f.get('enabled', False)]
         
         if not enabled_folders:
             return jsonify({
@@ -2122,10 +2252,18 @@ def get_project_media(project_id):
         # Paginate
         result_page = result_media[offset:offset + limit]
         
+        # Initialize project sidecar manager
+        project_dir = pm.projects_dir / project_id
+        psm = ProjectSidecarManager(project_dir)
+        
         # Build response
         result = []
         for item in result_page:
-            metadata = get_metadata(item.path)
+            # 1. Get global metadata
+            global_metadata = get_metadata(item.path)
+            
+            # 2. Merge with project-specific overrides
+            metadata = psm.merge_metadata(global_metadata, item.path)
             
             # Get relative path
             relative_path = None
@@ -2174,14 +2312,20 @@ def get_project_media(project_id):
                 'name': item.path.name,
                 'path': str(item.path),
                 'relative_path': relative_path,
-                'type': item.type.value,
+                'type': item.media_type,  # MediaFile uses media_type, not type
                 'size': item.path.stat().st_size,
                 'capture_time': capture_time_str,
                 'rating': metadata.get('rating', 0),
                 'color': metadata.get('color'),
                 'keywords': metadata.get('keywords', []),
                 'blur_scores': blur_scores,
-                'burst': burst_info
+                'burst': burst_info,
+                'thumbnail': f"/thumbnails/{item.path.stem}.jpg",
+                'full_image': f"/images/{item.path.stem}{item.path.suffix}",
+                # Metadata source indicators
+                'has_project_override': metadata.get('_has_project_override', False),
+                'rating_source': metadata.get('_rating_source', 'global'),
+                'color_source': metadata.get('_color_source', 'global')
             })
         
         return jsonify({
@@ -2195,6 +2339,127 @@ def get_project_media(project_id):
                 'videos': len(videos),
                 'audio': len(audio)
             }
+        })
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.get('/api/projects/<project_id>/bursts')
+def get_project_bursts(project_id):
+    """Get burst groups for a specific project (only enabled folders)"""
+    try:
+        pm = get_project_manager()
+        project = pm.get_project(project_id)
+        
+        if not project:
+            return jsonify({'error': 'Project not found'}), 404
+        
+        # Get enabled folders
+        enabled_folders = []
+        if project.folders:
+            enabled_folders = [Path(f['path']) for f in project.folders if f.get('enabled', False)]
+        
+        if not enabled_folders:
+            return jsonify({
+                'bursts': [],
+                'stats': {'total': 0, 'groups': 0}
+            })
+        
+        # Load all photos from enabled folders
+        workspace_path = get_current_workspace()
+        ws = Workspace(workspace_path)
+        config = load_config(ws.config_file)
+        
+        all_media = scan_multiple_directories(
+            enabled_folders,
+            config.scan.extensions,
+            recursive=config.scan.recurse,
+            show_progress=False
+        )
+        
+        photos = filter_by_type(all_media, 'photo')
+        
+        # Get burst info from sidecars
+        from photo_tool.prescan import SidecarManager
+        burst_groups = {}
+        
+        for photo in photos:
+            try:
+                sidecar = SidecarManager(photo.path)
+                if sidecar.exists:
+                    sidecar.load()
+                    burst_data = sidecar.get('analyses.burst')
+                    if burst_data and burst_data.get('is_burst'):
+                        group_id = burst_data.get('group_id')
+                        if group_id:
+                            if group_id not in burst_groups:
+                                burst_groups[group_id] = []
+                            
+                            metadata = get_metadata(photo.path)
+                            burst_groups[group_id].append({
+                                'path': str(photo.path),
+                                'name': photo.path.name,
+                                'rating': metadata.get('rating', 0),
+                                'thumbnail': f"/thumbnails/{photo.path.stem}.jpg",
+                                'position': burst_data.get('position', 0),
+                                'is_best': burst_data.get('is_best', False)
+                            })
+            except Exception as e:
+                logger.warning(f"Failed to load burst info for {photo.path}: {e}")
+        
+        # Convert to list format
+        bursts = []
+        for group_id, photos_in_burst in burst_groups.items():
+            # Sort by position
+            photos_in_burst.sort(key=lambda x: x['position'])
+            
+            bursts.append({
+                'id': group_id,
+                'photos': photos_in_burst,
+                'count': len(photos_in_burst)
+            })
+        
+        # Sort by count (largest first)
+        bursts.sort(key=lambda x: x['count'], reverse=True)
+        
+        return jsonify({
+            'bursts': bursts,
+            'stats': {
+                'total': sum(b['count'] for b in bursts),
+                'groups': len(bursts)
+            }
+        })
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.get('/api/projects/<project_id>/sidecar-stats')
+def get_project_sidecar_stats(project_id):
+    """Get statistics about project-specific metadata overrides"""
+    try:
+        pm = get_project_manager()
+        project = pm.get_project(project_id)
+        
+        if not project:
+            return jsonify({'error': 'Project not found'}), 404
+        
+        # Initialize project sidecar manager
+        project_dir = pm.projects_dir / project_id
+        psm = ProjectSidecarManager(project_dir)
+        
+        # Get stats
+        stats = psm.get_stats()
+        overrides = psm.list_overrides()
+        
+        return jsonify({
+            'stats': stats,
+            'photos_with_overrides': overrides
         })
     
     except Exception as e:

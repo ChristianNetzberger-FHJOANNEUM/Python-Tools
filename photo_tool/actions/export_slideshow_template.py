@@ -196,8 +196,10 @@ def generate_slideshow_gallery_html(
         }}
         
         .slideshow-image {{
-            max-width: 95%;
-            max-height: 95%;
+            max-width: 100%;
+            max-height: 100%;
+            width: 100%;
+            height: 100%;
             object-fit: contain;
         }}
         
@@ -704,9 +706,7 @@ def generate_slideshow_gallery_html(
         document.getElementById('slideshow').addEventListener('mousemove', resetHideControls);
         document.getElementById('slideshow').addEventListener('click', resetHideControls);
         
-        // Touch Events for Swipe (Mobile/Tablet)
-        const slideshowMain = document.getElementById('slideshow-main');
-        
+        // Touch Events for Swipe (Mobile/Tablet - reuse slideshowMain from above)
         slideshowMain.addEventListener('touchstart', (e) => {{
             touchStartX = e.changedTouches[0].screenX;
         }}, false);

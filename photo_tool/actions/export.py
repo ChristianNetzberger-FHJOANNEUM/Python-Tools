@@ -119,6 +119,13 @@ def export_gallery(
             
             # Resize main image
             with Image.open(photo_path) as img:
+                # Apply EXIF orientation FIRST!
+                try:
+                    from PIL import ImageOps
+                    img = ImageOps.exif_transpose(img)
+                except Exception:
+                    pass  # If EXIF rotation fails, continue with original
+                
                 # Get original dimensions
                 width, height = img.size
                 
@@ -136,6 +143,13 @@ def export_gallery(
             
             # Generate thumbnail
             with Image.open(photo_path) as img:
+                # Apply EXIF orientation for thumbnail too!
+                try:
+                    from PIL import ImageOps
+                    img = ImageOps.exif_transpose(img)
+                except Exception:
+                    pass
+                
                 img.thumbnail((thumbnail_size, thumbnail_size), Image.Resampling.LANCZOS)
                 
                 if img.mode in ('RGBA', 'LA', 'P'):
@@ -168,7 +182,18 @@ def export_gallery(
     
     # Generate HTML
     if template == "photoswipe":
-        # Use new slideshow template (works better than PhotoSwipe)
+        # Use PhotoSwipe template (modern, lightbox-based)
+        html = _generate_photoswipe_html(
+            title=title,
+            photos=photo_data,
+            music_data=music_data,
+            slideshow_enabled=slideshow_enabled,
+            slideshow_duration=slideshow_duration,
+            slideshow_transition=slideshow_transition,
+            smart_tv_mode=smart_tv_mode
+        )
+    elif template == "slideshow":
+        # Use custom slideshow template (fullscreen slideshow)
         from .export_slideshow_template import generate_slideshow_gallery_html
         html = generate_slideshow_gallery_html(
             title=title,
@@ -178,6 +203,7 @@ def export_gallery(
             smart_tv_mode=smart_tv_mode
         )
     else:
+        # Simple grid template
         html = _generate_simple_html(title, photo_data)
     
     # Write HTML file
@@ -486,10 +512,12 @@ def _generate_photoswipe_html(
         import PhotoSwipeLightbox from 'https://unpkg.com/photoswipe/dist/photoswipe-lightbox.esm.js';
         import PhotoSwipe from 'https://unpkg.com/photoswipe/dist/photoswipe.esm.js';
 
+        // Gallery data
         const photos = {photos_json};
         const musicFiles = {music_json};
         const slideshowDuration = {slideshow_duration * 1000};  // Convert to milliseconds
         
+        // State variables
         let slideshowInterval = null;
         let slideshowActive = false;
         let currentTrack = 0;

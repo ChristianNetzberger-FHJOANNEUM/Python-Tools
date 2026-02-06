@@ -276,6 +276,171 @@
         }
         
         /* Project Cards */
+        /* Projects Lightroom-Style Layout */
+        .projects-view {
+            display: flex;
+            gap: 20px;
+            height: calc(100vh - 200px);
+            min-height: 600px;
+        }
+        
+        .project-sidebar {
+            width: 280px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 12px;
+            padding: 15px;
+            overflow-y: auto;
+            flex-shrink: 0;
+        }
+        
+        .project-list-item {
+            background: rgba(255, 255, 255, 0.05);
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 10px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .project-list-item:hover {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(74, 222, 128, 0.3);
+        }
+        
+        .project-list-item.active {
+            background: rgba(74, 222, 128, 0.15);
+            border-color: #4ade80;
+        }
+        
+        .project-list-item-name {
+            font-weight: 600;
+            font-size: 0.95rem;
+            margin-bottom: 5px;
+            color: #fff;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .project-list-item.active .project-list-item-name {
+            color: #4ade80;
+        }
+        
+        .project-list-item-meta {
+            font-size: 0.75rem;
+            color: #888;
+        }
+        
+        .project-details {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 12px;
+            padding: 30px;
+            overflow-y: auto;
+        }
+        
+        .project-details h2 {
+            font-size: 1.8rem;
+            margin-bottom: 10px;
+        }
+        
+        .project-details input[type="text"] {
+            background: transparent;
+            border: none;
+            color: #fff;
+            font-size: 1.8rem;
+            font-weight: 600;
+            width: 100%;
+            outline: none;
+            padding: 5px 0;
+            border-bottom: 2px solid transparent;
+            transition: border-color 0.2s;
+        }
+        
+        .project-details input[type="text"]:focus {
+            border-bottom-color: #4ade80;
+        }
+        
+        .project-section {
+            margin-top: 30px;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+        }
+        
+        .project-section h3 {
+            font-size: 1.2rem;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .folder-checkbox-item {
+            padding: 12px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 6px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            transition: all 0.2s;
+        }
+        
+        .folder-checkbox-item:hover {
+            background: rgba(255, 255, 255, 0.06);
+        }
+        
+        .folder-checkbox-item input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+        
+        .folder-checkbox-label {
+            flex: 1;
+            cursor: pointer;
+        }
+        
+        .folder-path {
+            font-size: 0.9rem;
+            color: #fff;
+            margin-bottom: 3px;
+            word-break: break-all;
+        }
+        
+        .folder-counts {
+            font-size: 0.75rem;
+            color: #888;
+        }
+        
+        .project-stats {
+            display: flex;
+            gap: 20px;
+            margin-top: 15px;
+        }
+        
+        .project-stat-box {
+            background: rgba(74, 222, 128, 0.1);
+            border: 1px solid rgba(74, 222, 128, 0.3);
+            padding: 12px 20px;
+            border-radius: 8px;
+            flex: 1;
+        }
+        
+        .project-stat-label {
+            font-size: 0.8rem;
+            color: #888;
+            margin-bottom: 5px;
+        }
+        
+        .project-stat-value {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #4ade80;
+        }
+        
         .project-card {
             background: rgba(59, 130, 246, 0.1);
             border: 2px solid rgba(59, 130, 246, 0.3);
@@ -1332,7 +1497,7 @@
                     </button>
                 </div>
                 
-                <div v-if="currentView === 'photos' && filteredPhotos.length > 0" style="display: flex; gap: 10px;">
+                <div v-if="currentView === 'media' && filteredPhotos.length > 0" style="display: flex; gap: 10px;">
                     <button @click="startSlideshow"
                             style="background: linear-gradient(135deg, #8b5cf6, #ec4899); color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: 600; transition: transform 0.2s;">
                         🎬 Slideshow ({{ filteredPhotos.length }})
@@ -1520,9 +1685,27 @@
         </div>
         
         <!-- All Photos View -->
-        <div v-if="currentView === 'photos'">
+        <div v-if="currentView === 'media'">
+            <!-- Empty State: No Project Selected -->
+            <div v-if="!currentProjectId" class="loading">
+                <div style="font-size: 3rem; margin-bottom: 20px;">📁</div>
+                <div>No project selected</div>
+                <div style="margin-top: 10px; font-size: 0.9rem; color: #666;">
+                    Go to Projects tab and select or create a project first
+                </div>
+            </div>
+            
+            <!-- Empty State: No Folders Enabled -->
+            <div v-if="currentProjectId && error && error.includes('No folders')" class="loading">
+                <div style="font-size: 3rem; margin-bottom: 20px;">📂</div>
+                <div>No folders enabled</div>
+                <div style="margin-top: 10px; font-size: 0.9rem; color: #666;">
+                    Go to Projects tab and enable folders to load media
+                </div>
+            </div>
+            
             <!-- Action Bar -->
-            <div v-if="photos.length > 0" style="display: flex; justify-content: flex-end; margin-bottom: 15px; gap: 10px;">
+            <div v-if="currentProjectId && photos.length > 0" style="display: flex; justify-content: flex-end; margin-bottom: 15px; gap: 10px;">
                 <button @click="resetAllRatings"
                         style="background: rgba(239, 68, 68, 0.2); border: 2px solid rgba(239, 68, 68, 0.5); color: #ef4444; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.9rem;">
                     🗑️ Reset All Ratings
@@ -1831,6 +2014,13 @@
                         📸 {{ photo.burst.group_size }}
                     </div>
                     
+                    <!-- Project Override Badge (bottom-right) -->
+                    <div v-if="photo.has_project_override"
+                         style="position: absolute; bottom: 60px; right: 8px; background: rgba(139, 92, 246, 0.9); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; backdrop-filter: blur(4px); cursor: help;"
+                         :title="`Project-specific metadata:\n${photo.rating_source === 'project' ? '⭐ Rating overridden' : ''}\n${photo.color_source === 'project' ? '🎨 Color overridden' : ''}`">
+                        📁
+                    </div>
+                    
                     <div class="photo-info">
                         <div class="photo-name" :title="photo.name">{{ photo.name }}</div>
                         <div v-if="photo.capture_time" style="font-size: 0.7rem; color: #888; margin-top: 2px;">
@@ -2036,28 +2226,43 @@
         
         <!-- Projects View -->
         <div v-if="currentView === 'projects'">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px;">
+            <!-- Header with New Project Button -->
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                 <h2 style="font-size: 1.5rem; margin: 0;">📁 Projects</h2>
                 <button @click="showNewProjectModal = true"
-                        style="background: linear-gradient(135deg, #4ade80, #3b82f6); color: #fff; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 1rem;">
+                        :disabled="!currentWorkspace"
+                        style="background: linear-gradient(135deg, #4ade80, #3b82f6); color: #fff; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 1rem; transition: opacity 0.2s;"
+                        :style="{ opacity: !currentWorkspace ? 0.5 : 1, cursor: !currentWorkspace ? 'not-allowed' : 'pointer' }">
                     ✨ New Project
                 </button>
             </div>
             
-            <div v-if="loadingProjects" class="loading">
+            <!-- Empty State - No Workspace -->
+            <div v-if="!currentWorkspace" class="loading">
+                <div style="font-size: 3rem; margin-bottom: 20px;">🗂️</div>
+                <div>No workspace selected</div>
+                <div style="margin-top: 10px; font-size: 0.9rem; color: #666;">
+                    Go to Workspaces tab to select or create a workspace first
+                </div>
+            </div>
+            
+            <!-- Loading State -->
+            <div v-if="loadingProjects && currentWorkspace" class="loading">
                 <div class="spinner"></div>
                 <div>Loading projects...</div>
             </div>
             
+            <!-- Error State -->
             <div v-if="projectError" class="error">
                 <strong>Error:</strong> {{ projectError }}
             </div>
             
-            <div v-if="projects.length === 0 && !loadingProjects" class="loading">
+            <!-- Empty State - No Projects -->
+            <div v-if="projects.length === 0 && !loadingProjects && currentWorkspace" class="loading">
                 <div style="font-size: 3rem; margin-bottom: 20px;">📁</div>
                 <div>No projects yet</div>
                 <div style="margin-top: 10px; font-size: 0.9rem; color: #666;">
-                    Create a project to save photo selections and export settings
+                    Create a project to organize and manage your media
                 </div>
                 <button @click="showNewProjectModal = true"
                         style="margin-top: 20px; background: linear-gradient(135deg, #4ade80, #3b82f6); color: #fff; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: 600;">
@@ -2065,220 +2270,250 @@
                 </button>
             </div>
             
-            <!-- Project Cards -->
-            <div v-if="projects.length > 0" class="grid">
-                <div v-for="project in projects" 
-                     :key="project.id" 
-                     class="project-card">
-                    
-                    <div class="project-header">
-                        <div class="project-name">{{ project.name }}</div>
-                        <div class="project-meta">
-                            <span>📊 {{ project.photo_count || 0 }} photos</span>
-                            <span v-if="project.has_music">🎵</span>
+            <!-- Lightroom-Style Layout: Sidebar + Details -->
+            <div v-if="projects.length > 0 && !loadingProjects" class="projects-view">
+                <!-- Left Sidebar: Project List -->
+                <div class="project-sidebar">
+                    <div v-for="project in projects" 
+                         :key="project.id"
+                         class="project-list-item"
+                         :class="{ active: currentProjectId === project.id }"
+                         @click="activateProject(project.id)">
+                        <div class="project-list-item-name">
+                            📁 {{ project.name }}
                         </div>
-                    </div>
-                    
-                    <div class="project-info">
-                        <div style="font-size: 0.85rem; color: #888;">
-                            <div>Created: {{ formatDate(project.created) }}</div>
-                            <div v-if="project.updated !== project.created">
-                                Updated: {{ formatDate(project.updated) }}
-                            </div>
-                            <div v-if="project.export_count > 0">
-                                Exports: {{ project.export_count }}
-                            </div>
+                        <div class="project-list-item-meta">
+                            {{ getProjectMediaCount(project) }} media
                         </div>
-                    </div>
-                    
-                    <div class="project-actions">
-                        <button @click="loadProject(project.id)" 
-                                class="project-btn primary">
-                            📂 Load
-                        </button>
-                        <button @click="exportProject(project.id)" 
-                                class="project-btn">
-                            📤 Export
-                        </button>
-                        <button @click="editProject(project.id)" 
-                                class="project-btn">
-                            ✏️ Edit
-                        </button>
-                        <button @click="confirmDeleteProject(project.id)" 
-                                class="project-btn danger">
-                            🗑️ Delete
-                        </button>
                     </div>
                 </div>
-            </div>
-            
-            <!-- Quality Detection Section -->
-            <div v-if="currentProjectId" style="margin-top: 40px; background: rgba(255,255,255,0.05); padding: 30px; border-radius: 12px;">
-                <h2 style="font-size: 1.5rem; margin-bottom: 20px;">✨ Quality Detection Settings</h2>
-                <p style="color: #888; margin-bottom: 25px; font-size: 0.9rem;">
-                    Configure blur and burst detection parameters for this project. These settings affect photo selection and gallery exports.
-                </p>
                 
-                <!-- Blur Detection Section -->
-                <div style="background: rgba(255,255,255,0.05); padding: 20px; border-radius: 8px; margin-bottom: 20px;">
-                    <h3 style="font-size: 1.2rem; margin-bottom: 15px; display: flex; align-items: center; gap: 10px;">
-                        🔍 Blur Detection
-                        <label style="margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 0.9rem; font-weight: normal;">
-                            <input type="checkbox" v-model="qualitySettings.blur_detection_enabled" style="width: 18px; height: 18px;">
-                            Enabled
-                        </label>
-                    </h3>
-                    
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 20px;">
-                        <div>
-                            <label style="display: block; margin-bottom: 8px; color: #888; font-size: 0.9rem;">
-                                Blur Threshold ({{ qualitySettings.blur_threshold }})
-                            </label>
-                            <input type="range" v-model.number="qualitySettings.blur_threshold" 
-                                   min="50" max="200" step="5"
-                                   style="width: 100%; height: 6px; background: rgba(255,255,255,0.2); border-radius: 3px; outline: none;">
-                            <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: #666; margin-top: 4px;">
-                                <span>50 (Strict)</span>
-                                <span>200 (Lenient)</span>
-                            </div>
-                        </div>
-                        
-                        <div>
-                            <label style="display: block; margin-bottom: 8px; color: #888; font-size: 0.9rem;">
-                                Auto-flag Color
-                            </label>
-                            <select v-model="qualitySettings.blur_auto_flag_color"
-                                    style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 10px; border-radius: 6px; font-size: 0.9rem;">
-                                <option value="red" style="background: #1a1a1a;">🔴 Red</option>
-                                <option value="yellow" style="background: #1a1a1a;">🟡 Yellow</option>
-                                <option value="blue" style="background: #1a1a1a;">🔵 Blue</option>
-                                <option value="purple" style="background: #1a1a1a;">🟣 Purple</option>
-                            </select>
+                <!-- Right Panel: Project Details -->
+                <div class="project-details" v-if="currentProject">
+                    <!-- Project Name (Editable) -->
+                    <div style="margin-bottom: 30px;">
+                        <input type="text" 
+                               v-model="currentProject.name" 
+                               placeholder="Project Name"
+                               @blur="saveProjectName"
+                               style="margin-bottom: 5px;">
+                        <div style="font-size: 0.85rem; color: #888;">
+                            Created: {{ formatDate(currentProject.created) }}
+                            <span v-if="currentProject.updated !== currentProject.created">
+                                | Updated: {{ formatDate(currentProject.updated) }}
+                            </span>
                         </div>
                     </div>
                     
-                    <!-- Blur Detection Action -->
-                    <div style="margin-top: 20px;">
-                        <div style="padding: 15px; background: rgba(74, 222, 128, 0.1); border-radius: 6px; border: 1px solid rgba(74, 222, 128, 0.2); margin-bottom: 15px;">
-                            <div style="color: #4ade80; font-size: 0.9rem; margin-bottom: 8px;">
-                                ℹ️ <strong>Blur Detection Workflow:</strong>
-                            </div>
-                            <div style="color: #888; font-size: 0.85rem;">
-                                1. Select detection method (Laplacian, Tenengrad, or ROI)<br>
-                                2. Calculate blur scores once for all photos<br>
-                                3. Go to Photos tab and adjust threshold slider to flag blurry photos<br>
-                                4. Compare methods by calculating with different methods!
+                    <!-- Folder Selection Section -->
+                    <div class="project-section">
+                        <h3>📁 Media Folders</h3>
+                        <p style="color: #888; font-size: 0.9rem; margin-bottom: 15px;">
+                            Select which folders from your workspace to include in this project
+                        </p>
+                        
+                        <div v-if="!currentProject.folders || currentProject.folders.length === 0">
+                            <div style="padding: 20px; text-align: center; color: #666;">
+                                No folders available. Add folders to your workspace first.
                             </div>
                         </div>
                         
-                        <!-- Method Selector -->
-                        <div style="margin-bottom: 15px;">
-                            <label style="display: block; margin-bottom: 8px; color: #888; font-size: 0.9rem;">
-                                Detection Method:
-                            </label>
-                            <select v-model="blurDetectionMethod"
-                                    style="width: 100%; max-width: 400px; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 10px; border-radius: 6px; font-size: 0.9rem;">
-                                <option value="laplacian" style="background: #1a1a1a;">Laplacian Variance (Fast, 0-300)</option>
-                                <option value="tenengrad" style="background: #1a1a1a;">Tenengrad/Sobel (Better for sky, 0-50)</option>
-                                <option value="roi" style="background: #1a1a1a;">ROI-based (Adaptive, ignores sky, 0-300)</option>
-                            </select>
-                            <div style="margin-top: 8px; font-size: 0.8rem; color: #666;">
-                                {{ blurMethodInfo[blurDetectionMethod].desc }}
+                        <div v-else>
+                            <div v-for="(folder, index) in currentProject.folders" 
+                                 :key="index"
+                                 class="folder-checkbox-item">
+                                <input type="checkbox" 
+                                       :id="'folder-' + index"
+                                       v-model="folder.enabled"
+                                       @change="onFolderToggle">
+                                <label :for="'folder-' + index" class="folder-checkbox-label">
+                                    <div class="folder-path">{{ folder.path }}</div>
+                                    <div class="folder-counts">
+                                        {{ folder.photo_count || 0 }} photos, 
+                                        {{ folder.video_count || 0 }} videos, 
+                                        {{ folder.audio_count || 0 }} audio
+                                    </div>
+                                </label>
                             </div>
                         </div>
                         
-                        <button @click="runBlurDetection"
-                                :disabled="blurDetectionRunning || !qualitySettings.blur_detection_enabled"
-                                style="background: linear-gradient(135deg, #f59e0b, #ef4444); color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 1rem; transition: all 0.2s;"
-                                :style="{ opacity: (blurDetectionRunning || !qualitySettings.blur_detection_enabled) ? 0.5 : 1 }">
-                            {{ blurDetectionRunning ? '⏳ Calculating...' : '🔍 Calculate Blur Scores (' + blurDetectionMethod.toUpperCase() + ')' }}
-                        </button>
-                        
-                        <!-- Progress Bar (Projects Tab) -->
-                        <div v-if="blurDetectionProgress && blurDetectionProgress.status === 'running'" 
-                             style="margin-top: 20px; padding: 15px; background: rgba(255,255,255,0.1); border-radius: 8px; max-width: 600px;">
-                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 0.9rem;">
-                                <span style="color: #888; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 70%;">
-                                    📄 {{ blurDetectionProgress.current_file }}
-                                </span>
-                                <span style="color: #4ade80; font-weight: 600;">
-                                    {{ blurDetectionProgress.progress }} / {{ blurDetectionProgress.total }}
-                                </span>
+                        <!-- Stats -->
+                        <div class="project-stats">
+                            <div class="project-stat-box">
+                                <div class="project-stat-label">Enabled Folders</div>
+                                <div class="project-stat-value">{{ enabledFolderCount }}</div>
                             </div>
-                            <div style="width: 100%; height: 10px; background: rgba(255,255,255,0.1); border-radius: 5px; overflow: hidden;">
-                                <div style="height: 100%; background: linear-gradient(90deg, #f59e0b, #ef4444); transition: width 0.3s ease;"
-                                     :style="{ width: blurDetectionProgress.total > 0 ? (blurDetectionProgress.progress / blurDetectionProgress.total * 100) + '%' : '0%' }">
+                            <div class="project-stat-box">
+                                <div class="project-stat-label">Total Media</div>
+                                <div class="project-stat-value">{{ enabledMediaCount }}</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Quality Detection Section -->
+                    <div class="project-section">
+                        <h3>✨ Quality Detection Settings</h3>
+                        <p style="color: #888; margin-bottom: 20px; font-size: 0.9rem;">
+                            Configure blur and burst detection parameters for this project
+                        </p>
+                        
+                        <!-- Blur Detection Section -->
+                        <div style="background: rgba(255,255,255,0.03); padding: 15px; border-radius: 6px; margin-bottom: 15px;">
+                            <h4 style="font-size: 1rem; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                                🔍 Blur Detection
+                                <label style="margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 0.85rem; font-weight: normal;">
+                                    <input type="checkbox" v-model="qualitySettings.blur_detection_enabled" style="width: 16px; height: 16px;">
+                                    Enabled
+                                </label>
+                            </h4>
+                            
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom: 15px;">
+                                <div>
+                                    <label style="display: block; margin-bottom: 6px; color: #888; font-size: 0.85rem;">
+                                        Blur Threshold ({{ qualitySettings.blur_threshold }})
+                                    </label>
+                                    <input type="range" v-model.number="qualitySettings.blur_threshold" 
+                                           min="50" max="200" step="5"
+                                           style="width: 100%; height: 5px; background: rgba(255,255,255,0.2); border-radius: 3px; outline: none;">
+                                    <div style="display: flex; justify-content: space-between; font-size: 0.7rem; color: #666; margin-top: 3px;">
+                                        <span>50 (Strict)</span>
+                                        <span>200 (Lenient)</span>
+                                    </div>
+                                </div>
+                                
+                                <div>
+                                    <label style="display: block; margin-bottom: 6px; color: #888; font-size: 0.85rem;">
+                                        Auto-flag Color
+                                    </label>
+                                    <select v-model="qualitySettings.blur_auto_flag_color"
+                                            style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 8px; border-radius: 6px; font-size: 0.85rem;">
+                                        <option value="red" style="background: #1a1a1a;">🔴 Red</option>
+                                        <option value="yellow" style="background: #1a1a1a;">🟡 Yellow</option>
+                                        <option value="blue" style="background: #1a1a1a;">🔵 Blue</option>
+                                        <option value="purple" style="background: #1a1a1a;">🟣 Purple</option>
+                                    </select>
                                 </div>
                             </div>
-                            <div style="margin-top: 8px; font-size: 0.85rem; color: #888; text-align: center;">
-                                {{ blurDetectionProgress.message }}
+                            
+                            <!-- Blur Detection Action -->
+                            <div style="margin-top: 12px;">
+                                <div style="padding: 12px; background: rgba(74, 222, 128, 0.1); border-radius: 6px; border: 1px solid rgba(74, 222, 128, 0.2); margin-bottom: 12px;">
+                                    <div style="color: #4ade80; font-size: 0.85rem; margin-bottom: 6px;">
+                                        ℹ️ <strong>Blur Detection Workflow:</strong>
+                                    </div>
+                                    <div style="color: #888; font-size: 0.8rem;">
+                                        1. Calculate blur scores • 2. Go to Media tab to adjust threshold
+                                    </div>
+                                </div>
+                                
+                                <!-- Method Selector -->
+                                <div style="margin-bottom: 12px;">
+                                    <label style="display: block; margin-bottom: 6px; color: #888; font-size: 0.85rem;">
+                                        Detection Method:
+                                    </label>
+                                    <select v-model="blurDetectionMethod"
+                                            style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 8px; border-radius: 6px; font-size: 0.85rem;">
+                                        <option value="laplacian" style="background: #1a1a1a;">Laplacian (Fast)</option>
+                                        <option value="tenengrad" style="background: #1a1a1a;">Tenengrad (Sky)</option>
+                                        <option value="roi" style="background: #1a1a1a;">ROI-based (Adaptive)</option>
+                                    </select>
+                                </div>
+                                
+                                <button @click="runBlurDetection"
+                                        :disabled="blurDetectionRunning || !qualitySettings.blur_detection_enabled"
+                                        style="background: linear-gradient(135deg, #f59e0b, #ef4444); color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.9rem; transition: all 0.2s; width: 100%;"
+                                        :style="{ opacity: (blurDetectionRunning || !qualitySettings.blur_detection_enabled) ? 0.5 : 1 }">
+                                    {{ blurDetectionRunning ? '⏳ Calculating...' : '🔍 Calculate Blur Scores' }}
+                                </button>
+                                
+                                <!-- Progress Bar -->
+                                <div v-if="blurDetectionProgress && blurDetectionProgress.status === 'running'" 
+                                     style="margin-top: 15px; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 6px;">
+                                    <div style="display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 0.8rem;">
+                                        <span style="color: #888; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%;">
+                                            {{ blurDetectionProgress.current_file }}
+                                        </span>
+                                        <span style="color: #4ade80; font-weight: 600;">
+                                            {{ blurDetectionProgress.progress }} / {{ blurDetectionProgress.total }}
+                                        </span>
+                                    </div>
+                                    <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden;">
+                                        <div style="height: 100%; background: linear-gradient(90deg, #f59e0b, #ef4444); transition: width 0.3s ease;"
+                                             :style="{ width: blurDetectionProgress.total > 0 ? (blurDetectionProgress.progress / blurDetectionProgress.total * 100) + '%' : '0%' }">
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div v-if="blurScores.length > 0 && (!blurDetectionProgress || blurDetectionProgress.status !== 'running')" 
+                                     style="margin-top: 10px; font-size: 0.8rem; color: #4ade80;">
+                                    ✓ {{ blurScores.length }} photos scored
+                                </div>
                             </div>
                         </div>
                         
-                        <div v-if="blurScores.length > 0 && (!blurDetectionProgress || blurDetectionProgress.status !== 'running')" 
-                             style="margin-top: 10px; font-size: 0.85rem; color: #4ade80;">
-                            ✓ {{ blurScores.length }} photos have blur scores. Go to Photos tab to adjust threshold.
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- Burst Detection Section -->
-                <div style="background: rgba(255,255,255,0.05); padding: 20px; border-radius: 8px;">
-                    <h3 style="font-size: 1.2rem; margin-bottom: 15px; display: flex; align-items: center; gap: 10px;">
-                        📦 Burst Detection
-                        <label style="margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 0.9rem; font-weight: normal;">
-                            <input type="checkbox" v-model="qualitySettings.burst_detection_enabled" style="width: 18px; height: 18px;">
-                            Enabled
-                        </label>
-                    </h3>
-                    
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;">
-                        <div>
-                            <label style="display: block; margin-bottom: 8px; color: #888; font-size: 0.9rem;">
-                                Time Threshold ({{ qualitySettings.burst_time_threshold }}s)
-                            </label>
-                            <input type="range" v-model.number="qualitySettings.burst_time_threshold" 
-                                   min="1" max="10" step="1"
-                                   style="width: 100%; height: 6px; background: rgba(255,255,255,0.2); border-radius: 3px; outline: none;">
-                            <div style="font-size: 0.75rem; color: #666; margin-top: 4px;">
-                                Max seconds between photos in a burst
-                            </div>
-                        </div>
-                        
-                        <div>
-                            <label style="display: block; margin-bottom: 8px; color: #888; font-size: 0.9rem;">
-                                Similarity Threshold ({{ (qualitySettings.burst_similarity_threshold * 100).toFixed(0) }}%)
-                            </label>
-                            <input type="range" v-model.number="qualitySettings.burst_similarity_threshold" 
-                                   min="0.80" max="0.99" step="0.01"
-                                   style="width: 100%; height: 6px; background: rgba(255,255,255,0.2); border-radius: 3px; outline: none;">
-                            <div style="font-size: 0.75rem; color: #666; margin-top: 4px;">
-                                Minimum similarity for burst grouping
+                        <!-- Burst Detection Section -->
+                        <div style="background: rgba(255,255,255,0.03); padding: 15px; border-radius: 6px; margin-bottom: 15px;">
+                            <h4 style="font-size: 1rem; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                                📦 Burst Detection
+                                <label style="margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 0.85rem; font-weight: normal;">
+                                    <input type="checkbox" v-model="qualitySettings.burst_detection_enabled" style="width: 16px; height: 16px;">
+                                    Enabled
+                                </label>
+                            </h4>
+                            
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px;">
+                                <div>
+                                    <label style="display: block; margin-bottom: 6px; color: #888; font-size: 0.85rem;">
+                                        Time Threshold ({{ qualitySettings.burst_time_threshold }}s)
+                                    </label>
+                                    <input type="range" v-model.number="qualitySettings.burst_time_threshold" 
+                                           min="1" max="10" step="1"
+                                           style="width: 100%; height: 5px; background: rgba(255,255,255,0.2); border-radius: 3px; outline: none;">
+                                    <div style="font-size: 0.7rem; color: #666; margin-top: 3px;">
+                                        Max seconds between photos
+                                    </div>
+                                </div>
+                                
+                                <div>
+                                    <label style="display: block; margin-bottom: 6px; color: #888; font-size: 0.85rem;">
+                                        Similarity ({{ (qualitySettings.burst_similarity_threshold * 100).toFixed(0) }}%)
+                                    </label>
+                                    <input type="range" v-model.number="qualitySettings.burst_similarity_threshold" 
+                                           min="0.80" max="0.99" step="0.01"
+                                           style="width: 100%; height: 5px; background: rgba(255,255,255,0.2); border-radius: 3px; outline: none;">
+                                    <div style="font-size: 0.7rem; color: #666; margin-top: 3px;">
+                                        Min similarity for grouping
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
                     
-                    <div style="margin-top: 15px; padding: 12px; background: rgba(74, 222, 128, 0.1); border-radius: 6px; border: 1px solid rgba(74, 222, 128, 0.2);">
-                        <div style="color: #4ade80; font-size: 0.9rem;">
-                            ℹ️ Burst detection is currently running automatically. Settings will be applied on next scan.
-                        </div>
+                    <!-- Action Buttons -->
+                    <div style="margin-top: 30px; display: flex; gap: 15px; justify-content: flex-end;">
+                        <button @click="saveQualitySettings"
+                                style="background: rgba(255,255,255,0.1); color: white; border: 2px solid rgba(255,255,255,0.2); padding: 10px 24px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.95rem;">
+                            💾 Save Settings
+                        </button>
+                        <button @click="saveProjectAndLoadMedia"
+                                :disabled="savingProject"
+                                style="background: linear-gradient(135deg, #4ade80, #3b82f6); color: white; border: none; padding: 10px 32px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.95rem; transition: opacity 0.2s;"
+                                :style="{ opacity: savingProject ? 0.5 : 1 }">
+                            {{ savingProject ? '⏳ Saving...' : '💾 Save & Load Media' }}
+                        </button>
+                        <button @click="confirmDeleteProject(currentProject.id)" 
+                                style="background: rgba(239, 68, 68, 0.2); color: #ef4444; border: 2px solid rgba(239, 68, 68, 0.5); padding: 10px 24px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.95rem;">
+                            🗑️ Delete Project
+                        </button>
                     </div>
                 </div>
                 
-                <!-- Save Settings Button -->
-                <div style="margin-top: 20px; text-align: right;">
-                    <button @click="saveQualitySettings"
-                            style="background: linear-gradient(135deg, #4ade80, #3b82f6); color: white; border: none; padding: 12px 32px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 1rem;">
-                        💾 Save Settings
-                    </button>
-                </div>
-            </div>
-            
-            <div v-if="!currentProjectId && projects.length > 0" 
-                 style="margin-top: 40px; padding: 40px; text-align: center; background: rgba(255,255,255,0.05); border-radius: 12px; border: 2px dashed rgba(255,255,255,0.2);">
-                <div style="font-size: 2rem; margin-bottom: 15px;">📁</div>
-                <div style="font-size: 1.1rem; color: #888;">
-                    Select a project from the dropdown above to configure quality detection settings
+                <!-- Empty State when no project selected -->
+                <div v-else class="loading" style="margin-top: 50px;">
+                    <div style="font-size: 2rem; margin-bottom: 15px;">📁</div>
+                    <div style="color: #888;">
+                        Select a project from the list to view and edit its settings
+                    </div>
                 </div>
             </div>
         </div>
@@ -2702,8 +2937,9 @@
                         </label>
                         <select v-model="exportTemplate"
                                 style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 12px; border-radius: 8px; font-size: 1rem; outline: none; cursor: pointer;">
-                            <option value="photoswipe" style="background: #1a1a1a;">PhotoSwipe (Modern, Fullscreen)</option>
-                            <option value="simple" style="background: #1a1a1a;">Simple Grid (No dependencies)</option>
+                            <option value="photoswipe" style="background: #1a1a1a;">📸 PhotoSwipe (Modern Lightbox)</option>
+                            <option value="slideshow" style="background: #1a1a1a;">🎬 Fullscreen Slideshow (Music Support)</option>
+                            <option value="simple" style="background: #1a1a1a;">🖼️ Simple Grid (No dependencies)</option>
                         </select>
                     </div>
                     
@@ -3214,8 +3450,10 @@
         createApp({
             data() {
                 return {
-                    currentView: 'photos',
+                    currentView: 'projects',
                     photos: [],
+                    videos: [],
+                    audio: [],
                     bursts: [],
                     stats: null,
                     loading: true,
@@ -3223,6 +3461,7 @@
                     error: null,
                     burstError: null,
                     totalPhotos: 0,
+                    mediaCount: 0,
                     offset: 0,
                     limit: 2500,
                     hoveredPhoto: null,
@@ -3480,6 +3719,22 @@
                     return this.workspaceFolders
                         .filter(f => f.enabled)
                         .reduce((sum, f) => sum + (f.photo_count || 0), 0);
+                },
+                
+                // Project-based computed properties
+                enabledFolders() {
+                    if (!this.currentProject || !this.currentProject.folders) return [];
+                    return this.currentProject.folders.filter(f => f.enabled);
+                },
+                
+                enabledFolderCount() {
+                    return this.enabledFolders.length;
+                },
+                
+                enabledMediaCount() {
+                    return this.enabledFolders.reduce((sum, f) => {
+                        return sum + (f.photo_count || 0) + (f.video_count || 0) + (f.audio_count || 0);
+                    }, 0);
                 }
             },
             methods: {
@@ -3729,7 +3984,7 @@
                         };
                         
                         // Reload photos to show updated flags
-                        await this.loadPhotos();
+                        await this.loadProjectMedia();
                         
                         alert(`✓ Threshold ${this.blurThresholdValue} applied (${this.blurDetectionMethod.toUpperCase()})!\n\nTotal flagged (blur < ${this.blurThresholdValue}): ${data.flagged_count}\nUnflagged: ${data.unflagged_count}\nChanged: ${data.changed_count}`);
                         
@@ -3780,39 +4035,19 @@
                 async onProjectChange() {
                     if (!this.currentProjectId) {
                         this.currentProject = null;
+                        this.photos = [];
+                        this.videos = [];
+                        this.audio = [];
                         return;
                     }
                     
-                    try {
-                        const res = await fetch(`/api/projects/${this.currentProjectId}`);
-                        const data = await res.json();
-                        
-                        if (data.error) {
-                            throw new Error(data.error);
-                        }
-                        
-                        this.currentProject = data.project;
-                        
-                        // Load quality settings
-                        if (data.project.quality_settings) {
-                            this.qualitySettings = { ...data.project.quality_settings };
-                        } else {
-                            // Use defaults
-                            this.qualitySettings = {
-                                blur_detection_enabled: true,
-                                blur_threshold: 100.0,
-                                blur_auto_flag_color: 'red',
-                                burst_detection_enabled: true,
-                                burst_time_threshold: 3,
-                                burst_similarity_threshold: 0.95
-                            };
-                        }
-                        
-                        console.log(`✓ Loaded project: ${data.project.name}`);
-                        
-                    } catch (err) {
-                        console.error('Error loading project:', err);
-                        alert(`Failed to load project: ${err.message}`);
+                    // Use activateProject() to load the project
+                    await this.activateProject(this.currentProjectId);
+                    
+                    // Auto-switch to media tab and load media
+                    if (this.currentView !== 'projects') {
+                        this.currentView = 'media';
+                        await this.loadProjectMedia();
                     }
                 },
                 
@@ -3877,7 +4112,7 @@
                 },
                 
                 async loadMore() {
-                    await this.loadPhotos();
+                    await this.loadProjectMedia();
                 },
                 
                 async switchToBursts() {
@@ -4236,9 +4471,9 @@
                         // Reload stats to update total count
                         await this.loadStats();
                         
-                        // If currently on photos tab, reload immediately
-                        if (this.currentView === 'photos') {
-                            await this.loadPhotos();
+                        // If currently on media tab with project, reload immediately
+                        if (this.currentView === 'media' && this.currentProjectId) {
+                            await this.loadProjectMedia();
                         }
                         
                     } catch (err) {
@@ -4277,13 +4512,7 @@
                         // Reload stats to update total count
                         await this.loadStats();
                         
-                        // Switch to photos view and load photos
-                        this.currentView = 'photos';
-                        this.photos = [];
-                        this.offset = 0;
-                        await this.loadPhotos();
-                        
-                        alert('✓ Folder added and enabled! Loading photos...');
+                        alert('✓ Folder added! Go to Projects tab to add it to a project.');
                         
                     } catch (err) {
                         alert(`Failed to add folder: ${err.message}`);
@@ -4404,13 +4633,14 @@
                         await this.loadProjects();
                         await this.loadStats();
                         
-                        // Switch to photos view
-                        this.currentView = 'photos';
+                        // Clear current project when switching workspace
+                        this.currentProjectId = null;
+                        this.currentProject = null;
                         this.photos = [];
-                        this.offset = 0;
-                        await this.loadPhotos();
+                        this.videos = [];
+                        this.audio = [];
                         
-                        alert(`✓ Switched to workspace`);
+                        alert(`✓ Switched to workspace. Select a project to load media.`);
                         
                     } catch (err) {
                         alert(`Failed to switch workspace: ${err.message}`);
@@ -4647,67 +4877,15 @@
                 },
                 
                 async loadProject(projectId) {
-                    try {
-                        const res = await fetch(`/api/projects/${projectId}`);
-                        const data = await res.json();
-                        
-                        if (data.error) {
-                            throw new Error(data.error);
-                        }
-                        
-                        const project = data.project;
-                        this.currentProject = project;
-                        
-                        // Restore filters
-                        if (project.filters) {
-                            // Reset filters first
-                            Object.keys(this.filters.ratings).forEach(r => {
-                                this.filters.ratings[r] = false;
-                            });
-                            this.filters.colors = [];
-                            this.filters.keywords = [];
-                            this.filters.inBursts = false;
-                            
-                            // Apply project filters
-                            if (project.filters.ratings) {
-                                project.filters.ratings.forEach(r => {
-                                    this.filters.ratings[r] = true;
-                                });
-                            }
-                            if (project.filters.colors) {
-                                this.filters.colors = project.filters.colors;
-                            }
-                            if (project.filters.keywords) {
-                                this.filters.keywords = project.filters.keywords;
-                            }
-                            if (project.filters.in_bursts) {
-                                this.filters.inBursts = true;
-                            }
-                        }
-                        
-                        // Restore export settings
-                        if (project.export_settings) {
-                            this.exportSlideshowEnabled = project.export_settings.slideshow_enabled ?? true;
-                            this.exportSlideshowDuration = project.export_settings.slideshow_duration ?? 5;
-                            this.exportSmartTVMode = project.export_settings.smart_tv_mode ?? false;
-                            this.exportTemplate = project.export_settings.template ?? 'photoswipe';
-                            this.exportMusicFiles = project.export_settings.music_files ? 
-                                project.export_settings.music_files.join('\n') : '';
-                        }
-                        
-                        // Switch to photos view
-                        this.currentView = 'photos';
-                        
-                        // Reload photos to apply filters
-                        this.photos = [];
-                        this.offset = 0;
-                        await this.loadPhotos();
-                        
-                        alert(`✓ Project "${project.name}" loaded!\n\n${this.filteredPhotos.length} photos selected`);
-                        
-                    } catch (err) {
-                        alert(`Failed to load project: ${err.message}`);
-                        console.error('Error loading project:', err);
+                    // Legacy method - redirect to new workflow
+                    await this.activateProject(projectId);
+                    
+                    // Switch to media view and load media
+                    this.currentView = 'media';
+                    await this.loadProjectMedia();
+                    
+                    if (this.photos.length > 0) {
+                        alert(`✓ Project "${this.currentProject.name}" loaded!\n\n${this.photos.length} photos loaded`);
                     }
                 },
                 
@@ -4760,6 +4938,195 @@
                     }
                 },
                 
+                // ===== NEW PROJECT-BASED MEDIA LOADING METHODS =====
+                
+                async activateProject(projectId) {
+                    try {
+                        // 1. Set as current project
+                        this.currentProjectId = projectId;
+                        
+                        // 2. Load full project details
+                        const res = await fetch(`/api/projects/${projectId}`);
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        this.currentProject = data.project;
+                        
+                        // 3. Load quality settings if available
+                        if (data.project.quality_settings) {
+                            Object.assign(this.qualitySettings, data.project.quality_settings);
+                        }
+                        
+                        console.log(`✓ Project "${data.project.name}" activated`);
+                        
+                    } catch (err) {
+                        console.error('Error activating project:', err);
+                        alert(`Failed to activate project: ${err.message}`);
+                    }
+                },
+                
+                async loadProjectMedia() {
+                    if (!this.currentProjectId) {
+                        this.error = 'No project selected';
+                        this.photos = [];
+                        this.videos = [];
+                        this.audio = [];
+                        return;
+                    }
+                    
+                    try {
+                        this.loading = true;
+                        this.error = null;
+                        
+                        const res = await fetch(`/api/projects/${this.currentProjectId}/media?limit=2500&type=all`);
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        if (data.message && data.total === 0) {
+                            // No folders enabled
+                            this.error = data.message;
+                            this.photos = [];
+                            this.videos = [];
+                            this.audio = [];
+                            this.mediaCount = 0;
+                            return;
+                        }
+                        
+                        // Separate by type
+                        this.photos = (data.media || []).filter(m => m.type === 'photo');
+                        this.videos = (data.media || []).filter(m => m.type === 'video');
+                        this.audio = (data.media || []).filter(m => m.type === 'audio');
+                        this.mediaCount = data.total || 0;
+                        
+                        console.log(`✓ Loaded ${this.photos.length} photos, ${this.videos.length} videos, ${this.audio.length} audio`);
+                        
+                        // Calculate stats from loaded photos
+                        this.updateStatsFromPhotos();
+                        
+                        // Auto-load bursts if photos available
+                        if (this.photos.length > 0) {
+                            await this.loadProjectBursts();
+                        }
+                        
+                    } catch (err) {
+                        this.error = err.message;
+                        console.error('Error loading project media:', err);
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+                
+                updateStatsFromPhotos() {
+                    // Calculate stats from currently loaded photos
+                    const total = this.photos.length;
+                    const rated = this.photos.filter(p => p.rating > 0).length;
+                    const unrated = total - rated;
+                    
+                    let totalRating = 0;
+                    let ratingCount = 0;
+                    this.photos.forEach(p => {
+                        if (p.rating > 0) {
+                            totalRating += p.rating;
+                            ratingCount++;
+                        }
+                    });
+                    
+                    const avgRating = ratingCount > 0 ? totalRating / ratingCount : 0;
+                    
+                    this.stats = {
+                        total_photos: total,
+                        rated_photos: rated,
+                        unrated_photos: unrated,
+                        avg_rating: avgRating.toFixed(1)
+                    };
+                    
+                    console.log(`✓ Stats updated: ${rated}/${total} rated, avg: ${avgRating.toFixed(1)}`);
+                },
+                
+                async loadProjectBursts() {
+                    if (!this.currentProjectId) return;
+                    
+                    try {
+                        const res = await fetch(`/api/projects/${this.currentProjectId}/bursts`);
+                        const data = await res.json();
+                        
+                        if (!data.error && data.bursts) {
+                            this.bursts = data.bursts;
+                            console.log(`✓ Loaded ${this.bursts.length} burst groups`);
+                        }
+                    } catch (err) {
+                        console.error('Error loading project bursts:', err);
+                    }
+                },
+                
+                async saveProject() {
+                    if (!this.currentProject) return;
+                    
+                    try {
+                        this.savingProject = true;
+                        
+                        const res = await fetch(`/api/projects/${this.currentProject.id}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(this.currentProject)
+                        });
+                        
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        console.log('✓ Project saved');
+                        
+                    } catch (err) {
+                        alert(`Failed to save project: ${err.message}`);
+                        console.error('Error saving project:', err);
+                    } finally {
+                        this.savingProject = false;
+                    }
+                },
+                
+                async saveProjectAndLoadMedia() {
+                    await this.saveProject();
+                    
+                    // Switch to media tab and load media
+                    this.currentView = 'media';
+                    await this.loadProjectMedia();
+                    
+                    alert('✓ Project saved and media loaded!');
+                },
+                
+                async onFolderToggle() {
+                    // Auto-save when folder is toggled
+                    // User can see immediate feedback
+                    console.log('Folder toggled - click "Save & Load Media" to apply changes');
+                },
+                
+                async saveProjectName() {
+                    // Auto-save when project name is changed
+                    if (this.currentProject) {
+                        await this.saveProject();
+                    }
+                },
+                
+                getProjectMediaCount(project) {
+                    if (!project.folders || project.folders.length === 0) {
+                        return 0;
+                    }
+                    return project.folders
+                        .filter(f => f.enabled)
+                        .reduce((sum, f) => sum + (f.photo_count || 0) + (f.video_count || 0) + (f.audio_count || 0), 0);
+                },
+                
+                // ===== END NEW METHODS =====
+                
                 formatDate(isoString) {
                     if (!isoString) return '';
                     const date = new Date(isoString);
@@ -4783,7 +5150,13 @@
                     photo.rating = rating;
                     
                     try {
-                        const res = await fetch(`/api/photos/${encodeURIComponent(photo.id)}/rate`, {
+                        // Build URL with project_id if in project context
+                        let url = `/api/photos/${encodeURIComponent(photo.id)}/rate`;
+                        if (this.currentProjectId) {
+                            url += `?project_id=${this.currentProjectId}`;
+                        }
+                        
+                        const res = await fetch(url, {
                             method: 'POST',
                             headers: {
                                 'Content-Type': 'application/json'
@@ -4797,14 +5170,14 @@
                             throw new Error(data.error);
                         }
                         
-                        // Update stats
-                        if (oldRating === 0 && rating > 0) {
-                            this.stats.rated_photos++;
-                            this.stats.unrated_photos--;
-                        } else if (oldRating > 0 && rating === 0) {
-                            this.stats.rated_photos--;
-                            this.stats.unrated_photos++;
+                        // Mark as project override if applicable
+                        if (data.target === 'project') {
+                            photo.has_project_override = true;
+                            photo.rating_source = 'project';
                         }
+                        
+                        // Recalculate stats from photos
+                        this.updateStatsFromPhotos();
                         
                     } catch (err) {
                         photo.rating = oldRating;
@@ -4870,7 +5243,13 @@
                     photo.color = color;
                     
                     try {
-                        const res = await fetch(`/api/photos/${encodeURIComponent(photo.id)}/color`, {
+                        // Build URL with project_id if in project context
+                        let url = `/api/photos/${encodeURIComponent(photo.id)}/color`;
+                        if (this.currentProjectId) {
+                            url += `?project_id=${this.currentProjectId}`;
+                        }
+                        
+                        const res = await fetch(url, {
                             method: 'POST',
                             headers: {
                                 'Content-Type': 'application/json'
@@ -4884,7 +5263,13 @@
                             throw new Error(data.error);
                         }
                         
-                        console.log(`✓ Set color ${color} for ${photo.name}`);
+                        // Mark as project override if applicable
+                        if (data.target === 'project') {
+                            photo.has_project_override = true;
+                            photo.color_source = 'project';
+                        }
+                        
+                        console.log(`✓ Set color ${color} for ${photo.name} (${data.target})`);
                         
                     } catch (err) {
                         photo.color = oldColor;
@@ -4973,7 +5358,13 @@
                     }
                     
                     try {
-                        const res = await fetch(`/api/photos/${encodeURIComponent(photo.id)}/keywords`, {
+                        // Build URL with project_id if in project context
+                        let url = `/api/photos/${encodeURIComponent(photo.id)}/keywords`;
+                        if (this.currentProjectId) {
+                            url += `?project_id=${this.currentProjectId}`;
+                        }
+                        
+                        const res = await fetch(url, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ add: keyword })
@@ -4999,7 +5390,13 @@
                 
                 async removeKeyword(photo, keyword) {
                     try {
-                        const res = await fetch(`/api/photos/${encodeURIComponent(photo.id)}/keywords`, {
+                        // Build URL with project_id if in project context
+                        let url = `/api/photos/${encodeURIComponent(photo.id)}/keywords`;
+                        if (this.currentProjectId) {
+                            url += `?project_id=${this.currentProjectId}`;
+                        }
+                        
+                        const res = await fetch(url, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ remove: keyword })
@@ -5420,17 +5817,17 @@
             },
             
             async mounted() {
+                // Load workspace and project data (no media yet - requires project selection)
                 await Promise.all([
-                    this.loadPhotos(),
-                    this.loadStats(),
-                    this.loadKeywords(),
                     this.loadWorkspaces(),
                     this.loadProjects(),
-                    this.loadBlurScores()
+                    this.loadKeywords(),
+                    this.loadMediaFolders(),      // Load media manager folders
+                    this.loadWorkspaceFolders()    // Load workspace folders
                 ]);
                 
-                // Preload bursts in background
-                setTimeout(() => this.loadBursts(), 1000);
+                // Note: Photos/media are loaded when a project is activated
+                // Bursts are loaded automatically after media is loaded
             }
         }).mount('#app');
     </script>

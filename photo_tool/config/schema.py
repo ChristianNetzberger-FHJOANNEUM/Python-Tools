@@ -3,7 +3,7 @@ Configuration schema using Pydantic for validation
 """
 
 from pathlib import Path
-from typing import List, Literal
+from typing import List, Literal, Optional, Dict, Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -126,6 +126,12 @@ class PhotoToolConfig(BaseModel):
     similarity: SimilarityConfig = Field(default_factory=SimilarityConfig)
     quality: QualityConfig = Field(default_factory=QualityConfig)
     actions: ActionsConfig = Field(default_factory=ActionsConfig)
+    
+    # New: Project-based folder management
+    folders: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="Workspace folders with metadata (path, enabled, counts)"
+    )
     
     class Config:
         validate_assignment = True
