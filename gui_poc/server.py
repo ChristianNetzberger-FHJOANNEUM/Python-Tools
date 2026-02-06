@@ -2281,12 +2281,23 @@ def get_project_media(project_id):
             capture_time = get_capture_time(item.path, fallback_to_mtime=True)
             capture_time_str = capture_time.strftime('%Y-%m-%d %H:%M:%S') if capture_time else None
             
-            # Get blur scores
+            # Get blur scores from sidecar analyses
             blur_scores = {
-                'laplacian': metadata.get('blur_score_laplacian'),
-                'tenengrad': metadata.get('blur_score_tenengrad'),
-                'roi': metadata.get('blur_score_roi')
+                'laplacian': None,
+                'tenengrad': None,
+                'roi': None
             }
+            try:
+                sidecar = SidecarManager(item.path)
+                if sidecar.exists:
+                    sidecar.load()
+                    blur_data = sidecar.get('analyses.blur')
+                    if blur_data:
+                        for method in ['laplacian', 'tenengrad', 'roi']:
+                            if method in blur_data and isinstance(blur_data[method], dict):
+                                blur_scores[method] = blur_data[method].get('score')
+            except Exception as e:
+                logger.warning(f"Failed to load blur scores from sidecar: {e}")
             
             # Get burst info from sidecar
             from photo_tool.prescan import SidecarManager

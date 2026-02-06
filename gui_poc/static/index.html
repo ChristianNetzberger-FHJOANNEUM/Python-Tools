@@ -1695,12 +1695,119 @@
                 </div>
             </div>
             
-            <!-- Empty State: No Folders Enabled -->
-            <div v-if="currentProjectId && error && error.includes('No folders')" class="loading">
-                <div style="font-size: 3rem; margin-bottom: 20px;">📂</div>
-                <div>No folders enabled</div>
-                <div style="margin-top: 10px; font-size: 0.9rem; color: #666;">
-                    Go to Projects tab and enable folders to load media
+            <!-- Media Configuration Panel (when project selected) -->
+            <div v-if="currentProjectId && currentProject" style="margin-bottom: 30px;">
+                <!-- Header -->
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h2 style="font-size: 1.3rem; margin: 0;">
+                        🎬 {{ currentProject.name }} - Media
+                    </h2>
+                    <button @click="saveProjectAndLoadMedia"
+                            :disabled="savingProject"
+                            style="background: linear-gradient(135deg, #4ade80, #3b82f6); color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.95rem; transition: opacity 0.2s;"
+                            :style="{ opacity: savingProject ? 0.5 : 1 }">
+                        {{ savingProject ? '⏳ Loading...' : '📸 Load Media' }}
+                    </button>
+                </div>
+                
+                <!-- Folder Selection Section -->
+                <div style="background: rgba(255,255,255,0.03); padding: 20px; border-radius: 10px; margin-bottom: 20px;">
+                    <h3 style="font-size: 1.1rem; margin-bottom: 15px; display: flex; align-items: center; gap: 8px;">
+                        📁 Media Folders
+                    </h3>
+                    <p style="color: #888; font-size: 0.9rem; margin-bottom: 15px;">
+                        Select which folders to include in this media view
+                    </p>
+                    
+                    <div v-if="!currentProject.folders || currentProject.folders.length === 0">
+                        <div style="padding: 20px; text-align: center; color: #666; background: rgba(0,0,0,0.2); border-radius: 8px;">
+                            No folders available. Add folders to your workspace first.
+                        </div>
+                    </div>
+                    
+                    <div v-else style="display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); gap: 12px;">
+                        <label v-for="(folder, index) in currentProject.folders" 
+                               :key="index"
+                               class="folder-checkbox-item"
+                               style="display: flex; align-items: flex-start; gap: 12px; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 8px; cursor: pointer; transition: all 0.2s;"
+                               :style="{ background: folder.enabled ? 'rgba(74, 222, 128, 0.1)' : 'rgba(255,255,255,0.05)', borderLeft: folder.enabled ? '3px solid #4ade80' : '3px solid transparent' }">
+                            <input type="checkbox" 
+                                   :id="'media-folder-' + index"
+                                   v-model="folder.enabled"
+                                   @change="onFolderToggle"
+                                   style="margin-top: 2px; width: 18px; height: 18px; cursor: pointer; accent-color: #4ade80;">
+                            <div style="flex: 1; min-width: 0;">
+                                <div style="font-weight: 500; color: #fff; margin-bottom: 4px; word-break: break-all;">
+                                    {{ folder.path }}
+                                </div>
+                                <div style="font-size: 0.85rem; color: #888;">
+                                    {{ folder.photo_count || 0 }} photos, 
+                                    {{ folder.video_count || 0 }} videos, 
+                                    {{ folder.audio_count || 0 }} audio
+                                </div>
+                            </div>
+                        </label>
+                    </div>
+                    
+                    <!-- Stats -->
+                    <div style="display: flex; gap: 15px; margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+                        <div style="flex: 1; text-align: center; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 6px;">
+                            <div style="font-size: 1.5rem; font-weight: 600; color: #4ade80;">{{ enabledFolderCount }}</div>
+                            <div style="font-size: 0.85rem; color: #888;">Enabled Folders</div>
+                        </div>
+                        <div style="flex: 1; text-align: center; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 6px;">
+                            <div style="font-size: 1.5rem; font-weight: 600; color: #3b82f6;">{{ enabledMediaCount }}</div>
+                            <div style="font-size: 0.85rem; color: #888;">Total Media</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Blur Detection Section -->
+                <div style="background: rgba(255,255,255,0.03); padding: 20px; border-radius: 10px;">
+                    <h3 style="font-size: 1.1rem; margin-bottom: 15px; display: flex; align-items: center; gap: 8px;">
+                        🔍 Blur Detection Threshold
+                    </h3>
+                    <p style="color: #888; font-size: 0.9rem; margin-bottom: 15px;">
+                        Adjust the blur threshold to highlight blurry photos (uses pre-calculated blur scores from media archive)
+                    </p>
+                    
+                    <div style="margin-bottom: 20px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                            <label style="color: #aaa; font-size: 0.9rem;">
+                                Threshold: <strong style="color: #fff;">{{ blurThreshold }}</strong>
+                            </label>
+                            <select v-model="blurDetectionMethod"
+                                    @change="onBlurMethodChange"
+                                    style="background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; cursor: pointer;">
+                                <option value="laplacian" style="background: #1a1a1a;">Laplacian (Fast)</option>
+                                <option value="tenengrad" style="background: #1a1a1a;">Tenengrad (Sky)</option>
+                                <option value="roi" style="background: #1a1a1a;">ROI (Adaptive)</option>
+                            </select>
+                        </div>
+                        
+                        <input type="range" 
+                               v-model.number="blurThreshold" 
+                               @input="updateBlurStats"
+                               min="0" max="300" step="1"
+                               style="width: 100%; height: 8px; background: linear-gradient(to right, #ef4444 0%, #f59e0b 50%, #4ade80 100%); border-radius: 4px; outline: none; cursor: pointer;">
+                        
+                        <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: #666; margin-top: 5px;">
+                            <span>0 (Very Strict)</span>
+                            <span>150 (Medium)</span>
+                            <span>300 (Very Lenient)</span>
+                        </div>
+                    </div>
+                    
+                    <div v-if="blurDetectionStats" style="display: flex; gap: 10px;">
+                        <div style="flex: 1; padding: 12px; background: rgba(239, 68, 68, 0.1); border-radius: 6px; border: 1px solid rgba(239, 68, 68, 0.2);">
+                            <div style="font-size: 1.3rem; font-weight: 600; color: #ef4444;">{{ blurDetectionStats.flagged_count }}</div>
+                            <div style="font-size: 0.85rem; color: #888;">Flagged as Blurry</div>
+                        </div>
+                        <div style="flex: 1; padding: 12px; background: rgba(74, 222, 128, 0.1); border-radius: 6px; border: 1px solid rgba(74, 222, 128, 0.2);">
+                            <div style="font-size: 1.3rem; font-weight: 600; color: #4ade80;">{{ blurDetectionStats.sharp_count }}</div>
+                            <div style="font-size: 0.85rem; color: #888;">Sharp Photos</div>
+                        </div>
+                    </div>
                 </div>
             </div>
             
@@ -1749,7 +1856,18 @@
                 </div>
                 
                 <div class="filter-section">
-                    <div class="filter-label">🎨 Color Labels</div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <div class="filter-label">🎨 Color Labels</div>
+                        <button @click="colorFilterMode = (colorFilterMode === 'include' ? 'exclude' : 'include')"
+                                style="background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 600; transition: all 0.2s;"
+                                :style="{ 
+                                    background: colorFilterMode === 'include' ? 'rgba(74, 222, 128, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+                                    borderColor: colorFilterMode === 'include' ? 'rgba(74, 222, 128, 0.5)' : 'rgba(239, 68, 68, 0.5)',
+                                    color: colorFilterMode === 'include' ? '#4ade80' : '#ef4444'
+                                }">
+                            {{ colorFilterMode === 'include' ? '✓ Include' : '✗ Exclude' }}
+                        </button>
+                    </div>
                     <div class="filter-options">
                         <label class="filter-chip" :class="{ active: filters.colors.red }">
                             <input type="checkbox" v-model="filters.colors.red">
@@ -1820,6 +1938,16 @@
                         <label class="filter-chip" :class="{ active: filters.inBursts }">
                             <input type="checkbox" v-model="filters.inBursts">
                             📸 In Bursts
+                        </label>
+                        <label class="filter-chip" :class="{ active: filters.blurry }" 
+                               :title="`Show only photos with blur score < ${blurThreshold}`">
+                            <input type="checkbox" v-model="filters.blurry">
+                            🔴 Blurry (< {{ blurThreshold }})
+                        </label>
+                        <label class="filter-chip" :class="{ active: filters.sharp }" 
+                               :title="`Show only photos with blur score >= ${blurThreshold}`">
+                            <input type="checkbox" v-model="filters.sharp">
+                            🟢 Sharp (≥ {{ blurThreshold }})
                         </label>
                         
                         <div v-if="activeFilterCount > 0" class="filter-stats">
@@ -1929,50 +2057,6 @@
                     <div style="margin-top: 15px; padding: 10px; background: rgba(74, 222, 128, 0.1); border-radius: 6px; border: 1px solid rgba(74, 222, 128, 0.2);">
                         <div style="color: #4ade80; font-size: 0.85rem;">
                             ℹ️ {{ blurScores.length }} photos have blur scores. Adjust threshold slider to flag blurry photos.
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Calculate Blur Scores Button -->
-            <div v-if="photos.length > 0 && blurScores.length === 0" 
-                 style="margin: 20px 0; padding: 30px; text-align: center; background: rgba(255,255,255,0.05); border-radius: 12px; border: 2px dashed rgba(255,255,255,0.2);">
-                <div style="font-size: 2rem; margin-bottom: 15px;">🔍</div>
-                <h3 style="font-size: 1.2rem; margin-bottom: 10px;">Blur Detection Not Run</h3>
-                <p style="color: #888; margin-bottom: 15px; font-size: 0.9rem;">
-                    Calculate blur scores once, then adjust threshold slider to flag blurry photos
-                </p>
-                
-                <!-- Method Selector -->
-                <div style="margin-bottom: 20px;">
-                    <select v-model="blurDetectionMethod"
-                            style="background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 10px 16px; border-radius: 6px; font-size: 0.9rem; cursor: pointer;">
-                        <option value="laplacian" style="background: #1a1a1a;">Laplacian (Fast, general)</option>
-                        <option value="tenengrad" style="background: #1a1a1a;">Tenengrad (Better for sky)</option>
-                        <option value="roi" style="background: #1a1a1a;">ROI (Adaptive, ignores sky)</option>
-                    </select>
-                    <div style="margin-top: 8px; font-size: 0.8rem; color: #666;">
-                        {{ blurMethodInfo[blurDetectionMethod].desc }}
-                    </div>
-                </div>
-                
-                <button @click="runBlurDetection"
-                        :disabled="blurDetectionRunning"
-                        style="background: linear-gradient(135deg, #f59e0b, #ef4444); color: white; border: none; padding: 12px 32px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 1rem;"
-                        :style="{ opacity: blurDetectionRunning ? 0.5 : 1 }">
-                    {{ blurDetectionRunning ? '⏳ Calculating...' : '🔍 Calculate Blur Scores (' + blurDetectionMethod.toUpperCase() + ')' }}
-                </button>
-                
-                <!-- Progress Bar -->
-                <div v-if="blurDetectionProgress && blurDetectionProgress.status === 'running'" 
-                     style="margin-top: 20px; max-width: 600px; margin-left: auto; margin-right: auto;">
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 0.85rem;">
-                        <span style="color: #888;">{{ blurDetectionProgress.current_file }}</span>
-                        <span style="color: #4ade80;">{{ blurDetectionProgress.progress }} / {{ blurDetectionProgress.total }}</span>
-                    </div>
-                    <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden;">
-                        <div style="height: 100%; background: linear-gradient(90deg, #f59e0b, #ef4444); transition: width 0.3s ease;"
-                             :style="{ width: (blurDetectionProgress.progress / blurDetectionProgress.total * 100) + '%' }">
                         </div>
                     </div>
                 </div>
@@ -2292,11 +2376,14 @@
                 <div class="project-details" v-if="currentProject">
                     <!-- Project Name (Editable) -->
                     <div style="margin-bottom: 30px;">
+                        <label style="display: block; margin-bottom: 8px; color: #aaa; font-size: 0.9rem;">
+                            Project Name
+                        </label>
                         <input type="text" 
                                v-model="currentProject.name" 
                                placeholder="Project Name"
                                @blur="saveProjectName"
-                               style="margin-bottom: 5px;">
+                               style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 12px; border-radius: 8px; font-size: 1rem; outline: none; margin-bottom: 5px;">
                         <div style="font-size: 0.85rem; color: #888;">
                             Created: {{ formatDate(currentProject.created) }}
                             <span v-if="currentProject.updated !== currentProject.created">
@@ -2305,39 +2392,35 @@
                         </div>
                     </div>
                     
-                    <!-- Folder Selection Section -->
+                    <!-- Project Description -->
+                    <div style="margin-bottom: 30px;">
+                        <label style="display: block; margin-bottom: 8px; color: #aaa; font-size: 0.9rem;">
+                            Description (optional)
+                        </label>
+                        <textarea v-model="currentProject.description" 
+                                  placeholder="Add a description for this project..."
+                                  @blur="saveProject"
+                                  rows="4"
+                                  style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 12px; border-radius: 8px; font-size: 0.95rem; outline: none; resize: vertical; font-family: inherit;">
+                        </textarea>
+                    </div>
+                    
+                    <!-- Info Box -->
+                    <div style="background: rgba(59, 130, 246, 0.1); padding: 15px; border-radius: 8px; border: 1px solid rgba(59, 130, 246, 0.3); margin-bottom: 20px;">
+                        <div style="font-weight: 600; margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
+                            <span>💡</span> Next Steps
+                        </div>
+                        <div style="font-size: 0.9rem; color: #aaa; line-height: 1.6;">
+                            1. Go to the <strong style="color: #3b82f6;">Media tab</strong><br>
+                            2. Select which media folders to include<br>
+                            3. Adjust blur detection threshold<br>
+                            4. Load and rate your photos
+                        </div>
+                    </div>
+                    
+                    <!-- Stats Summary -->
                     <div class="project-section">
-                        <h3>📁 Media Folders</h3>
-                        <p style="color: #888; font-size: 0.9rem; margin-bottom: 15px;">
-                            Select which folders from your workspace to include in this project
-                        </p>
-                        
-                        <div v-if="!currentProject.folders || currentProject.folders.length === 0">
-                            <div style="padding: 20px; text-align: center; color: #666;">
-                                No folders available. Add folders to your workspace first.
-                            </div>
-                        </div>
-                        
-                        <div v-else>
-                            <div v-for="(folder, index) in currentProject.folders" 
-                                 :key="index"
-                                 class="folder-checkbox-item">
-                                <input type="checkbox" 
-                                       :id="'folder-' + index"
-                                       v-model="folder.enabled"
-                                       @change="onFolderToggle">
-                                <label :for="'folder-' + index" class="folder-checkbox-label">
-                                    <div class="folder-path">{{ folder.path }}</div>
-                                    <div class="folder-counts">
-                                        {{ folder.photo_count || 0 }} photos, 
-                                        {{ folder.video_count || 0 }} videos, 
-                                        {{ folder.audio_count || 0 }} audio
-                                    </div>
-                                </label>
-                            </div>
-                        </div>
-                        
-                        <!-- Stats -->
+                        <h3>📊 Project Stats</h3>
                         <div class="project-stats">
                             <div class="project-stat-box">
                                 <div class="project-stat-label">Enabled Folders</div>
@@ -2350,159 +2433,10 @@
                         </div>
                     </div>
                     
-                    <!-- Quality Detection Section -->
-                    <div class="project-section">
-                        <h3>✨ Quality Detection Settings</h3>
-                        <p style="color: #888; margin-bottom: 20px; font-size: 0.9rem;">
-                            Configure blur and burst detection parameters for this project
-                        </p>
-                        
-                        <!-- Blur Detection Section -->
-                        <div style="background: rgba(255,255,255,0.03); padding: 15px; border-radius: 6px; margin-bottom: 15px;">
-                            <h4 style="font-size: 1rem; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-                                🔍 Blur Detection
-                                <label style="margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 0.85rem; font-weight: normal;">
-                                    <input type="checkbox" v-model="qualitySettings.blur_detection_enabled" style="width: 16px; height: 16px;">
-                                    Enabled
-                                </label>
-                            </h4>
-                            
-                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom: 15px;">
-                                <div>
-                                    <label style="display: block; margin-bottom: 6px; color: #888; font-size: 0.85rem;">
-                                        Blur Threshold ({{ qualitySettings.blur_threshold }})
-                                    </label>
-                                    <input type="range" v-model.number="qualitySettings.blur_threshold" 
-                                           min="50" max="200" step="5"
-                                           style="width: 100%; height: 5px; background: rgba(255,255,255,0.2); border-radius: 3px; outline: none;">
-                                    <div style="display: flex; justify-content: space-between; font-size: 0.7rem; color: #666; margin-top: 3px;">
-                                        <span>50 (Strict)</span>
-                                        <span>200 (Lenient)</span>
-                                    </div>
-                                </div>
-                                
-                                <div>
-                                    <label style="display: block; margin-bottom: 6px; color: #888; font-size: 0.85rem;">
-                                        Auto-flag Color
-                                    </label>
-                                    <select v-model="qualitySettings.blur_auto_flag_color"
-                                            style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 8px; border-radius: 6px; font-size: 0.85rem;">
-                                        <option value="red" style="background: #1a1a1a;">🔴 Red</option>
-                                        <option value="yellow" style="background: #1a1a1a;">🟡 Yellow</option>
-                                        <option value="blue" style="background: #1a1a1a;">🔵 Blue</option>
-                                        <option value="purple" style="background: #1a1a1a;">🟣 Purple</option>
-                                    </select>
-                                </div>
-                            </div>
-                            
-                            <!-- Blur Detection Action -->
-                            <div style="margin-top: 12px;">
-                                <div style="padding: 12px; background: rgba(74, 222, 128, 0.1); border-radius: 6px; border: 1px solid rgba(74, 222, 128, 0.2); margin-bottom: 12px;">
-                                    <div style="color: #4ade80; font-size: 0.85rem; margin-bottom: 6px;">
-                                        ℹ️ <strong>Blur Detection Workflow:</strong>
-                                    </div>
-                                    <div style="color: #888; font-size: 0.8rem;">
-                                        1. Calculate blur scores • 2. Go to Media tab to adjust threshold
-                                    </div>
-                                </div>
-                                
-                                <!-- Method Selector -->
-                                <div style="margin-bottom: 12px;">
-                                    <label style="display: block; margin-bottom: 6px; color: #888; font-size: 0.85rem;">
-                                        Detection Method:
-                                    </label>
-                                    <select v-model="blurDetectionMethod"
-                                            style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 8px; border-radius: 6px; font-size: 0.85rem;">
-                                        <option value="laplacian" style="background: #1a1a1a;">Laplacian (Fast)</option>
-                                        <option value="tenengrad" style="background: #1a1a1a;">Tenengrad (Sky)</option>
-                                        <option value="roi" style="background: #1a1a1a;">ROI-based (Adaptive)</option>
-                                    </select>
-                                </div>
-                                
-                                <button @click="runBlurDetection"
-                                        :disabled="blurDetectionRunning || !qualitySettings.blur_detection_enabled"
-                                        style="background: linear-gradient(135deg, #f59e0b, #ef4444); color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.9rem; transition: all 0.2s; width: 100%;"
-                                        :style="{ opacity: (blurDetectionRunning || !qualitySettings.blur_detection_enabled) ? 0.5 : 1 }">
-                                    {{ blurDetectionRunning ? '⏳ Calculating...' : '🔍 Calculate Blur Scores' }}
-                                </button>
-                                
-                                <!-- Progress Bar -->
-                                <div v-if="blurDetectionProgress && blurDetectionProgress.status === 'running'" 
-                                     style="margin-top: 15px; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 6px;">
-                                    <div style="display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 0.8rem;">
-                                        <span style="color: #888; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%;">
-                                            {{ blurDetectionProgress.current_file }}
-                                        </span>
-                                        <span style="color: #4ade80; font-weight: 600;">
-                                            {{ blurDetectionProgress.progress }} / {{ blurDetectionProgress.total }}
-                                        </span>
-                                    </div>
-                                    <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden;">
-                                        <div style="height: 100%; background: linear-gradient(90deg, #f59e0b, #ef4444); transition: width 0.3s ease;"
-                                             :style="{ width: blurDetectionProgress.total > 0 ? (blurDetectionProgress.progress / blurDetectionProgress.total * 100) + '%' : '0%' }">
-                                        </div>
-                                    </div>
-                                </div>
-                                
-                                <div v-if="blurScores.length > 0 && (!blurDetectionProgress || blurDetectionProgress.status !== 'running')" 
-                                     style="margin-top: 10px; font-size: 0.8rem; color: #4ade80;">
-                                    ✓ {{ blurScores.length }} photos scored
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <!-- Burst Detection Section -->
-                        <div style="background: rgba(255,255,255,0.03); padding: 15px; border-radius: 6px; margin-bottom: 15px;">
-                            <h4 style="font-size: 1rem; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-                                📦 Burst Detection
-                                <label style="margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 0.85rem; font-weight: normal;">
-                                    <input type="checkbox" v-model="qualitySettings.burst_detection_enabled" style="width: 16px; height: 16px;">
-                                    Enabled
-                                </label>
-                            </h4>
-                            
-                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px;">
-                                <div>
-                                    <label style="display: block; margin-bottom: 6px; color: #888; font-size: 0.85rem;">
-                                        Time Threshold ({{ qualitySettings.burst_time_threshold }}s)
-                                    </label>
-                                    <input type="range" v-model.number="qualitySettings.burst_time_threshold" 
-                                           min="1" max="10" step="1"
-                                           style="width: 100%; height: 5px; background: rgba(255,255,255,0.2); border-radius: 3px; outline: none;">
-                                    <div style="font-size: 0.7rem; color: #666; margin-top: 3px;">
-                                        Max seconds between photos
-                                    </div>
-                                </div>
-                                
-                                <div>
-                                    <label style="display: block; margin-bottom: 6px; color: #888; font-size: 0.85rem;">
-                                        Similarity ({{ (qualitySettings.burst_similarity_threshold * 100).toFixed(0) }}%)
-                                    </label>
-                                    <input type="range" v-model.number="qualitySettings.burst_similarity_threshold" 
-                                           min="0.80" max="0.99" step="0.01"
-                                           style="width: 100%; height: 5px; background: rgba(255,255,255,0.2); border-radius: 3px; outline: none;">
-                                    <div style="font-size: 0.7rem; color: #666; margin-top: 3px;">
-                                        Min similarity for grouping
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    
                     <!-- Action Buttons -->
-                    <div style="margin-top: 30px; display: flex; gap: 15px; justify-content: flex-end;">
-                        <button @click="saveQualitySettings"
-                                style="background: rgba(255,255,255,0.1); color: white; border: 2px solid rgba(255,255,255,0.2); padding: 10px 24px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.95rem;">
-                            💾 Save Settings
-                        </button>
-                        <button @click="saveProjectAndLoadMedia"
-                                :disabled="savingProject"
-                                style="background: linear-gradient(135deg, #4ade80, #3b82f6); color: white; border: none; padding: 10px 32px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.95rem; transition: opacity 0.2s;"
-                                :style="{ opacity: savingProject ? 0.5 : 1 }">
-                            {{ savingProject ? '⏳ Saving...' : '💾 Save & Load Media' }}
-                        </button>
+                    <div style="margin-top: 30px; display: flex; gap: 15px;">
                         <button @click="confirmDeleteProject(currentProject.id)" 
-                                style="background: rgba(239, 68, 68, 0.2); color: #ef4444; border: 2px solid rgba(239, 68, 68, 0.5); padding: 10px 24px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.95rem;">
+                                style="background: rgba(239, 68, 68, 0.2); color: #ef4444; border: 2px solid rgba(239, 68, 68, 0.5); padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.95rem; flex: 1;">
                             🗑️ Delete Project
                         </button>
                     </div>
@@ -3603,8 +3537,10 @@
                         },
                         keywords: [],  // Selected keywords to filter by
                         inBursts: false,
-                        blurry: false
+                        blurry: false,
+                        sharp: false
                     },
+                    colorFilterMode: 'include',  // 'include' or 'exclude'
                     sortBy: 'date', // name, date, rating, quality
                     sortOrder: 'desc' // asc, desc (desc = newest first)
                 }
@@ -3627,14 +3563,18 @@
                         filtered = filtered.filter(p => activeRatings.includes(p.rating || 0));
                     }
                     
-                    // Apply color filters
+                    // Apply color filters (with include/exclude mode)
                     const activeColors = Object.keys(this.filters.colors)
                         .filter(c => this.filters.colors[c]);
                     
                     if (activeColors.length > 0) {
                         filtered = filtered.filter(p => {
                             const photoColor = p.color || 'none';
-                            return activeColors.includes(photoColor);
+                            const hasColor = activeColors.includes(photoColor);
+                            
+                            // Include mode: show only selected colors
+                            // Exclude mode: hide selected colors
+                            return this.colorFilterMode === 'include' ? hasColor : !hasColor;
                         });
                     }
                     
@@ -3657,9 +3597,19 @@
                         filtered = filtered.filter(p => burstPhotoIds.has(p.id));
                     }
                     
+                    // Apply blur filters (based on threshold)
                     if (this.filters.blurry) {
-                        // This would require blur_score in photo data
-                        // For now, skip or implement when available
+                        filtered = filtered.filter(p => {
+                            const score = this.getPhotoBlurScore(p);
+                            return score !== null && score < this.blurThreshold;
+                        });
+                    }
+                    
+                    if (this.filters.sharp) {
+                        filtered = filtered.filter(p => {
+                            const score = this.getPhotoBlurScore(p);
+                            return score !== null && score >= this.blurThreshold;
+                        });
                     }
                     
                     // Apply sorting
@@ -3947,6 +3897,9 @@
                             this.blurThresholdValue = 25;
                         }
                     }
+                    
+                    // Update stats immediately
+                    this.updateBlurStats();
                     
                     console.log(`✓ Switched to ${this.blurDetectionMethod} method`);
                 },
@@ -5009,6 +4962,9 @@
                         // Calculate stats from loaded photos
                         this.updateStatsFromPhotos();
                         
+                        // Update blur stats
+                        this.updateBlurStats();
+                        
                         // Auto-load bursts if photos available
                         if (this.photos.length > 0) {
                             await this.loadProjectBursts();
@@ -5096,17 +5052,21 @@
                 async saveProjectAndLoadMedia() {
                     await this.saveProject();
                     
-                    // Switch to media tab and load media
-                    this.currentView = 'media';
+                    // Don't switch view if already on media tab
+                    if (this.currentView !== 'media') {
+                        this.currentView = 'media';
+                    }
+                    
                     await this.loadProjectMedia();
                     
-                    alert('✓ Project saved and media loaded!');
+                    console.log('✓ Project saved and media loaded!');
                 },
                 
                 async onFolderToggle() {
-                    // Auto-save when folder is toggled
-                    // User can see immediate feedback
-                    console.log('Folder toggled - click "Save & Load Media" to apply changes');
+                    // Just update UI - changes will be saved when user clicks "Load Media"
+                    // Update enabled folder count
+                    const enabledCount = this.currentProject.folders.filter(f => f.enabled).length;
+                    console.log(`✓ ${enabledCount} folder(s) enabled - click "Load Media" to apply`);
                 },
                 
                 async saveProjectName() {
@@ -5321,9 +5281,11 @@
                 },
                 
                 getBlurScoreColor(score) {
-                    // Return color based on blur score
-                    if (score < 50) return '#ef4444';      // Red - Very Blurry
-                    if (score < 100) return '#fb923c';     // Orange - Blurry
+                    // Return color based on blur score and threshold
+                    if (score < this.blurThreshold) {
+                        return '#ef4444';  // Red - Below threshold (blurry!)
+                    }
+                    if (score < this.blurThreshold + 50) return '#fb923c';     // Orange - Close to threshold
                     if (score < 150) return '#fbbf24';     // Yellow - Acceptable
                     if (score < 200) return '#4ade80';     // Green - Sharp
                     return '#22c55e';                       // Bright Green - Very Sharp
@@ -5336,6 +5298,37 @@
                     if (score < 150) return 'Acceptable';
                     if (score < 200) return 'Sharp';
                     return 'Very Sharp';
+                },
+                
+                updateBlurStats() {
+                    // Update blur stats locally based on current threshold
+                    // No backend call - just recalculate from loaded photos
+                    if (!this.photos || this.photos.length === 0) {
+                        this.blurDetectionStats = null;
+                        return;
+                    }
+                    
+                    let flagged = 0;
+                    let sharp = 0;
+                    
+                    this.photos.forEach(photo => {
+                        const score = this.getPhotoBlurScore(photo);
+                        if (score !== null) {
+                            if (score < this.blurThreshold) {
+                                flagged++;
+                            } else {
+                                sharp++;
+                            }
+                        }
+                    });
+                    
+                    this.blurDetectionStats = {
+                        flagged_count: flagged,
+                        sharp_count: sharp,
+                        total: flagged + sharp,
+                        threshold: this.blurThreshold,
+                        method: this.blurDetectionMethod
+                    };
                 },
                 
                 async loadKeywords() {
