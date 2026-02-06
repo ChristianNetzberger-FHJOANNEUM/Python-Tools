@@ -2180,6 +2180,8 @@ def get_project_media(project_id):
     """
     try:
         from flask import request
+        from photo_tool.prescan import SidecarManager
+        import hashlib
         
         pm = get_project_manager()
         project = pm.get_project(project_id)
@@ -2299,25 +2301,6 @@ def get_project_media(project_id):
             except Exception as e:
                 logger.warning(f"Failed to load blur scores from sidecar: {e}")
             
-            # Get burst info from sidecar
-            from photo_tool.prescan import SidecarManager
-            burst_info = None
-            try:
-                sidecar = SidecarManager(item.path)
-                if sidecar.exists:
-                    sidecar.load()
-                    burst_data = sidecar.get('analyses.burst')
-                    if burst_data:
-                        burst_info = {
-                            'is_burst': burst_data.get('is_burst', False),
-                            'group_id': burst_data.get('group_id'),
-                            'group_size': burst_data.get('group_size', 0),
-                            'position': burst_data.get('position', 0),
-                            'neighbors': burst_data.get('neighbors', {})
-                        }
-            except Exception as e:
-                logger.warning(f"Failed to load burst info: {e}")
-            
             result.append({
                 'id': str(item.path),
                 'name': item.path.name,
@@ -2330,7 +2313,6 @@ def get_project_media(project_id):
                 'color': metadata.get('color'),
                 'keywords': metadata.get('keywords', []),
                 'blur_scores': blur_scores,
-                'burst': burst_info,
                 'thumbnail': f"/thumbnails/{item.path.stem}.jpg",
                 'full_image': f"/images/{item.path.stem}{item.path.suffix}",
                 # Metadata source indicators
@@ -2338,6 +2320,81 @@ def get_project_media(project_id):
                 'rating_source': metadata.get('_rating_source', 'global'),
                 'color_source': metadata.get('_color_source', 'global')
             })
+        
+        # === BURST GROUPING ===
+        # Analyze burst relationships and add burst metadata to photos
+        burst_groups = {}  # burst_id -> list of photo paths
+        photo_to_burst = {}  # photo_path -> burst_id
+        burst_raw_data = {}  # photo_path -> raw sidecar burst data (for debugging)
+        
+        for item_dict in result:
+            if item_dict['type'] != 'photo':
+                continue
+            
+            try:
+                sidecar = SidecarManager(Path(item_dict['path']))
+                if sidecar.exists:
+                    sidecar.load()
+                    burst_data = sidecar.get('analyses.burst')
+                    
+                    # Store raw burst data for debugging
+                    if burst_data:
+                        burst_raw_data[item_dict['path']] = burst_data
+                        logger.debug(f"Burst data for {Path(item_dict['path']).name}: is_burst_candidate={burst_data.get('is_burst_candidate')}, neighbors={len(burst_data.get('burst_neighbors', []))}")
+                    
+                    if burst_data and burst_data.get('is_burst_candidate'):
+                        # Collect all photos in this burst group
+                        neighbors = burst_data.get('burst_neighbors', [])
+                        all_paths = [item_dict['path']] + [n['path'] for n in neighbors]
+                        
+                        # Sort to get consistent burst_id
+                        all_paths_sorted = sorted(all_paths)
+                        
+                        # Generate burst_id from first photo path
+                        burst_id = hashlib.md5(all_paths_sorted[0].encode()).hexdigest()[:12]
+                        
+                        # Store mapping
+                        photo_to_burst[item_dict['path']] = burst_id
+                        
+                        if burst_id not in burst_groups:
+                            burst_groups[burst_id] = {
+                                'photos': [],
+                                'lead_path': all_paths_sorted[0],  # First photo is lead
+                                'count': len(all_paths)
+                            }
+                        
+                        if item_dict['path'] not in burst_groups[burst_id]['photos']:
+                            burst_groups[burst_id]['photos'].append(item_dict['path'])
+            except Exception as e:
+                logger.warning(f"Error processing burst for {item_dict['path']}: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # Add burst metadata to result items
+        for item_dict in result:
+            if item_dict['path'] in photo_to_burst:
+                burst_id = photo_to_burst[item_dict['path']]
+                burst_group = burst_groups[burst_id]
+                
+                item_dict['burst_id'] = burst_id
+                item_dict['burst_count'] = burst_group['count']
+                item_dict['is_burst_lead'] = (item_dict['path'] == burst_group['lead_path'])
+                
+                # Add raw burst data for debugging
+                item_dict['burst_raw_data'] = burst_raw_data.get(item_dict['path'], {})
+            else:
+                item_dict['burst_id'] = None
+                item_dict['burst_count'] = 0
+                item_dict['is_burst_lead'] = False
+                item_dict['burst_raw_data'] = burst_raw_data.get(item_dict['path'], {})
+        
+        total_burst_photos = sum(g['count'] for g in burst_groups.values())
+        logger.info(f"Burst grouping: {len(burst_groups)} groups found with {total_burst_photos} photos in bursts")
+        
+        if len(burst_groups) > 0:
+            logger.info(f"Sample burst groups: {list(burst_groups.keys())[:3]}")
+            for burst_id in list(burst_groups.keys())[:3]:
+                logger.info(f"  Burst {burst_id}: {burst_groups[burst_id]['count']} photos, lead: {Path(burst_groups[burst_id]['lead_path']).name}")
         
         return jsonify({
             'media': result,

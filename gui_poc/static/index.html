@@ -140,6 +140,77 @@
             box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
         }
         
+        /* === BURST CONTAINER STYLING === */
+        .photo-card.burst-container {
+            border: 3px dashed #8b5cf6;
+            background: rgba(139, 92, 246, 0.1);
+            box-shadow: 
+                0 2px 0 rgba(139, 92, 246, 0.3),
+                0 4px 0 rgba(139, 92, 246, 0.2),
+                0 6px 0 rgba(139, 92, 246, 0.1);
+        }
+        
+        .photo-card.burst-container:hover {
+            border-color: #a78bfa;
+            background: rgba(139, 92, 246, 0.15);
+            animation: burst-pulse 1.5s ease-in-out infinite;
+        }
+        
+        @keyframes burst-pulse {
+            0%, 100% { border-color: #8b5cf6; }
+            50% { border-color: #a78bfa; }
+        }
+        
+        .burst-badge {
+            position: absolute;
+            top: 18px;
+            right: 18px;
+            background: linear-gradient(135deg, #8b5cf6, #ec4899);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 16px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+            z-index: 10;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .burst-view-header {
+            background: rgba(139, 92, 246, 0.2);
+            padding: 15px 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border: 2px solid rgba(139, 92, 246, 0.3);
+        }
+        
+        .burst-view-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #a78bfa;
+        }
+        
+        .burst-back-button {
+            background: rgba(139, 92, 246, 0.3);
+            border: 2px solid rgba(139, 92, 246, 0.5);
+            color: #a78bfa;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+        
+        .burst-back-button:hover {
+            background: rgba(139, 92, 246, 0.4);
+            transform: translateX(-5px);
+        }
+        
         .photo-card img {
             width: 100%;
             height: 180px;
@@ -2071,13 +2142,24 @@
                 <strong>Error:</strong> {{ error }}
             </div>
             
+            <!-- Burst View Header (when viewing a specific burst) -->
+            <div v-if="activeBurstId" class="burst-view-header">
+                <div class="burst-view-title">
+                    📦 Viewing Burst ({{ filteredPhotos.length }} photos)
+                </div>
+                <button class="burst-back-button" @click="exitBurstView">
+                    ← Back to All Photos
+                </button>
+            </div>
+            
             <div v-if="filteredPhotos.length > 0" class="grid">
                 <div v-for="(photo, index) in filteredPhotos" 
                      :key="photo.id" 
                      class="photo-card"
+                     :class="{ 'burst-container': photo.is_burst_lead }"
                      @mouseenter="hoveredPhoto = photo.id"
                      @mouseleave="hoveredPhoto = null; hoverStar = 0"
-                     @click="openLightbox(photo, index)">
+                     @click="photo.is_burst_lead && !activeBurstId ? viewBurst(photo.burst_id) : openLightbox(photo, index)">
                     
                     <img :src="photo.thumbnail" 
                          :alt="photo.name"
@@ -2091,11 +2173,12 @@
                          :style="{ background: getColorHex(photo.color) }">
                     </div>
                     
-                    <!-- Burst Badge (top-right) -->
-                    <div v-if="photo.burst && photo.burst.is_burst"
-                         style="position: absolute; top: 8px; right: 8px; background: rgba(251, 191, 36, 0.9); color: #000; padding: 4px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; backdrop-filter: blur(4px);"
-                         :title="`Burst group (${photo.burst.group_size} photos)`">
-                        📸 {{ photo.burst.group_size }}
+                    <!-- Burst Badge (top-right) - Only show on burst lead photos -->
+                    <div v-if="photo.is_burst_lead && !activeBurstId"
+                         class="burst-badge"
+                         @click.stop="viewBurst(photo.burst_id)"
+                         :title="`Burst group (${photo.burst_count} photos) - Click to view all`">
+                        📦 {{ photo.burst_count }}
                     </div>
                     
                     <!-- Project Override Badge (bottom-right) -->
@@ -2109,6 +2192,15 @@
                         <div class="photo-name" :title="photo.name">{{ photo.name }}</div>
                         <div v-if="photo.capture_time" style="font-size: 0.7rem; color: #888; margin-top: 2px;">
                             {{ formatCaptureTime(photo.capture_time) }}
+                        </div>
+                        
+                        <!-- DEBUG: Burst Metadata Display -->
+                        <div v-if="photo.burst_raw_data && Object.keys(photo.burst_raw_data).length > 0"
+                             style="font-size: 0.7rem; margin-top: 4px; padding: 4px 6px; background: rgba(139, 92, 246, 0.2); border-radius: 4px; border-left: 3px solid #8b5cf6;"
+                             :title="`DEBUG: Burst Data\nis_burst_candidate: ${photo.burst_raw_data.is_burst_candidate}\nneighbors: ${photo.burst_raw_data.burst_neighbors ? photo.burst_raw_data.burst_neighbors.length : 0}\ngroup_size: ${photo.burst_raw_data.burst_group_size}\nburst_id: ${photo.burst_id || 'none'}\nis_lead: ${photo.is_burst_lead}`">
+                            🔧 B:{{ photo.burst_raw_data.is_burst_candidate ? 'YES' : 'NO' }} 
+                            N:{{ photo.burst_raw_data.burst_neighbors ? photo.burst_raw_data.burst_neighbors.length : 0 }}
+                            {{ photo.is_burst_lead ? '👑' : '' }}
                         </div>
                         
                         <!-- Blur Score Display -->
@@ -3402,6 +3494,7 @@
                     hoverStar: 0,
                     selectedBurst: null,
                     currentBurstPhotoIndex: 0,
+                    activeBurstId: null,  // For filtering media tab to show only one burst
                     burstProgress: {
                         show: false,
                         step: '',
@@ -3553,6 +3646,17 @@
                 
                 filteredPhotos() {
                     let filtered = [...this.photos];
+                    
+                    // === BURST FILTERING ===
+                    // If viewing a specific burst, show only those photos
+                    // Otherwise, show only lead photos (collapse bursts into containers)
+                    if (this.activeBurstId) {
+                        // Show only photos from this burst
+                        filtered = filtered.filter(p => p.burst_id === this.activeBurstId);
+                    } else {
+                        // Show only lead photos (or photos not in bursts)
+                        filtered = filtered.filter(p => !p.burst_id || p.is_burst_lead);
+                    }
                     
                     // Apply rating filters
                     const activeRatings = Object.keys(this.filters.ratings)
@@ -4959,6 +5063,19 @@
                         
                         console.log(`✓ Loaded ${this.photos.length} photos, ${this.videos.length} videos, ${this.audio.length} audio`);
                         
+                        // DEBUG: Log burst data
+                        const photosWithBurst = this.photos.filter(p => p.burst_id);
+                        const burstLeads = this.photos.filter(p => p.is_burst_lead);
+                        console.log(`📦 Burst Debug: ${photosWithBurst.length} photos in bursts, ${burstLeads.length} burst leaders`);
+                        if (burstLeads.length > 0) {
+                            console.log(`   Sample burst leader:`, burstLeads[0].name, {
+                                burst_id: burstLeads[0].burst_id,
+                                burst_count: burstLeads[0].burst_count,
+                                is_burst_lead: burstLeads[0].is_burst_lead,
+                                raw_data: burstLeads[0].burst_raw_data
+                            });
+                        }
+                        
                         // Calculate stats from loaded photos
                         this.updateStatsFromPhotos();
                         
@@ -5637,6 +5754,24 @@
                     
                     document.removeEventListener('keydown', this.handleSlideshowKeyboard);
                     document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
+                },
+                
+                // === BURST VIEW METHODS ===
+                viewBurst(burstId) {
+                    // Activate burst filter to show only photos from this burst
+                    this.activeBurstId = burstId;
+                    
+                    // Scroll to top for better UX
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                    
+                    console.log(`✓ Viewing burst: ${burstId}`);
+                },
+                
+                exitBurstView() {
+                    // Clear burst filter to show all photos again
+                    this.activeBurstId = null;
+                    
+                    console.log('✓ Exited burst view');
                 },
                 
                 playSlideshowAuto() {
