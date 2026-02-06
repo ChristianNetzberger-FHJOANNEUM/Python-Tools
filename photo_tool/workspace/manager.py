@@ -155,16 +155,36 @@ class WorkspaceManager:
             logger.error(f"Failed to switch workspace: {e}")
             return False
     
-    def remove_workspace(self, path: str) -> bool:
-        """Remove a workspace from the list (doesn't delete files)"""
+    def remove_workspace(self, path: str, delete_config: bool = False) -> bool:
+        """
+        Remove a workspace from the list
+        
+        Args:
+            path: Workspace path
+            delete_config: If True, also delete config.yaml (but NOT media files)
+        
+        Returns:
+            True if successful
+        """
         try:
+            # Remove from registry
             self.workspaces = [ws for ws in self.workspaces if ws['path'] != path]
             
+            # Switch workspace if removing current one
             if self.current_workspace == path:
                 self.current_workspace = self.workspaces[0]['path'] if self.workspaces else None
             
             self._save_workspaces()
-            logger.info(f"Removed workspace: {path}")
+            logger.info(f"Removed workspace from registry: {path}")
+            
+            # Optionally delete config file
+            if delete_config:
+                config_file = Path(path) / "config.yaml"
+                if config_file.exists():
+                    config_file.unlink()
+                    logger.info(f"Deleted config file: {config_file}")
+                else:
+                    logger.warning(f"Config file not found: {config_file}")
             
             return True
             

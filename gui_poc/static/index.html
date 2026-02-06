@@ -2597,6 +2597,20 @@
                                     style="flex: 1; background: rgba(74, 222, 128, 0.3); color: #fff; border: none; padding: 10px; border-radius: 6px; cursor: not-allowed; font-weight: 600; font-size: 0.9rem;">
                                 ✓ Current
                             </button>
+                            <button @click="confirmDeleteWorkspace(workspace)"
+                                    :disabled="workspace.path === currentWorkspace"
+                                    :style="{
+                                        background: workspace.path === currentWorkspace ? 'rgba(239, 68, 68, 0.2)' : 'linear-gradient(135deg, #ef4444, #dc2626)',
+                                        color: '#fff',
+                                        border: 'none',
+                                        padding: '10px 16px',
+                                        borderRadius: '6px',
+                                        cursor: workspace.path === currentWorkspace ? 'not-allowed' : 'pointer',
+                                        fontWeight: '600',
+                                        fontSize: '0.9rem'
+                                    }">
+                                🗑️
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -3479,6 +3493,14 @@
                             throw new Error(data.error);
                         }
                         
+                        // Check if there's a message (e.g., no folders enabled)
+                        if (data.message && data.total === 0) {
+                            this.error = data.message;
+                            this.photos = [];
+                            this.totalPhotos = 0;
+                            return;
+                        }
+                        
                         this.photos.push(...data.photos);
                         this.totalPhotos = data.total;
                         this.offset += data.photos.length;
@@ -4299,22 +4321,44 @@
                     }
                 },
                 
-                async deleteWorkspace(path) {
-                    if (path === this.currentWorkspace) {
-                        alert('Cannot delete the currently active workspace. Please switch to another workspace first.');
+                confirmDeleteWorkspace(workspace) {
+                    if (workspace.path === this.currentWorkspace) {
+                        alert('Cannot delete the currently active workspace.\nPlease switch to another workspace first.');
                         return;
                     }
                     
-                    const workspace = this.workspaces.find(w => w.path === path);
-                    const workspaceName = workspace ? workspace.name : path;
+                    const workspaceName = workspace.name || workspace.path;
                     
-                    if (!confirm(`Delete workspace "${workspaceName}"?\n\nPath: ${path}\n\nThis will NOT delete any photos, only remove the workspace configuration.`)) {
+                    // First confirmation: Remove from registry?
+                    if (!confirm(
+                        `Remove Workspace "${workspaceName}"?\n\n` +
+                        `Path: ${workspace.path}\n\n` +
+                        `This will remove the workspace from the registry.\n` +
+                        `Media files will NOT be deleted.\n\n` +
+                        `Continue?`
+                    )) {
                         return;
                     }
                     
+                    // Second confirmation: Delete config.yaml?
+                    const deleteConfig = confirm(
+                        `Delete config.yaml file?\n\n` +
+                        `File: ${workspace.path}/config.yaml\n\n` +
+                        `This will permanently delete the workspace configuration.\n` +
+                        `Media files will remain untouched.\n\n` +
+                        `YES = Delete config.yaml\n` +
+                        `NO = Keep config.yaml (only remove from registry)`
+                    );
+                    
+                    this.deleteWorkspace(workspace.path, deleteConfig);
+                },
+                
+                async deleteWorkspace(path, deleteConfig = false) {
                     try {
                         const res = await fetch(`/api/workspaces/${encodeURIComponent(path)}`, {
-                            method: 'DELETE'
+                            method: 'DELETE',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ delete_config: deleteConfig })
                         });
                         
                         const data = await res.json();
@@ -4326,7 +4370,11 @@
                         // Reload workspaces
                         await this.loadWorkspaces();
                         
-                        alert(`✓ Workspace "${workspaceName}" deleted`);
+                        const msg = deleteConfig 
+                            ? `✓ Workspace removed and config.yaml deleted`
+                            : `✓ Workspace removed from registry (config.yaml kept)`;
+                        
+                        alert(msg);
                     } catch (err) {
                         alert(`Error: ${err.message}`);
                         console.error('Error deleting workspace:', err);

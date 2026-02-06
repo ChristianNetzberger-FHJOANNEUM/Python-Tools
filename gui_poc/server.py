@@ -100,6 +100,7 @@ def get_photos():
     Query params:
         - limit: Max number of photos (default: 100)
         - offset: Skip N photos (default: 0)
+        - load_without_project: If true, load photos even without project (default: true for backward compatibility)
     """
     try:
         # Load workspace and config
@@ -107,11 +108,37 @@ def get_photos():
         ws = Workspace(workspace_path)
         config = load_config(ws.config_file)
         
+        # Get query params
+        from flask import request
+        load_without_project = request.args.get('load_without_project', 'true').lower() == 'true'
+        
+        # Check if we should load photos (project exists or load_without_project=true)
+        if not load_without_project:
+            # Check if any project exists
+            pm = get_project_manager()
+            projects = pm.list_projects()
+            
+            if not projects:
+                # No projects exist - return empty list
+                return jsonify({
+                    'photos': [],
+                    'total': 0,
+                    'offset': 0,
+                    'limit': 0,
+                    'message': 'No projects created yet. Create a project to start working with photos.'
+                })
+        
         # Get only enabled folders
         enabled_folders = get_enabled_folders(workspace_path)
         if not enabled_folders:
-            # Fallback to all folders if none enabled
-            enabled_folders = config.scan.roots
+            # No folders enabled - return empty list
+            return jsonify({
+                'photos': [],
+                'total': 0,
+                'offset': 0,
+                'limit': 0,
+                'message': 'No folders enabled in workspace. Add and enable media folders first.'
+            })
         
         # Get query params
         from flask import request
@@ -1463,12 +1490,21 @@ def get_scan_progress(folder_path):
 
 @app.delete('/api/workspaces/<path:workspace_path>')
 def delete_workspace(workspace_path):
-    """Delete a workspace"""
+    """Delete a workspace from registry and optionally delete config files"""
     try:
-        success = workspace_manager.remove_workspace(workspace_path)
+        from flask import request
+        
+        # Check if we should also delete config files
+        data = request.get_json() if request.is_json else {}
+        delete_config = data.get('delete_config', False)
+        
+        success = workspace_manager.remove_workspace(workspace_path, delete_config=delete_config)
         
         if success:
-            return jsonify({'success': True})
+            return jsonify({
+                'success': True,
+                'message': f"Workspace removed{'and config deleted' if delete_config else ''}"
+            })
         else:
             return jsonify({'error': 'Workspace not found or could not be deleted'}), 404
     
@@ -2076,30 +2112,24 @@ def get_config_info():
                 'size': format_size(get_size(config_path))
             }
             
-            # Get folders from workspace and count their sidecars
+            # Get folders ONLY from current workspace and count their sidecars
             config = load_config(config_path) if config_path.exists() else None
             if config and hasattr(config, 'folders'):
                 for folder in config.folders:
                     folder_path = folder.get('path', '')
                     if folder_path:
                         sidecar_count = count_sidecars(folder_path)
+                        
+                        # Get additional info from media manager if available
+                        media_folder = next((mf for mf in media_manager.folders if mf.path == folder_path), None)
+                        
                         config_info['sidecars'].append({
                             'folder': folder_path,
                             'sidecar_count': sidecar_count,
-                            'enabled': folder.get('enabled', True)
+                            'enabled': folder.get('enabled', True),
+                            'name': media_folder.name if media_folder else None,
+                            'category': media_folder.category if media_folder else None
                         })
-        
-        # Media folders sidecar counts
-        for media_folder in media_manager.folders:
-            # Check if not already in workspace sidecars
-            if not any(s['folder'] == media_folder.path for s in config_info['sidecars']):
-                sidecar_count = count_sidecars(media_folder.path)
-                config_info['sidecars'].append({
-                    'folder': media_folder.path,
-                    'sidecar_count': sidecar_count,
-                    'name': media_folder.name,
-                    'category': media_folder.category
-                })
         
         return jsonify(config_info)
         
