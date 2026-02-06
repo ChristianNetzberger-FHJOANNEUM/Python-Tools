@@ -1313,20 +1313,22 @@
             
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div class="tabs">
-                    <button class="tab" :class="{ active: currentView === 'media' }" @click="switchToMedia">
+                    <button class="tab" :class="{ active: currentView === 'media-manager' }" @click="currentView = 'media-manager'">
                         📱 Media Manager
                     </button>
-                    <button class="tab" :class="{ active: currentView === 'photos' }" @click="switchToPhotosView">
-                        📸 Photos
+                    <button class="tab" :class="{ active: currentView === 'workspaces' }" @click="currentView = 'workspaces'">
+                        🗂️ Workspaces
                     </button>
-                    <button class="tab" :class="{ active: currentView === 'bursts' }" @click="switchToBursts">
-                        📦 Bursts {{ bursts.length > 0 ? `(${bursts.length})` : '' }}
-                    </button>
-                    <button class="tab" :class="{ active: currentView === 'projects' }" @click="switchToProjects">
+                    <button class="tab" :class="{ active: currentView === 'projects' }" @click="currentView = 'projects'">
                         📁 Projects {{ projects.length > 0 ? `(${projects.length})` : '' }}
                     </button>
-                    <button class="tab" :class="{ active: currentView === 'workspaces' }" @click="switchToWorkspaces">
-                        🗂️ Workspaces
+                    <button class="tab" :class="{ active: currentView === 'media' }" @click="currentView = 'media'"
+                            :disabled="!currentProjectId">
+                        🎬 Media {{ currentProjectId && mediaCount > 0 ? `(${mediaCount})` : '' }}
+                    </button>
+                    <button class="tab" :class="{ active: currentView === 'bursts' }" @click="currentView = 'bursts'"
+                            :disabled="!currentProjectId">
+                        📦 Bursts {{ currentProjectId && bursts.length > 0 ? `(${bursts.length})` : '' }}
                     </button>
                 </div>
                 
@@ -1364,7 +1366,7 @@
         </header>
         
         <!-- Media Manager View -->
-        <div v-if="currentView === 'media'">
+        <div v-if="currentView === 'media-manager'">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px;">
                 <div>
                     <h2 style="font-size: 1.5rem; margin: 0 0 10px 0;">📱 Media Manager</h2>

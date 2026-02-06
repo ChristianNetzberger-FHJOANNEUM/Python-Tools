@@ -49,15 +49,29 @@ class QualityDetectionSettings:
 
 
 @dataclass
+class ProjectFolder:
+    """Folder configuration for a project"""
+    path: str
+    enabled: bool = True
+    photo_count: int = 0
+    video_count: int = 0
+    audio_count: int = 0
+
+
+@dataclass
 class Project:
     """Represents a photo project/collection"""
     id: str
     name: str
     created: str
     updated: str
+    workspace_path: str  # Link to parent workspace
+    
+    # Folder selection (NEW!)
+    folders: Optional[List[Dict[str, Any]]] = None  # List of ProjectFolder dicts
     
     # Photo selection
-    selection_mode: str  # 'filter', 'explicit', 'hybrid'
+    selection_mode: str = 'filter'  # 'filter', 'explicit', 'hybrid'
     filters: Optional[ProjectFilters] = None
     photo_ids: Optional[List[str]] = None
     manual_additions: Optional[List[str]] = None
@@ -195,12 +209,24 @@ class ProjectManager:
         self,
         name: str,
         selection_mode: str,
+        workspace_folders: Optional[List[Dict[str, Any]]] = None,
         filters: Optional[Dict[str, Any]] = None,
         photo_ids: Optional[List[str]] = None,
         export_settings: Optional[Dict[str, Any]] = None,
         quality_settings: Optional[Dict[str, Any]] = None
     ) -> Project:
-        """Create a new project"""
+        """
+        Create a new project
+        
+        Args:
+            name: Project name
+            selection_mode: Selection mode ('filter', 'explicit', 'hybrid')
+            workspace_folders: Folders from workspace (will be disabled by default)
+            filters: Optional filters
+            photo_ids: Optional explicit photo IDs
+            export_settings: Optional export settings
+            quality_settings: Optional quality detection settings
+        """
         
         # Generate ID from name
         project_id = name.lower().replace(' ', '-').replace('/', '-')
@@ -210,12 +236,27 @@ class ProjectManager:
         
         now = datetime.now().isoformat()
         
+        # Initialize folders (all disabled by default)
+        folders = None
+        if workspace_folders:
+            folders = []
+            for wf in workspace_folders:
+                folders.append({
+                    'path': wf.get('path'),
+                    'enabled': False,  # Disabled by default!
+                    'photo_count': wf.get('photo_count', 0),
+                    'video_count': wf.get('video_count', 0),
+                    'audio_count': wf.get('audio_count', 0)
+                })
+        
         # Create project with default quality settings
         project = Project(
             id=project_id,
             name=name,
             created=now,
             updated=now,
+            workspace_path=str(self.workspace_path),
+            folders=folders,
             selection_mode=selection_mode,
             filters=ProjectFilters(**filters) if filters else None,
             photo_ids=photo_ids,

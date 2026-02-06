@@ -1908,14 +1908,31 @@ def create_project():
         if not data.get('name'):
             return jsonify({'error': 'Project name is required'}), 400
         
+        # Get workspace folders to create project template
+        workspace_path = get_current_workspace()
+        ws = Workspace(workspace_path)
+        config = load_config(ws.config_file)
+        
+        # Build folder list from workspace
+        workspace_folders = []
+        for folder in config.folders:
+            workspace_folders.append({
+                'path': folder.get('path'),
+                'photo_count': 0,  # Will be updated when enabled
+                'video_count': 0,
+                'audio_count': 0
+            })
+        
         pm = get_project_manager()
         
         project = pm.create_project(
             name=data['name'],
             selection_mode=data.get('selection_mode', 'filter'),
+            workspace_folders=workspace_folders,
             filters=data.get('filters'),
             photo_ids=data.get('photo_ids'),
-            export_settings=data.get('export_settings')
+            export_settings=data.get('export_settings'),
+            quality_settings=data.get('quality_settings')
         )
         
         return jsonify({
@@ -2019,6 +2036,170 @@ def delete_project(project_id):
             return jsonify({'error': 'Failed to delete project'}), 500
     
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.get('/api/projects/<project_id>/media')
+def get_project_media(project_id):
+    """
+    Get all media for a specific project (only enabled folders)
+    Query params:
+        - limit: Max number of items (default: 2500)
+        - offset: Skip N items (default: 0)
+        - type: Filter by type (photo, video, audio, or 'all')
+    """
+    try:
+        from flask import request
+        
+        pm = get_project_manager()
+        project = pm.get_project(project_id)
+        
+        if not project:
+            return jsonify({'error': 'Project not found'}), 404
+        
+        # Get query params
+        limit = int(request.args.get('limit', 2500))
+        offset = int(request.args.get('offset', 0))
+        media_type = request.args.get('type', 'all')
+        
+        # Get enabled folders from project
+        enabled_folders = []
+        if project.folders:
+            enabled_folders = [f['path'] for f in project.folders if f.get('enabled', False)]
+        
+        if not enabled_folders:
+            return jsonify({
+                'photos': [],
+                'videos': [],
+                'audio': [],
+                'total': 0,
+                'message': 'No folders enabled in project. Enable folders in Project tab.'
+            })
+        
+        # Load workspace config for scan settings
+        workspace_path = get_current_workspace()
+        ws = Workspace(workspace_path)
+        config = load_config(ws.config_file)
+        
+        # Scan enabled folders
+        all_media = scan_multiple_directories(
+            enabled_folders,
+            config.scan.extensions,
+            recursive=config.scan.recurse,
+            show_progress=False
+        )
+        
+        # Separate by type
+        photos = filter_by_type(all_media, 'photo')
+        videos = filter_by_type(all_media, 'video')
+        audio = filter_by_type(all_media, 'audio')
+        
+        # Sort photos by capture time (newest first)
+        from datetime import datetime
+        photos_with_times = []
+        for photo in photos:
+            try:
+                capture_time = get_capture_time(photo.path, fallback_to_mtime=True)
+                if capture_time is None:
+                    capture_time = datetime.fromtimestamp(photo.path.stat().st_mtime)
+                photos_with_times.append((photo, capture_time))
+            except Exception as e:
+                photos_with_times.append((photo, datetime.now()))
+        
+        photos_with_times.sort(key=lambda x: x[1], reverse=True)
+        photos = [p[0] for p in photos_with_times]
+        
+        # Apply filters based on type
+        if media_type == 'photo':
+            result_media = photos
+        elif media_type == 'video':
+            result_media = videos
+        elif media_type == 'audio':
+            result_media = audio
+        else:
+            result_media = photos + videos + audio
+        
+        # Paginate
+        result_page = result_media[offset:offset + limit]
+        
+        # Build response
+        result = []
+        for item in result_page:
+            metadata = get_metadata(item.path)
+            
+            # Get relative path
+            relative_path = None
+            for root in enabled_folders:
+                try:
+                    relative_path = str(item.path.relative_to(root))
+                    break
+                except ValueError:
+                    continue
+            
+            if relative_path is None:
+                relative_path = str(item.path)
+            
+            # Get capture time
+            capture_time = get_capture_time(item.path, fallback_to_mtime=True)
+            capture_time_str = capture_time.strftime('%Y-%m-%d %H:%M:%S') if capture_time else None
+            
+            # Get blur scores
+            blur_scores = {
+                'laplacian': metadata.get('blur_score_laplacian'),
+                'tenengrad': metadata.get('blur_score_tenengrad'),
+                'roi': metadata.get('blur_score_roi')
+            }
+            
+            # Get burst info from sidecar
+            from photo_tool.prescan import SidecarManager
+            burst_info = None
+            try:
+                sidecar = SidecarManager(item.path)
+                if sidecar.exists:
+                    sidecar.load()
+                    burst_data = sidecar.get('analyses.burst')
+                    if burst_data:
+                        burst_info = {
+                            'is_burst': burst_data.get('is_burst', False),
+                            'group_id': burst_data.get('group_id'),
+                            'group_size': burst_data.get('group_size', 0),
+                            'position': burst_data.get('position', 0),
+                            'neighbors': burst_data.get('neighbors', {})
+                        }
+            except Exception as e:
+                logger.warning(f"Failed to load burst info: {e}")
+            
+            result.append({
+                'id': str(item.path),
+                'name': item.path.name,
+                'path': str(item.path),
+                'relative_path': relative_path,
+                'type': item.type.value,
+                'size': item.path.stat().st_size,
+                'capture_time': capture_time_str,
+                'rating': metadata.get('rating', 0),
+                'color': metadata.get('color'),
+                'keywords': metadata.get('keywords', []),
+                'blur_scores': blur_scores,
+                'burst': burst_info
+            })
+        
+        return jsonify({
+            'media': result,
+            'total': len(result_media),
+            'offset': offset,
+            'limit': limit,
+            'project_id': project_id,
+            'counts': {
+                'photos': len(photos),
+                'videos': len(videos),
+                'audio': len(audio)
+            }
+        })
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
