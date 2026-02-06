@@ -211,6 +211,171 @@
             transform: translateX(-5px);
         }
         
+        /* === BURST INLINE EXPANSION === */
+        .burst-expanded {
+            grid-column: 1 / -1 !important;
+            max-width: 100% !important;
+            background: rgba(139, 92, 246, 0.15) !important;
+            border: 3px solid #8b5cf6 !important;
+            padding: 20px !important;
+            animation: burst-expand 0.3s ease-out;
+        }
+        
+        @keyframes burst-expand {
+            from {
+                opacity: 0;
+                transform: scaleY(0.8);
+            }
+            to {
+                opacity: 1;
+                transform: scaleY(1);
+            }
+        }
+        
+        .burst-expanded-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid rgba(139, 92, 246, 0.3);
+        }
+        
+        .burst-expanded-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #a78bfa;
+        }
+        
+        .burst-actions {
+            display: flex;
+            gap: 8px;
+        }
+        
+        .burst-action-btn {
+            background: rgba(139, 92, 246, 0.3);
+            border: 2px solid rgba(139, 92, 246, 0.5);
+            color: #a78bfa;
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+        
+        .burst-action-btn:hover {
+            background: rgba(139, 92, 246, 0.5);
+            border-color: #a78bfa;
+            transform: translateY(-2px);
+        }
+        
+        .burst-filmstrip {
+            display: flex;
+            gap: 15px;
+            overflow-x: auto;
+            padding: 10px 0;
+            scroll-behavior: smooth;
+        }
+        
+        .burst-filmstrip::-webkit-scrollbar {
+            height: 8px;
+        }
+        
+        .burst-filmstrip::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 4px;
+        }
+        
+        .burst-filmstrip::-webkit-scrollbar-thumb {
+            background: rgba(139, 92, 246, 0.5);
+            border-radius: 4px;
+        }
+        
+        .burst-filmstrip::-webkit-scrollbar-thumb:hover {
+            background: rgba(139, 92, 246, 0.7);
+        }
+        
+        .burst-photo-item {
+            flex: 0 0 220px;
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 10px;
+            padding: 10px;
+            transition: all 0.3s;
+            position: relative;
+            border: 2px solid transparent;
+        }
+        
+        .burst-photo-item.kept {
+            border-color: #4ade80;
+            background: rgba(74, 222, 128, 0.1);
+            box-shadow: 0 0 0 2px rgba(74, 222, 128, 0.2);
+        }
+        
+        .burst-photo-item:hover {
+            background: rgba(255, 255, 255, 0.12);
+            transform: translateY(-5px);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+        }
+        
+        .burst-keep-toggle {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            color: #aaa;
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+        
+        .burst-keep-toggle:hover {
+            background: rgba(74, 222, 128, 0.2);
+            border-color: rgba(74, 222, 128, 0.5);
+            color: #4ade80;
+        }
+        
+        .burst-keep-toggle.active {
+            background: rgba(74, 222, 128, 0.3);
+            border-color: #4ade80;
+            color: #4ade80;
+        }
+        
+        .burst-photo-item img {
+            width: 100%;
+            height: 150px;
+            object-fit: cover;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        
+        .burst-photo-best-badge {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            background: linear-gradient(135deg, #fbbf24, #f59e0b);
+            color: #000;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            box-shadow: 0 2px 8px rgba(251, 191, 36, 0.5);
+        }
+        
+        .burst-photo-position {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            background: rgba(0, 0, 0, 0.7);
+            color: #fff;
+            padding: 4px 8px;
+            border-radius: 8px;
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+        
         .photo-card img {
             width: 100%;
             height: 180px;
@@ -2020,6 +2185,11 @@
                             <input type="checkbox" v-model="filters.sharp">
                             🟢 Sharp (≥ {{ blurThreshold }})
                         </label>
+                        <label class="filter-chip" :class="{ active: filters.reviewBursts }"
+                               :title="`Hide burst photos that are not marked as 'keep'`">
+                            <input type="checkbox" v-model="filters.reviewBursts">
+                            📦 Review Bursts
+                        </label>
                         
                         <div v-if="activeFilterCount > 0" class="filter-stats">
                             {{ filteredPhotos.length }} of {{ photos.length }} photos
@@ -2153,13 +2323,101 @@
             </div>
             
             <div v-if="filteredPhotos.length > 0" class="grid">
-                <div v-for="(photo, index) in filteredPhotos" 
-                     :key="photo.id" 
-                     class="photo-card"
-                     :class="{ 'burst-container': photo.is_burst_lead }"
-                     @mouseenter="hoveredPhoto = photo.id"
-                     @mouseleave="hoveredPhoto = null; hoverStar = 0"
-                     @click="photo.is_burst_lead && !activeBurstId ? viewBurst(photo.burst_id) : openLightbox(photo, index)">
+                <template v-for="(photo, index) in filteredPhotos" :key="photo.id">
+                    <!-- BURST: Expanded Inline View -->
+                    <div v-if="photo.is_burst_lead && expandedBursts.has(photo.burst_id) && !activeBurstId"
+                         class="photo-card burst-expanded">
+                        
+                        <!-- Burst Header with Actions -->
+                        <div class="burst-expanded-header">
+                            <div class="burst-expanded-title">
+                                📦 Burst: {{ photo.burst_count }} photos
+                                <span style="font-size: 0.85rem; opacity: 0.7; margin-left: 10px;">
+                                    {{ photo.name }}
+                                </span>
+                            </div>
+                            <div class="burst-actions">
+                                <button class="burst-action-btn" @click.stop="keepAllBurst(photo.burst_id)">
+                                    ✓ Keep All
+                                </button>
+                                <button class="burst-action-btn" @click.stop="keepBurstBest(photo.burst_id)">
+                                    ⭐ Keep Best Only
+                                </button>
+                                <button class="burst-action-btn" style="background: rgba(239, 68, 68, 0.2); border-color: rgba(239, 68, 68, 0.5); color: #f87171;"
+                                        @click.stop="unkeepalBurst(photo.burst_id)">
+                                    ✕ Unkeep All
+                                </button>
+                                <button class="burst-action-btn" @click.stop="toggleBurstExpansion(photo.burst_id)">
+                                    ✕ Collapse
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- Horizontal Filmstrip -->
+                        <div class="burst-filmstrip">
+                            <div v-for="(burstPhoto, burstIndex) in getBurstPhotos(photo.burst_id)"
+                                 :key="burstPhoto.id"
+                                 class="burst-photo-item"
+                                 :class="{ kept: burstPhoto.burst_keep }">
+                                
+                                <!-- Position Badge -->
+                                <div class="burst-photo-position">
+                                    #{{ burstIndex + 1 }}
+                                </div>
+                                
+                                <!-- Best Badge (if marked) -->
+                                <div v-if="burstPhoto.rating >= 4" class="burst-photo-best-badge">
+                                    ⭐ BEST
+                                </div>
+                                
+                                <img :src="burstPhoto.thumbnail" 
+                                     :alt="burstPhoto.name"
+                                     @click="openLightbox(burstPhoto, index + burstIndex)"
+                                     loading="lazy">
+                                
+                                <div class="photo-info" style="margin-top: 8px;">
+                                    <!-- Keep Toggle Button -->
+                                    <button @click.stop="toggleBurstKeep(burstPhoto)"
+                                            class="burst-keep-toggle"
+                                            :class="{ active: burstPhoto.burst_keep }"
+                                            :title="burstPhoto.burst_keep ? 'Unkeep this photo' : 'Keep this photo'">
+                                        {{ burstPhoto.burst_keep ? '✓ Keep' : '○ Keep' }}
+                                    </button>
+                                    
+                                    <div style="font-size: 0.75rem; color: #ccc; margin-bottom: 6px; margin-top: 6px;">
+                                        {{ burstPhoto.name }}
+                                    </div>
+                                    
+                                    <!-- Blur Score -->
+                                    <div v-if="getPhotoBlurScore(burstPhoto) !== null" 
+                                         style="font-size: 0.7rem; margin-bottom: 6px; padding: 3px 6px; background: rgba(255,255,255,0.1); border-radius: 4px; display: inline-block;"
+                                         :style="{ color: getBlurScoreColor(getPhotoBlurScore(burstPhoto)) }">
+                                        🔍 {{ Math.round(getPhotoBlurScore(burstPhoto)) }}
+                                    </div>
+                                    
+                                    <!-- Rating Stars (Compact) -->
+                                    <div class="stars" @click.stop style="gap: 2px; margin-top: 6px;">
+                                        <span v-for="n in 5" 
+                                              :key="n" 
+                                              class="star" 
+                                              style="font-size: 18px;"
+                                              :class="{ active: n <= burstPhoto.rating }"
+                                              @click="rate(burstPhoto, n)">
+                                            ★
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- NORMAL or COLLAPSED BURST: Standard Card View -->
+                    <div v-else
+                         class="photo-card"
+                         :class="{ 'burst-container': photo.is_burst_lead && !activeBurstId }"
+                         @mouseenter="hoveredPhoto = photo.id"
+                         @mouseleave="hoveredPhoto = null; hoverStar = 0"
+                         @click="photo.is_burst_lead && !activeBurstId ? toggleBurstExpansion(photo.burst_id) : openLightbox(photo, index)">
                     
                     <img :src="photo.thumbnail" 
                          :alt="photo.name"
@@ -2176,8 +2434,8 @@
                     <!-- Burst Badge (top-right) - Only show on burst lead photos -->
                     <div v-if="photo.is_burst_lead && !activeBurstId"
                          class="burst-badge"
-                         @click.stop="viewBurst(photo.burst_id)"
-                         :title="`Burst group (${photo.burst_count} photos) - Click to view all`">
+                         @click.stop="toggleBurstExpansion(photo.burst_id)"
+                         :title="`Burst group (${photo.burst_count} photos) - Click to expand`">
                         📦 {{ photo.burst_count }}
                     </div>
                     
@@ -2305,7 +2563,7 @@
                             </span>
                         </div>
                     </div>
-                </div>
+                </template>
             </div>
             
             <div v-if="photos.length > 0 && filteredPhotos.length === 0" class="loading">
@@ -3495,6 +3753,7 @@
                     selectedBurst: null,
                     currentBurstPhotoIndex: 0,
                     activeBurstId: null,  // For filtering media tab to show only one burst
+                    expandedBursts: new Set(),  // Track which bursts are expanded inline
                     burstProgress: {
                         show: false,
                         step: '',
@@ -3508,6 +3767,7 @@
                     blurDetectionProgress: null,
                     blurScores: [],
                     blurHistogram: null,
+                    blurThreshold: 100,  // Threshold value for blur detection
                     blurThresholdValue: 0,
                     blurThresholdEnabled: false,
                     applyingThreshold: false,
@@ -3631,7 +3891,8 @@
                         keywords: [],  // Selected keywords to filter by
                         inBursts: false,
                         blurry: false,
-                        sharp: false
+                        sharp: false,
+                        reviewBursts: false  // Show only regular photos + burst photos with burst_keep=true
                     },
                     colorFilterMode: 'include',  // 'include' or 'exclude'
                     sortBy: 'date', // name, date, rating, quality
@@ -3713,6 +3974,17 @@
                         filtered = filtered.filter(p => {
                             const score = this.getPhotoBlurScore(p);
                             return score !== null && score >= this.blurThreshold;
+                        });
+                    }
+                    
+                    // Apply Review Bursts filter
+                    if (this.filters.reviewBursts) {
+                        filtered = filtered.filter(p => {
+                            // Keep all regular photos (not in burst)
+                            if (!p.burst_id) return true;
+                            
+                            // For burst photos: keep only if burst_keep=true
+                            return p.burst_keep === true;
                         });
                     }
                     
@@ -5772,6 +6044,187 @@
                     this.activeBurstId = null;
                     
                     console.log('✓ Exited burst view');
+                },
+                
+                // === BURST EXPANSION METHODS (Phase 2) ===
+                toggleBurstExpansion(burstId) {
+                    if (this.expandedBursts.has(burstId)) {
+                        this.expandedBursts.delete(burstId);
+                        console.log(`✓ Collapsed burst: ${burstId}`);
+                    } else {
+                        this.expandedBursts.add(burstId);
+                        console.log(`✓ Expanded burst: ${burstId}`);
+                    }
+                    
+                    // Force reactivity update for Set
+                    this.expandedBursts = new Set(this.expandedBursts);
+                },
+                
+                getBurstPhotos(burstId) {
+                    // Get all photos belonging to this burst
+                    const burstPhotos = this.photos.filter(p => p.burst_id === burstId);
+                    
+                    console.log(`📦 getBurstPhotos(${burstId}): Found ${burstPhotos.length} photos`);
+                    if (burstPhotos.length > 0) {
+                        console.log(`   Sample photo:`, burstPhotos[0].name, {
+                            burst_id: burstPhotos[0].burst_id,
+                            is_lead: burstPhotos[0].is_burst_lead
+                        });
+                    }
+                    
+                    return burstPhotos.sort((a, b) => {
+                        // Sort by capture time or name
+                        if (a.capture_time && b.capture_time) {
+                            return a.capture_time.localeCompare(b.capture_time);
+                        }
+                        return a.name.localeCompare(b.name);
+                    });
+                },
+                
+                // === BURST KEEP METHODS ===
+                async toggleBurstKeep(photo) {
+                    if (!this.currentProjectId) {
+                        alert('Please select a project first');
+                        return;
+                    }
+                    
+                    try {
+                        const newKeepState = !photo.burst_keep;
+                        
+                        const res = await fetch(`/api/photos/${encodeURIComponent(photo.path)}/burst-keep?project_id=${this.currentProjectId}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ keep: newKeepState })
+                        });
+                        
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        // Update local state
+                        photo.burst_keep = newKeepState;
+                        
+                        console.log(`✓ Burst keep toggled for ${photo.name}: ${newKeepState}`);
+                    } catch (err) {
+                        console.error('Error toggling burst keep:', err);
+                        alert(`Error: ${err.message}`);
+                    }
+                },
+                
+                async keepAllBurst(burstId) {
+                    const burstPhotos = this.getBurstPhotos(burstId);
+                    if (burstPhotos.length === 0) return;
+                    
+                    for (const photo of burstPhotos) {
+                        if (!photo.burst_keep) {
+                            await this.toggleBurstKeep(photo);
+                        }
+                    }
+                    
+                    console.log(`✓ Kept all ${burstPhotos.length} photos in burst`);
+                },
+                
+                async unkeepalBurst(burstId) {
+                    const burstPhotos = this.getBurstPhotos(burstId);
+                    if (burstPhotos.length === 0) return;
+                    
+                    for (const photo of burstPhotos) {
+                        if (photo.burst_keep) {
+                            await this.toggleBurstKeep(photo);
+                        }
+                    }
+                    
+                    console.log(`✓ Unkept all ${burstPhotos.length} photos in burst`);
+                },
+                
+                async markBurstBest(burstId) {
+                    // Find the best photo in the burst (highest blur score)
+                    const burstPhotos = this.getBurstPhotos(burstId);
+                    if (burstPhotos.length === 0) return;
+                    
+                    // Sort by blur score (highest first)
+                    const sortedByQuality = [...burstPhotos].sort((a, b) => {
+                        const scoreA = this.getPhotoBlurScore(a) || 0;
+                        const scoreB = this.getPhotoBlurScore(b) || 0;
+                        return scoreB - scoreA;
+                    });
+                    
+                    const bestPhoto = sortedByQuality[0];
+                    
+                    // Rate it 5 stars
+                    await this.rate(bestPhoto, 5);
+                    
+                    console.log(`✓ Marked ${bestPhoto.name} as best (blur score: ${Math.round(this.getPhotoBlurScore(bestPhoto) || 0)})`);
+                    alert(`✓ Marked ${bestPhoto.name} as BEST (⭐⭐⭐⭐⭐)`);
+                },
+                
+                async keepBurstBest(burstId) {
+                    // Find best photo by blur score, keep ONLY that one, unkeep all others
+                    const burstPhotos = this.getBurstPhotos(burstId);
+                    if (burstPhotos.length === 0) return;
+                    
+                    // Find best by blur score
+                    let bestPhoto = burstPhotos[0];
+                    let bestScore = this.getPhotoBlurScore(bestPhoto) || 0;
+                    
+                    for (const photo of burstPhotos) {
+                        const score = this.getPhotoBlurScore(photo) || 0;
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestPhoto = photo;
+                        }
+                    }
+                    
+                    // Keep ONLY the best photo
+                    for (const photo of burstPhotos) {
+                        if (photo.id === bestPhoto.id) {
+                            if (!photo.burst_keep) {
+                                await this.toggleBurstKeep(photo);
+                            }
+                        } else {
+                            if (photo.burst_keep) {
+                                await this.toggleBurstKeep(photo);
+                            }
+                        }
+                    }
+                    
+                    console.log(`✓ Kept ONLY best photo: ${bestPhoto.name} (blur score: ${Math.round(bestScore)})`);
+                    alert(`✓ Kept ONLY: ${bestPhoto.name}\n(Blur score: ${Math.round(bestScore)})\n\n${burstPhotos.length - 1} other photos unkept`);
+                },
+                
+                async deleteBurstRest(burstId) {
+                    // This would require a backend endpoint to actually delete files
+                    // For now, just mark them with red color for manual deletion
+                    const burstPhotos = this.getBurstPhotos(burstId);
+                    if (burstPhotos.length === 0) return;
+                    
+                    if (!confirm(`⚠️ Mark ${burstPhotos.length - 1} photos for deletion?\n\n(They will be tagged RED for manual deletion)`)) {
+                        return;
+                    }
+                    
+                    // Find best photo
+                    let bestPhoto = burstPhotos[0];
+                    let bestScore = this.getPhotoBlurScore(bestPhoto) || 0;
+                    
+                    for (const photo of burstPhotos) {
+                        const score = this.getPhotoBlurScore(photo) || 0;
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestPhoto = photo;
+                        }
+                    }
+                    
+                    // Mark others as red
+                    for (const photo of burstPhotos) {
+                        if (photo.id !== bestPhoto.id) {
+                            await this.setColor(photo, 'red');
+                        }
+                    }
+                    
+                    console.log(`✓ Marked ${burstPhotos.length - 1} photos as RED for deletion`);
+                    alert(`✓ ${burstPhotos.length - 1} photos marked RED for deletion\n\nFilter by RED color to review and delete them.`);
                 },
                 
                 playSlideshowAuto() {

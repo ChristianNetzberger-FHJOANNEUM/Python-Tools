@@ -351,6 +351,62 @@ def set_photo_color(photo_id):
         return jsonify({'error': str(e)}), 500
 
 
+@app.post('/api/photos/<path:photo_id>/burst-keep')
+def set_photo_burst_keep(photo_id):
+    """
+    Toggle burst_keep flag for a photo (project-specific only)
+    Body: { "keep": true | false }
+    Query Params: { "project_id": "required-project-id" }
+    """
+    try:
+        from flask import request
+        
+        data = request.get_json()
+        keep = data.get('keep', False)
+        
+        # Project ID is REQUIRED for burst_keep
+        project_id = request.args.get('project_id')
+        if not project_id:
+            return jsonify({'error': 'project_id is required for burst_keep'}), 400
+        
+        # Decode photo path
+        photo_path = Path(photo_id)
+        
+        # Save to PROJECT sidecar
+        pm = get_project_manager()
+        project_dir = pm.projects_dir / project_id
+        psm = ProjectSidecarManager(project_dir)
+        
+        # Get or create project sidecar
+        sidecar_path = psm.sidecar_dir / f"{photo_path.stem}.sidecar"
+        
+        if sidecar_path.exists():
+            with open(sidecar_path, 'r', encoding='utf-8') as f:
+                sidecar_data = json.load(f)
+        else:
+            sidecar_data = {}
+        
+        # Set burst_keep flag
+        sidecar_data['burst_keep'] = keep
+        
+        # Save
+        with open(sidecar_path, 'w', encoding='utf-8') as f:
+            json.dump(sidecar_data, f, indent=2)
+        
+        logger.info(f"Set burst_keep for {photo_path.name} in project {project_id}: {keep}")
+        
+        return jsonify({
+            'success': True,
+            'burst_keep': keep,
+            'photo': str(photo_path)
+        })
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 @app.post('/api/photos/<path:photo_id>/keywords')
 def update_photo_keywords(photo_id):
     """
@@ -2267,6 +2323,17 @@ def get_project_media(project_id):
             # 2. Merge with project-specific overrides
             metadata = psm.merge_metadata(global_metadata, item.path)
             
+            # 3. Get burst_keep flag from project sidecar
+            burst_keep = False
+            sidecar_path = psm.sidecar_dir / f"{item.path.stem}.sidecar"
+            if sidecar_path.exists():
+                try:
+                    with open(sidecar_path, 'r', encoding='utf-8') as f:
+                        project_sidecar = json.load(f)
+                        burst_keep = project_sidecar.get('burst_keep', False)
+                except Exception as e:
+                    logger.debug(f"Failed to load burst_keep for {item.path.name}: {e}")
+            
             # Get relative path
             relative_path = None
             for root in enabled_folders:
@@ -2313,6 +2380,7 @@ def get_project_media(project_id):
                 'color': metadata.get('color'),
                 'keywords': metadata.get('keywords', []),
                 'blur_scores': blur_scores,
+                'burst_keep': burst_keep,  # Burst keep flag (project-specific)
                 'thumbnail': f"/thumbnails/{item.path.stem}.jpg",
                 'full_image': f"/images/{item.path.stem}{item.path.suffix}",
                 # Metadata source indicators
@@ -2326,6 +2394,13 @@ def get_project_media(project_id):
         burst_groups = {}  # burst_id -> list of photo paths
         photo_to_burst = {}  # photo_path -> burst_id
         burst_raw_data = {}  # photo_path -> raw sidecar burst data (for debugging)
+        path_by_filename = {}  # filename -> actual path in result (for fixing old sidecar paths)
+        
+        # Build filename lookup for current photos
+        for item_dict in result:
+            if item_dict['type'] == 'photo':
+                filename = Path(item_dict['path']).name
+                path_by_filename[filename] = item_dict['path']
         
         for item_dict in result:
             if item_dict['type'] != 'photo':
@@ -2345,7 +2420,32 @@ def get_project_media(project_id):
                     if burst_data and burst_data.get('is_burst_candidate'):
                         # Collect all photos in this burst group
                         neighbors = burst_data.get('burst_neighbors', [])
-                        all_paths = [item_dict['path']] + [n['path'] for n in neighbors]
+                        
+                        # FIX: Replace neighbor paths with current paths (fixes moved folders)
+                        all_paths = [item_dict['path']]
+                        fixed_neighbors = []
+                        for n in neighbors:
+                            neighbor_path = n['path']
+                            neighbor_filename = Path(neighbor_path).name
+                            
+                            # Try to find the actual current path by filename
+                            if neighbor_filename in path_by_filename:
+                                actual_path = path_by_filename[neighbor_filename]
+                                all_paths.append(actual_path)
+                                fixed_neighbors.append(actual_path)
+                            elif neighbor_path in path_by_filename.values():
+                                # Path is already correct
+                                all_paths.append(neighbor_path)
+                                fixed_neighbors.append(neighbor_path)
+                        
+                        # DEBUG: Log first burst in detail
+                        if len(burst_groups) == 0:
+                            print(f"\n=== FIRST BURST DEBUG ===")
+                            print(f"  Current photo: {item_dict['path']}")
+                            print(f"  Neighbors from sidecar: {[n['path'] for n in neighbors]}")
+                            print(f"  Fixed neighbor paths: {fixed_neighbors}")
+                            print(f"  All paths in group: {all_paths}")
+                            print("=" * 50)
                         
                         # Sort to get consistent burst_id
                         all_paths_sorted = sorted(all_paths)
@@ -2353,24 +2453,27 @@ def get_project_media(project_id):
                         # Generate burst_id from first photo path
                         burst_id = hashlib.md5(all_paths_sorted[0].encode()).hexdigest()[:12]
                         
-                        # Store mapping
+                        # Store mapping for THIS photo
                         photo_to_burst[item_dict['path']] = burst_id
+                        
+                        # ALSO store mapping for ALL neighbors (so they get the same burst_id)
+                        for neighbor_path in all_paths:
+                            if neighbor_path not in photo_to_burst:
+                                photo_to_burst[neighbor_path] = burst_id
                         
                         if burst_id not in burst_groups:
                             burst_groups[burst_id] = {
-                                'photos': [],
+                                'photos': all_paths_sorted,  # Store ALL paths, not just discovered ones
                                 'lead_path': all_paths_sorted[0],  # First photo is lead
                                 'count': len(all_paths)
                             }
-                        
-                        if item_dict['path'] not in burst_groups[burst_id]['photos']:
-                            burst_groups[burst_id]['photos'].append(item_dict['path'])
             except Exception as e:
                 logger.warning(f"Error processing burst for {item_dict['path']}: {e}")
                 import traceback
                 traceback.print_exc()
         
         # Add burst metadata to result items
+        burst_metadata_assigned = 0
         for item_dict in result:
             if item_dict['path'] in photo_to_burst:
                 burst_id = photo_to_burst[item_dict['path']]
@@ -2382,19 +2485,27 @@ def get_project_media(project_id):
                 
                 # Add raw burst data for debugging
                 item_dict['burst_raw_data'] = burst_raw_data.get(item_dict['path'], {})
+                burst_metadata_assigned += 1
             else:
                 item_dict['burst_id'] = None
                 item_dict['burst_count'] = 0
                 item_dict['is_burst_lead'] = False
                 item_dict['burst_raw_data'] = burst_raw_data.get(item_dict['path'], {})
         
+        print(f"\n=== BURST GROUPING RESULTS ===")
+        print(f"Assigned burst metadata to {burst_metadata_assigned} photos out of {len(result)} total")
+        
         total_burst_photos = sum(g['count'] for g in burst_groups.values())
-        logger.info(f"Burst grouping: {len(burst_groups)} groups found with {total_burst_photos} photos in bursts")
+        print(f"Burst grouping: {len(burst_groups)} groups found with {total_burst_photos} photos in bursts")
+        print(f"photo_to_burst mapping has {len(photo_to_burst)} entries")
         
         if len(burst_groups) > 0:
-            logger.info(f"Sample burst groups: {list(burst_groups.keys())[:3]}")
+            print(f"\nSample burst groups: {list(burst_groups.keys())[:3]}")
             for burst_id in list(burst_groups.keys())[:3]:
-                logger.info(f"  Burst {burst_id}: {burst_groups[burst_id]['count']} photos, lead: {Path(burst_groups[burst_id]['lead_path']).name}")
+                group = burst_groups[burst_id]
+                print(f"  Burst {burst_id}: {group['count']} photos, lead: {Path(group['lead_path']).name}")
+                print(f"    All photos: {[Path(p).name for p in group['photos'][:5]]}")
+        print("=" * 50 + "\n")
         
         return jsonify({
             'media': result,
