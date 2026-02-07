@@ -1679,6 +1679,82 @@
                 flex-wrap: wrap;
             }
         }
+        
+        /* === MODAL STYLES === */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.85);
+            backdrop-filter: blur(8px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+            animation: fadeIn 0.2s ease-in;
+        }
+        
+        .modal-content {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
+            max-width: 95vw;
+            max-height: 95vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px;
+            border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.03);
+        }
+        
+        .modal-header h2 {
+            margin: 0;
+            color: #fff;
+        }
+        
+        .quick-rate-btn {
+            background: rgba(251, 191, 36, 0.1);
+            border: 2px solid rgba(251, 191, 36, 0.3);
+            color: #fbbf24;
+            padding: 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s;
+            font-size: 0.85rem;
+        }
+        
+        .quick-rate-btn:hover {
+            background: rgba(251, 191, 36, 0.3);
+            border-color: #fbbf24;
+            transform: scale(1.05);
+        }
+        
+        .quick-rate-btn.rate-delete {
+            background: rgba(239, 68, 68, 0.2);
+            border-color: rgba(239, 68, 68, 0.5);
+            color: #ef4444;
+        }
+        
+        .quick-rate-btn.rate-delete:hover {
+            background: rgba(239, 68, 68, 0.3);
+            border-color: #ef4444;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
     </style>
 </head>
 <body>
@@ -2062,7 +2138,40 @@
             <!-- Filter Bar -->
             <div v-if="photos.length > 0" class="filter-bar">
                 <div class="filter-section">
-                    <div class="filter-label">⭐ Rating</div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <div class="filter-label">⭐ Rating</div>
+                        <!-- Quick Rate All Dropdown -->
+                        <div style="position: relative;">
+                            <button @click="showQuickRateMenu = !showQuickRateMenu"
+                                    style="background: rgba(139, 92, 246, 0.2); border: 2px solid rgba(139, 92, 246, 0.5); color: #a78bfa; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 600; transition: all 0.2s;"
+                                    :style="{ 
+                                        background: showQuickRateMenu ? 'rgba(139, 92, 246, 0.3)' : 'rgba(139, 92, 246, 0.2)'
+                                    }">
+                                ⚡ Quick Rate {{ showQuickRateMenu ? '▲' : '▼' }}
+                            </button>
+                            
+                            <!-- Quick Rate Menu -->
+                            <div v-if="showQuickRateMenu" 
+                                 style="position: absolute; top: 100%; right: 0; margin-top: 6px; background: rgba(20, 20, 30, 0.98); border: 2px solid rgba(139, 92, 246, 0.5); border-radius: 8px; padding: 12px; min-width: 280px; z-index: 1000; box-shadow: 0 8px 24px rgba(0,0,0,0.8);"
+                                 @click.stop>
+                                <div style="font-size: 0.85rem; margin-bottom: 10px; color: #a78bfa; font-weight: 600;">
+                                    Rate all {{ filteredPhotos.length }} visible photos:
+                                </div>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                                    <button v-for="rating in [0, 1, 2, 3, 4, 5]" :key="rating"
+                                            @click="rateAllFiltered(rating)"
+                                            class="quick-rate-btn"
+                                            :class="{ 'rate-delete': rating === 0 }"
+                                            :title="rating === 0 ? 'Mark for deletion (0 stars)' : `Rate all with ${rating} stars`">
+                                        {{ rating === 0 ? '✗ Delete' : '★'.repeat(rating) + '☆'.repeat(5 - rating) }}
+                                    </button>
+                                </div>
+                                <div style="margin-top: 10px; padding: 8px; background: rgba(239, 68, 68, 0.15); border-radius: 6px; border-left: 3px solid #ef4444; font-size: 0.75rem; color: #fca5a5;">
+                                    ⚠️ This will rate ALL {{ filteredPhotos.length }} currently visible photos. Use filters first to narrow selection!
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                     <div class="filter-options">
                         <label class="filter-chip" :class="{ active: filters.ratings[0] }">
                             <input type="checkbox" v-model="filters.ratings[0]">
@@ -2346,6 +2455,10 @@
                                 <button class="burst-action-btn" style="background: rgba(239, 68, 68, 0.2); border-color: rgba(239, 68, 68, 0.5); color: #f87171;"
                                         @click.stop="unkeepalBurst(photo.burst_id)">
                                     ✕ Unkeep All
+                                </button>
+                                <button class="burst-action-btn" style="background: rgba(139, 92, 246, 0.2); border-color: rgba(139, 92, 246, 0.5); color: #a78bfa;"
+                                        @click.stop="openBurstDebugModal(photo)">
+                                    🔧 Debug
                                 </button>
                                 <button class="burst-action-btn" @click.stop="toggleBurstExpansion(photo.burst_id)">
                                     ✕ Collapse
@@ -3726,6 +3839,105 @@
                 </div>
             </div>
         </div>
+        
+        <!-- Burst Debug Modal -->
+        <div v-if="burstDebugModal" class="modal-overlay" @click.self="burstDebugModal = null">
+            <div class="modal-content" style="max-width: 800px; max-height: 90vh; overflow-y: auto;">
+                <div class="modal-header">
+                    <h2 style="margin: 0;">🔧 Burst Debug Information</h2>
+                    <button @click="burstDebugModal = null" style="background: none; border: none; font-size: 1.5rem; color: #888; cursor: pointer;">×</button>
+                </div>
+                
+                <div style="padding: 20px; color: #fff;">
+                    <!-- Basic Info -->
+                    <div style="background: rgba(139, 92, 246, 0.15); padding: 15px; border-radius: 8px; border-left: 4px solid #8b5cf6; margin-bottom: 20px;">
+                        <h3 style="margin: 0 0 10px 0; color: #a78bfa;">📦 Burst Overview</h3>
+                        <div style="display: grid; grid-template-columns: auto 1fr; gap: 8px 15px; font-size: 0.9rem;">
+                            <strong>Burst ID:</strong> <code style="background: rgba(0,0,0,0.3); padding: 2px 6px; border-radius: 4px;">{{ burstDebugModal.burst_id }}</code>
+                            <strong>Lead Photo:</strong> <span>{{ burstDebugModal.name }}</span>
+                            <strong>Burst Count:</strong> <span>{{ burstDebugModal.burst_count }}</span>
+                            <strong>Is Burst Lead:</strong> <span :style="{ color: burstDebugModal.is_burst_lead ? '#4ade80' : '#ef4444' }">{{ burstDebugModal.is_burst_lead ? '✓ YES' : '✗ NO' }}</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Raw Sidecar Data -->
+                    <div style="background: rgba(59, 130, 246, 0.15); padding: 15px; border-radius: 8px; border-left: 4px solid #3b82f6; margin-bottom: 20px;">
+                        <h3 style="margin: 0 0 10px 0; color: #60a5fa;">📄 Raw Sidecar Data</h3>
+                        <div v-if="burstDebugModal.burst_raw_data && Object.keys(burstDebugModal.burst_raw_data).length > 0" style="font-size: 0.85rem;">
+                            <div style="display: grid; grid-template-columns: auto 1fr; gap: 8px 15px;">
+                                <strong>is_burst_candidate:</strong> 
+                                <span :style="{ color: burstDebugModal.burst_raw_data.is_burst_candidate ? '#4ade80' : '#ef4444' }">
+                                    {{ burstDebugModal.burst_raw_data.is_burst_candidate }}
+                                </span>
+                                
+                                <strong>burst_group_size:</strong> 
+                                <span>{{ burstDebugModal.burst_raw_data.burst_group_size || 'N/A' }}</span>
+                                
+                                <strong>neighbors count:</strong> 
+                                <span>{{ burstDebugModal.burst_raw_data.burst_neighbors ? burstDebugModal.burst_raw_data.burst_neighbors.length : 0 }}</span>
+                            </div>
+                            
+                            <!-- Neighbors List -->
+                            <div v-if="burstDebugModal.burst_raw_data.burst_neighbors && burstDebugModal.burst_raw_data.burst_neighbors.length > 0" 
+                                 style="margin-top: 15px; padding: 12px; background: rgba(0,0,0,0.3); border-radius: 6px; max-height: 200px; overflow-y: auto;">
+                                <strong style="display: block; margin-bottom: 8px; color: #a78bfa;">Neighbors from Sidecar:</strong>
+                                <div v-for="(neighbor, idx) in burstDebugModal.burst_raw_data.burst_neighbors" :key="idx" 
+                                     style="font-family: monospace; font-size: 0.75rem; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.05);">
+                                    <span style="color: #888;">{{ idx + 1 }}.</span> 
+                                    <span style="color: #60a5fa;">{{ typeof neighbor === 'string' ? neighbor.split('\\').pop() : JSON.stringify(neighbor) }}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div v-else style="color: #888; font-style: italic;">No raw sidecar data available</div>
+                    </div>
+                    
+                    <!-- Loaded Photos -->
+                    <div style="background: rgba(74, 222, 128, 0.15); padding: 15px; border-radius: 8px; border-left: 4px solid #4ade80; margin-bottom: 20px;">
+                        <h3 style="margin: 0 0 10px 0; color: #4ade80;">✅ Loaded Photos in Burst</h3>
+                        <div style="display: flex; align-items: baseline; gap: 15px; margin-bottom: 10px;">
+                            <strong>Photos Found:</strong> 
+                            <span style="font-size: 1.2rem;">{{ getBurstPhotos(burstDebugModal.burst_id).length }}</span>
+                        </div>
+                        
+                        <!-- Mismatch Warning -->
+                        <div v-if="getBurstPhotos(burstDebugModal.burst_id).length !== burstDebugModal.burst_count"
+                             style="background: rgba(239, 68, 68, 0.2); border: 2px solid #ef4444; border-radius: 6px; padding: 12px; margin-bottom: 15px;">
+                            <strong style="color: #ef4444;">⚠️ MISMATCH DETECTED!</strong>
+                            <div style="margin-top: 8px; font-size: 0.85rem;">
+                                <div>Expected: <strong>{{ burstDebugModal.burst_count }} photos</strong></div>
+                                <div>Found: <strong>{{ getBurstPhotos(burstDebugModal.burst_id).length }} photos</strong></div>
+                                <div style="margin-top: 8px; color: #fca5a5;">
+                                    Missing {{ burstDebugModal.burst_count - getBurstPhotos(burstDebugModal.burst_id).length }} photo(s)
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Photos List -->
+                        <div style="max-height: 300px; overflow-y: auto; background: rgba(0,0,0,0.3); border-radius: 6px; padding: 12px;">
+                            <div v-for="(bp, idx) in getBurstPhotos(burstDebugModal.burst_id)" :key="bp.id"
+                                 style="display: flex; align-items: center; gap: 12px; padding: 8px; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 0.85rem;">
+                                <span style="color: #888; min-width: 25px;">{{ idx + 1 }}.</span>
+                                <img :src="bp.thumbnail" style="width: 60px; height: 45px; object-fit: cover; border-radius: 4px;">
+                                <div style="flex: 1;">
+                                    <div style="font-family: monospace; color: #60a5fa;">{{ bp.name }}</div>
+                                    <div style="font-size: 0.75rem; color: #888; margin-top: 2px;">
+                                        <span v-if="bp.is_burst_lead" style="color: #a78bfa;">👑 Lead</span>
+                                        <span v-if="bp.burst_keep" style="color: #4ade80; margin-left: 8px;">✓ Keep</span>
+                                        <span v-if="bp.rating" style="color: #fbbf24; margin-left: 8px;">⭐ {{ bp.rating }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Raw JSON -->
+                    <div style="background: rgba(255,255,255,0.05); padding: 15px; border-radius: 8px;">
+                        <h3 style="margin: 0 0 10px 0; color: #888;">📋 Raw JSON Data</h3>
+                        <pre style="background: rgba(0,0,0,0.5); padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 0.75rem; color: #aaa; max-height: 300px; overflow-y: auto;">{{ JSON.stringify(burstDebugModal, null, 2) }}</pre>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -3754,6 +3966,8 @@
                     currentBurstPhotoIndex: 0,
                     activeBurstId: null,  // For filtering media tab to show only one burst
                     expandedBursts: new Set(),  // Track which bursts are expanded inline
+                    burstDebugModal: null,  // Photo object for burst debug modal
+                    showQuickRateMenu: false,  // Toggle for Quick Rate All dropdown
                     burstProgress: {
                         show: false,
                         step: '',
@@ -3910,12 +4124,14 @@
                     
                     // === BURST FILTERING ===
                     // If viewing a specific burst, show only those photos
+                    // If Review Bursts filter is active, show ALL photos (filter by burst_keep later)
                     // Otherwise, show only lead photos (collapse bursts into containers)
                     if (this.activeBurstId) {
                         // Show only photos from this burst
                         filtered = filtered.filter(p => p.burst_id === this.activeBurstId);
-                    } else {
-                        // Show only lead photos (or photos not in bursts)
+                    } else if (!this.filters.reviewBursts) {
+                        // Normal mode: Show only lead photos (or photos not in bursts)
+                        // Skip this if reviewBursts is active (we want to see ALL photos to filter by burst_keep)
                         filtered = filtered.filter(p => !p.burst_id || p.is_burst_lead);
                     }
                     
@@ -3979,13 +4195,19 @@
                     
                     // Apply Review Bursts filter
                     if (this.filters.reviewBursts) {
+                        const beforeCount = filtered.length;
                         filtered = filtered.filter(p => {
                             // Keep all regular photos (not in burst)
                             if (!p.burst_id) return true;
                             
                             // For burst photos: keep only if burst_keep=true
-                            return p.burst_keep === true;
+                            const shouldKeep = p.burst_keep === true;
+                            if (p.burst_id && shouldKeep) {
+                                console.log(`✓ Keeping burst photo: ${p.name} (burst_keep: ${p.burst_keep})`);
+                            }
+                            return shouldKeep;
                         });
+                        console.log(`📦 Review Bursts: ${beforeCount} → ${filtered.length} photos (filtered out ${beforeCount - filtered.length} unkept burst photos)`);
                     }
                     
                     // Apply sorting
@@ -5539,6 +5761,59 @@
                     await this.rate(photo, stars);
                 },
                 
+                async rateAllFiltered(rating) {
+                    // Rate all currently visible/filtered photos
+                    if (!this.currentProjectId) {
+                        alert('Bitte wähle zuerst ein Projekt aus');
+                        return;
+                    }
+                    
+                    const photosToRate = [...this.filteredPhotos];
+                    const count = photosToRate.length;
+                    
+                    const confirmMsg = rating === 0 
+                        ? `⚠️ Alle ${count} sichtbaren Fotos auf 0 Sterne (DELETE) setzen?\n\nDies ist gut für den ersten Durchgang, um schlechte Fotos zu markieren.`
+                        : `⭐ Alle ${count} sichtbaren Fotos mit ${rating} Stern${rating > 1 ? 'en' : ''} bewerten?`;
+                    
+                    if (!confirm(confirmMsg)) {
+                        return;
+                    }
+                    
+                    console.log(`⚡ Starting Quick Rate All: ${count} photos → ${rating} stars`);
+                    
+                    let successCount = 0;
+                    let errorCount = 0;
+                    
+                    // Rate photos in batches for better performance
+                    for (let i = 0; i < photosToRate.length; i++) {
+                        const photo = photosToRate[i];
+                        
+                        try {
+                            await this.rate(photo, rating);
+                            successCount++;
+                            
+                            // Show progress every 10 photos
+                            if ((i + 1) % 10 === 0 || i === photosToRate.length - 1) {
+                                console.log(`⚡ Progress: ${i + 1}/${count} (${Math.round((i + 1) / count * 100)}%)`);
+                            }
+                        } catch (err) {
+                            console.error(`Error rating ${photo.name}:`, err);
+                            errorCount++;
+                        }
+                    }
+                    
+                    // Close menu
+                    this.showQuickRateMenu = false;
+                    
+                    // Show result
+                    const resultMsg = errorCount > 0
+                        ? `✓ Rated ${successCount} photos with ${rating} star${rating !== 1 ? 's' : ''}\n⚠️ ${errorCount} errors`
+                        : `✓ Alle ${successCount} Fotos erfolgreich mit ${rating} Stern${rating !== 1 ? 'en' : ''} bewertet!`;
+                    
+                    alert(resultMsg);
+                    console.log(`⚡ Quick Rate All completed: ${successCount} success, ${errorCount} errors`);
+                },
+                
                 openBurstViewer(burst) {
                     this.selectedBurst = burst;
                     this.currentBurstPhotoIndex = 0;
@@ -6060,16 +6335,31 @@
                     this.expandedBursts = new Set(this.expandedBursts);
                 },
                 
+                openBurstDebugModal(photo) {
+                    // Open debug modal with full burst information
+                    this.burstDebugModal = photo;
+                    console.log('🔧 Opened burst debug modal for:', photo.name);
+                },
+                
                 getBurstPhotos(burstId) {
                     // Get all photos belonging to this burst
                     const burstPhotos = this.photos.filter(p => p.burst_id === burstId);
                     
+                    // Find the lead photo to check burst_count
+                    const leadPhoto = burstPhotos.find(p => p.is_burst_lead);
+                    
                     console.log(`📦 getBurstPhotos(${burstId}): Found ${burstPhotos.length} photos`);
-                    if (burstPhotos.length > 0) {
-                        console.log(`   Sample photo:`, burstPhotos[0].name, {
-                            burst_id: burstPhotos[0].burst_id,
-                            is_lead: burstPhotos[0].is_burst_lead
-                        });
+                    if (leadPhoto && leadPhoto.burst_count !== burstPhotos.length) {
+                        console.warn(`⚠️ BURST MISMATCH for ${burstId}:`);
+                        console.warn(`   Lead photo: ${leadPhoto.name}`);
+                        console.warn(`   burst_count: ${leadPhoto.burst_count}`);
+                        console.warn(`   Actual photos found: ${burstPhotos.length}`);
+                        console.warn(`   All photos in burst:`, burstPhotos.map(p => p.name));
+                        if (leadPhoto.burst_raw_data && leadPhoto.burst_raw_data.burst_neighbors) {
+                            console.warn(`   Neighbors in sidecar:`, leadPhoto.burst_raw_data.burst_neighbors.map(n => 
+                                typeof n === 'string' ? n.split('\\').pop() : JSON.stringify(n)
+                            ));
+                        }
                     }
                     
                     return burstPhotos.sort((a, b) => {
@@ -6409,6 +6699,11 @@
                 
                 // Note: Photos/media are loaded when a project is activated
                 // Bursts are loaded automatically after media is loaded
+                
+                // Close Quick Rate menu when clicking outside
+                document.addEventListener('click', () => {
+                    this.showQuickRateMenu = false;
+                });
             }
         }).mount('#app');
     </script>
