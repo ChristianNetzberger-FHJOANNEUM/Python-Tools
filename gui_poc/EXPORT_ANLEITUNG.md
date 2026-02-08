@@ -1,4 +1,4 @@
-# 📦🎬🎵 Gallery Export Anleitung
+# 📦🎬🎵 Gallery Export Anleitung  
 
 **Alles zentral in der Photo Tool Web GUI!**
 

@@ -3307,94 +3307,141 @@
         
         <!-- Export Modal -->
         <div v-if="showExportModal" class="modal" @click.self="showExportModal = false">
-            <div class="modal-content" style="max-width: 600px;">
-                <div class="modal-header">
+            <div class="modal-content" style="max-width: 500px; max-height: 85vh; display: flex; flex-direction: column;">
+                <div class="modal-header" style="flex-shrink: 0;">
                     <div class="modal-title">📦 Export Web Gallery</div>
                     <button class="close-btn" @click="showExportModal = false">×</button>
                 </div>
                 
-                <div style="padding: 20px 0;">
-                    <p style="color: #888; margin-bottom: 20px;">
+                <div style="padding: 15px 20px; overflow-y: auto; flex: 1;">
+                    <p style="color: #888; margin-bottom: 15px; font-size: 0.9rem;">
                         Export {{ filteredPhotos.length }} photos as a standalone HTML gallery.
                     </p>
                     
-                    <div style="margin-bottom: 20px;">
-                        <label style="display: block; margin-bottom: 8px; color: #aaa; font-size: 0.9rem;">
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 6px; color: #aaa; font-size: 0.85rem;">
                             Gallery Title
                         </label>
                         <input v-model="exportTitle"
                                type="text"
                                placeholder="My Photo Gallery"
-                               style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 12px; border-radius: 8px; font-size: 1rem; outline: none;">
+                               style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 10px; border-radius: 8px; font-size: 0.95rem; outline: none;">
                     </div>
                     
-                    <div style="margin-bottom: 20px;">
-                        <label style="display: block; margin-bottom: 8px; color: #aaa; font-size: 0.9rem;">
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 6px; color: #aaa; font-size: 0.85rem;">
                             Template
                         </label>
                         <select v-model="exportTemplate"
-                                style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 12px; border-radius: 8px; font-size: 1rem; outline: none; cursor: pointer;">
+                                style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 10px; border-radius: 8px; font-size: 0.95rem; outline: none; cursor: pointer;">
                             <option value="photoswipe" style="background: #1a1a1a;">📸 PhotoSwipe (Modern Lightbox)</option>
                             <option value="slideshow" style="background: #1a1a1a;">🎬 Fullscreen Slideshow (Music Support)</option>
                             <option value="simple" style="background: #1a1a1a;">🖼️ Simple Grid (No dependencies)</option>
                         </select>
                     </div>
                     
+                    <!-- 🎯 Export Profile Selection -->
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 6px; color: #aaa; font-size: 0.85rem;">
+                            🎯 Optimization Profile
+                        </label>
+                        <select v-model="exportProfile"
+                                @change="updateProfileInfo"
+                                style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 10px; border-radius: 8px; font-size: 0.95rem; outline: none; cursor: pointer;">
+                            <option value="smart_tv" style="background: #1a1a1a;">📺 Smart TV (4K) - Samsung/LG</option>
+                            <option value="smart_tv_fullhd" style="background: #1a1a1a;">📺 Smart TV (Full HD)</option>
+                            <option value="web" style="background: #1a1a1a;">🌐 Web Gallery - 1920×1280, Good Balance</option>
+                            <option value="web_optimized" style="background: #1a1a1a;">🚀 Web Optimized - Fast loading</option>
+                            <option value="archive" style="background: #1a1a1a;">💎 Archive - Max Quality</option>
+                        </select>
+                        
+                        <!-- Profile Info -->
+                        <div style="margin-top: 6px; padding: 8px; background: rgba(59, 130, 246, 0.1); border-radius: 6px; font-size: 0.8rem; color: #93c5fd; line-height: 1.3;">
+                            <span v-if="exportProfile === 'smart_tv'">
+                                🌟 4K quality for Samsung/LG Smart TV via NAS (3840×2160, Q92)
+                            </span>
+                            <span v-else-if="exportProfile === 'smart_tv_fullhd'">
+                                📺 Full HD for Smart TV (1920×1080, Q90)
+                            </span>
+                            <span v-else-if="exportProfile === 'web'">
+                                🌐 Standard web gallery. Good balance quality/size (650 KB/photo)
+                            </span>
+                            <span v-else-if="exportProfile === 'web_optimized'">
+                                🚀 Highly optimized for web. Fast loading (450 KB/photo)
+                            </span>
+                            <span v-else-if="exportProfile === 'archive'">
+                                💎 High quality archive. Max resolution & quality (2-3 MB/photo)
+                            </span>
+                        </div>
+                    </div>
+                    
+                    <!-- WebP Option (for web profiles) -->
+                    <div v-if="exportProfile === 'web' || exportProfile === 'web_optimized'" style="margin-bottom: 15px;">
+                        <label style="display: flex; align-items: center; cursor: pointer; color: #aaa; font-size: 0.85rem;">
+                            <input type="checkbox" 
+                                   v-model="exportWebP" 
+                                   style="margin-right: 8px; width: 16px; height: 16px; cursor: pointer;">
+                            <span>
+                                🚀 Generate WebP (50% smaller files)
+                            </span>
+                        </label>
+                    </div>
+                    
                     <!-- 🆕 Slideshow Settings -->
-                    <div style="background: rgba(138, 43, 226, 0.1); padding: 15px; border-radius: 8px; border: 1px solid rgba(138, 43, 226, 0.3); margin-bottom: 20px;">
-                        <div style="font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                    <div style="background: rgba(138, 43, 226, 0.1); padding: 12px; border-radius: 8px; border: 1px solid rgba(138, 43, 226, 0.3); margin-bottom: 15px;">
+                        <div style="font-weight: 600; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; font-size: 0.9rem;">
                             <span>🎬</span> Slideshow Settings
                         </div>
                         
-                        <label style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px; cursor: pointer;">
+                        <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px; cursor: pointer;">
                             <input type="checkbox" v-model="exportSlideshowEnabled" 
-                                   style="width: 18px; height: 18px; cursor: pointer; accent-color: #8a2be2;">
-                            <span style="font-size: 0.9rem;">Enable Slideshow Mode</span>
+                                   style="width: 16px; height: 16px; cursor: pointer; accent-color: #8a2be2;">
+                            <span style="font-size: 0.85rem;">Enable Slideshow Mode</span>
                         </label>
                         
                         <div v-if="exportSlideshowEnabled">
-                            <label style="display: block; margin-bottom: 8px; color: #aaa; font-size: 0.85rem;">
+                            <label style="display: block; margin-bottom: 6px; color: #aaa; font-size: 0.8rem;">
                                 Duration per Photo
                             </label>
-                            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
+                            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
                                 <input type="range" v-model.number="exportSlideshowDuration" 
                                        min="2" max="15" step="1"
                                        style="flex: 1; accent-color: #8a2be2;">
-                                <span style="min-width: 50px; font-weight: 600;">{{ exportSlideshowDuration }}s</span>
+                                <span style="min-width: 40px; font-weight: 600; font-size: 0.9rem;">{{ exportSlideshowDuration }}s</span>
                             </div>
                             
-                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                                 <input type="checkbox" v-model="exportSmartTVMode" 
-                                       style="width: 18px; height: 18px; cursor: pointer; accent-color: #8a2be2;">
-                                <span style="font-size: 0.85rem;">📺 Smart TV Mode (larger buttons)</span>
+                                       style="width: 16px; height: 16px; cursor: pointer; accent-color: #8a2be2;">
+                                <span style="font-size: 0.8rem;">📺 Smart TV Mode (larger buttons)</span>
                             </label>
                         </div>
                     </div>
                     
                     <!-- 🆕 Music Settings -->
-                    <div style="background: rgba(59, 130, 246, 0.1); padding: 15px; border-radius: 8px; border: 1px solid rgba(59, 130, 246, 0.3); margin-bottom: 20px;">
-                        <div style="font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                    <div style="background: rgba(59, 130, 246, 0.1); padding: 12px; border-radius: 8px; border: 1px solid rgba(59, 130, 246, 0.3); margin-bottom: 15px;">
+                        <div style="font-weight: 600; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; font-size: 0.9rem;">
                             <span>🎵</span> Background Music (Optional)
                         </div>
                         
-                        <p style="font-size: 0.85rem; color: #888; margin-bottom: 12px;">
+                        <p style="font-size: 0.8rem; color: #888; margin-bottom: 10px;">
                             Add music file paths (MP3 recommended), one per line:
                         </p>
                         
                         <textarea v-model="exportMusicFiles"
                                   placeholder="C:/Music/track1.mp3&#10;C:/Music/track2.mp3"
-                                  rows="3"
-                                  style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.2); color: #fff; padding: 10px; border-radius: 6px; font-size: 0.9rem; font-family: monospace; resize: vertical;">
+                                  rows="2"
+                                  style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.2); color: #fff; padding: 8px; border-radius: 6px; font-size: 0.85rem; font-family: monospace; resize: vertical;">
                         </textarea>
                         
-                        <div style="font-size: 0.75rem; color: #666; margin-top: 8px;">
+                        <div style="font-size: 0.7rem; color: #666; margin-top: 6px;">
                             💡 Tip: Use absolute paths like C:/Music/song.mp3
                         </div>
                     </div>
                     
-                    <div style="background: rgba(74, 222, 128, 0.1); padding: 15px; border-radius: 8px; border: 1px solid rgba(74, 222, 128, 0.3); margin-bottom: 20px;">
-                        <div style="font-size: 0.85rem; color: #aaa; margin-bottom: 8px;">Will export:</div>
-                        <div style="font-size: 0.9rem;">
+                    <div style="background: rgba(74, 222, 128, 0.1); padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(74, 222, 128, 0.3); margin-bottom: 15px;">
+                        <div style="font-size: 0.8rem; color: #aaa; margin-bottom: 6px;">Will export:</div>
+                        <div style="font-size: 0.85rem; line-height: 1.5;">
                             ✓ {{ filteredPhotos.length }} photos<br>
                             ✓ Ratings & Color Labels<br>
                             ✓ Keywords/Tags<br>
@@ -3407,28 +3454,28 @@
                     </div>
                     
                     <!-- Progress Bar -->
-                    <div v-if="exportProgress.show" style="background: rgba(74, 222, 128, 0.1); padding: 15px; border-radius: 8px; margin-bottom: 15px; border: 2px solid rgba(74, 222, 128, 0.3);">
-                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 0.9rem;">
+                    <div v-if="exportProgress.show" style="background: rgba(74, 222, 128, 0.1); padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; border: 2px solid rgba(74, 222, 128, 0.3);">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 0.85rem;">
                             <span>{{ exportProgress.message }}</span>
                             <span>{{ exportProgress.current }} / {{ exportProgress.total }}</span>
                         </div>
-                        <div style="background: rgba(0,0,0,0.3); height: 8px; border-radius: 4px; overflow: hidden;">
+                        <div style="background: rgba(0,0,0,0.3); height: 6px; border-radius: 3px; overflow: hidden;">
                             <div style="background: linear-gradient(90deg, #4ade80, #3b82f6); height: 100%; transition: width 0.3s ease;"
                                  :style="{ width: exportProgress.total > 0 ? (exportProgress.current / exportProgress.total * 100) + '%' : '0%' }">
                             </div>
                         </div>
                     </div>
                     
-                    <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                    <div style="display: flex; gap: 8px; margin-bottom: 8px;">
                         <button @click="showNewProjectModal = true; showExportModal = false;" 
-                                style="flex: 1; background: rgba(59, 130, 246, 0.2); border: 2px solid rgba(59, 130, 246, 0.5); color: #3b82f6; padding: 12px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.9rem; transition: all 0.3s;">
+                                style="flex: 1; background: rgba(59, 130, 246, 0.2); border: 2px solid rgba(59, 130, 246, 0.5); color: #3b82f6; padding: 10px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.85rem; transition: all 0.3s;">
                             💾 Save as Project
                         </button>
                     </div>
                     
                     <button @click="exportGallery" 
                             :disabled="exporting"
-                            style="width: 100%; background: linear-gradient(135deg, #4ade80, #3b82f6); color: white; border: none; padding: 14px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 1rem; transition: all 0.3s;">
+                            style="width: 100%; background: linear-gradient(135deg, #4ade80, #3b82f6); color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.95rem; transition: all 0.3s;">
                         {{ exporting ? 'Exporting...' : '📦 Export Gallery' }}
                     </button>
                 </div>
@@ -4000,6 +4047,8 @@
                     showExportModal: false,
                     exportTitle: '',
                     exportTemplate: 'photoswipe',
+                    exportProfile: 'web',              // 🎯 Export optimization profile
+                    exportWebP: false,                 // 🚀 WebP generation
                     exportSlideshowEnabled: true,      // 🆕 Slideshow enabled by default
                     exportSlideshowDuration: 5,        // 🆕 5 seconds per photo
                     exportSmartTVMode: false,          // 🆕 Smart TV mode
@@ -6094,6 +6143,13 @@
                     this.exportTitle = `Photo Gallery - ${new Date().toISOString().split('T')[0]}`;
                 },
                 
+                updateProfileInfo() {
+                    // Auto-enable WebP for web_optimized profile
+                    if (this.exportProfile === 'web_optimized') {
+                        this.exportWebP = true;
+                    }
+                },
+                
                 async exportGallery() {
                     if (!this.exportTitle.trim()) {
                         alert('Please enter a gallery title');
@@ -6129,6 +6185,8 @@
                                 title: this.exportTitle,
                                 output_name: outputName,
                                 template: this.exportTemplate,
+                                profile: this.exportProfile,           // 🎯 Export profile
+                                generate_webp: this.exportWebP,        // 🚀 WebP generation
                                 // 🆕 NEW PARAMETERS
                                 slideshow_enabled: this.exportSlideshowEnabled,
                                 slideshow_duration: this.exportSlideshowDuration,
