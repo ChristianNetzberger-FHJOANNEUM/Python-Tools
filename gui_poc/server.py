@@ -86,6 +86,176 @@ _analysis_progress = {
     'message': ''
 }
 
+# ============================================================================
+# PERFORMANCE OPTIMIZATION: Phase 1 & 2
+# ============================================================================
+
+import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+
+# Phase 1.1: In-Memory Cache for Directory Scans
+_scan_cache = {
+    'data': None,  # List of photos with times
+    'timestamp': None,  # When cached
+    'folders': None,  # Which folders were scanned
+    'extensions': None,  # Which extensions
+    'lock': threading.Lock()  # Thread-safe access
+}
+
+_scan_cache_max_age = 60  # Cache valid for 60 seconds
+
+# Phase 1.3: Performance Monitoring (thread-safe)
+import threading
+_perf_timings_lock = threading.Lock()
+
+def perf_measure(name):
+    """Context manager for performance timing (per-request)"""
+    class Timer:
+        def __enter__(self):
+            self.start = time.time()
+            self.name = name
+            return self
+        
+        def __exit__(self, *args):
+            duration = time.time() - self.start
+            # Store in Flask's request context (per-request storage)
+            from flask import g
+            if not hasattr(g, 'perf_timings'):
+                g.perf_timings = {}
+            g.perf_timings[self.name] = duration
+            logger.info(f"⏱️ {self.name}: {duration:.3f}s")
+    
+    return Timer()
+
+def get_perf_timings():
+    """Get performance timings for current request"""
+    from flask import g
+    return getattr(g, 'perf_timings', {})
+
+# Phase 1.2: Batch Metadata Loading
+def get_metadata_batch(photo_paths):
+    """
+    Load metadata for multiple photos at once
+    Returns dict: {path: metadata}
+    """
+    results = {}
+    for path in photo_paths:
+        try:
+            results[path] = get_metadata(path)
+        except Exception as e:
+            logger.warning(f"Error loading metadata for {path}: {e}")
+            results[path] = {
+                'rating': 0,
+                'color': None,
+                'keywords': [],
+                'comment': None
+            }
+    return results
+
+def get_sidecar_batch(photo_paths):
+    """
+    Load sidecars for multiple photos at once
+    Returns dict: {path: burst_info}
+    """
+    from photo_tool.prescan import SidecarManager
+    results = {}
+    
+    for path in photo_paths:
+        try:
+            sidecar = SidecarManager(path)
+            if sidecar.exists:
+                sidecar.load()
+                burst_data = sidecar.get('analyses.burst', {})
+                if burst_data and burst_data.get('is_burst_candidate'):
+                    results[path] = {
+                        'is_burst': True,
+                        'group_size': burst_data.get('burst_group_size', 1),
+                        'neighbor_count': len(burst_data.get('burst_neighbors', []))
+                    }
+                else:
+                    results[path] = None
+            else:
+                results[path] = None
+        except Exception as e:
+            logger.warning(f"Error loading sidecar for {path}: {e}")
+            results[path] = None
+    
+    return results
+
+# Phase 2.1: Parallel Metadata Loading
+def load_photo_data_parallel(photo, metadata_map, sidecar_map, enabled_folders):
+    """
+    Load all data for a single photo (used in parallel processing)
+    Returns dict ready for JSON response
+    """
+    try:
+        # Get pre-loaded metadata
+        metadata = metadata_map.get(photo.path, {})
+        burst_info = sidecar_map.get(photo.path)
+        
+        # Find relative path
+        relative_path = None
+        if enabled_folders:
+            for root in enabled_folders:
+                try:
+                    relative_path = str(photo.path.relative_to(root))
+                    break
+                except ValueError:
+                    continue
+        
+        if relative_path is None:
+            relative_path = str(photo.path)
+        
+        # Get capture time for display (already computed during sorting)
+        capture_time = get_capture_time(photo.path, fallback_to_mtime=True)
+        capture_time_str = capture_time.strftime('%Y-%m-%d %H:%M:%S') if capture_time else None
+        
+        # Get blur scores
+        blur_scores = {
+            'laplacian': metadata.get('blur_score_laplacian'),
+            'tenengrad': metadata.get('blur_score_tenengrad'),
+            'roi': metadata.get('blur_score_roi')
+        }
+        
+        return {
+            'id': str(photo.path),
+            'name': photo.path.name,
+            'path': relative_path,
+            'size': photo.size_bytes,
+            'rating': metadata.get('rating', 0),
+            'color': metadata.get('color'),
+            'comment': metadata.get('comment', ''),
+            'keywords': metadata.get('keywords', []),
+            'capture_time': capture_time_str,
+            'blur_scores': blur_scores,
+            'blur_method': metadata.get('blur_method', 'laplacian'),
+            'burst': burst_info,
+            'thumbnail': f"/thumbnails/{photo.path.stem}.jpg",
+            'full_image': f"/images/{photo.path.stem}{photo.path.suffix}"
+        }
+    except Exception as e:
+        logger.error(f"Error loading photo data for {photo.path}: {e}")
+        return None
+
+# Phase 2.2: Parallel EXIF Reading
+def get_capture_time_worker(photo_path):
+    """Worker function for parallel EXIF reading"""
+    try:
+        from datetime import datetime
+        capture_time = get_capture_time(photo_path, fallback_to_mtime=True)
+        if capture_time is None:
+            capture_time = datetime.fromtimestamp(photo_path.stat().st_mtime)
+        return capture_time
+    except Exception as e:
+        logger.warning(f"Error getting capture time for {photo_path}: {e}")
+        from datetime import datetime
+        return datetime.now()
+
+# ============================================================================
+# END PERFORMANCE OPTIMIZATION
+# ============================================================================
+
 
 @app.get('/')
 def index():
@@ -96,167 +266,197 @@ def index():
 @app.get('/api/photos')
 def get_photos():
     """
-    Get list of all photos with metadata
+    Get list of all photos with metadata (OPTIMIZED Version)
     Query params:
         - limit: Max number of photos (default: 100)
         - offset: Skip N photos (default: 0)
         - load_without_project: If true, load photos even without project (default: true for backward compatibility)
     """
     try:
-        # Load workspace and config
-        workspace_path = get_current_workspace()
-        ws = Workspace(workspace_path)
-        config = load_config(ws.config_file)
-        
-        # Get query params
-        from flask import request
-        load_without_project = request.args.get('load_without_project', 'true').lower() == 'true'
-        
-        # Check if we should load photos (project exists or load_without_project=true)
-        if not load_without_project:
-            # Check if any project exists
-            pm = get_project_manager()
-            projects = pm.list_projects()
+        with perf_measure("total_request"):
+            # Load workspace and config
+            workspace_path = get_current_workspace()
+            ws = Workspace(workspace_path)
+            config = load_config(ws.config_file)
             
-            if not projects:
-                # No projects exist - return empty list
+            # Get query params
+            from flask import request
+            load_without_project = request.args.get('load_without_project', 'true').lower() == 'true'
+            
+            # Check if we should load photos (project exists or load_without_project=true)
+            if not load_without_project:
+                # Check if any project exists
+                pm = get_project_manager()
+                projects = pm.list_projects()
+                
+                if not projects:
+                    # No projects exist - return empty list
+                    return jsonify({
+                        'photos': [],
+                        'total': 0,
+                        'offset': 0,
+                        'limit': 0,
+                        'message': 'No projects created yet. Create a project to start working with photos.'
+                    })
+            
+            # Get only enabled folders
+            enabled_folders = get_enabled_folders(workspace_path)
+            if not enabled_folders:
+                # No folders enabled - return empty list
                 return jsonify({
                     'photos': [],
                     'total': 0,
                     'offset': 0,
                     'limit': 0,
-                    'message': 'No projects created yet. Create a project to start working with photos.'
+                    'message': 'No folders enabled in workspace. Add and enable media folders first.'
                 })
-        
-        # Get only enabled folders
-        enabled_folders = get_enabled_folders(workspace_path)
-        if not enabled_folders:
-            # No folders enabled - return empty list
+            
+            # Get query params
+            limit = int(request.args.get('limit', 100))
+            offset = int(request.args.get('offset', 0))
+            
+            # ============================================================================
+            # PHASE 1.1: Check Cache for Directory Scan + Sorting
+            # ============================================================================
+            with _scan_cache['lock']:
+                cache_valid = (
+                    _scan_cache['data'] is not None and
+                    _scan_cache['folders'] == tuple(enabled_folders) and
+                    _scan_cache['extensions'] == tuple(config.scan.extensions) and
+                    _scan_cache['timestamp'] is not None and
+                    (time.time() - _scan_cache['timestamp']) < _scan_cache_max_age
+                )
+                
+                if cache_valid:
+                    logger.info("✅ Using cached scan results")
+                    photos_with_times = _scan_cache['data']
+                    photos = [p[0] for p in photos_with_times]
+                else:
+                    logger.info("🔄 Cache miss - performing fresh scan")
+                    
+                    # Scan for media (only enabled folders)
+                    with perf_measure("directory_scan"):
+                        all_media = scan_multiple_directories(
+                            enabled_folders,
+                            config.scan.extensions,
+                            recursive=config.scan.recurse,
+                            show_progress=False
+                        )
+                    
+                    # Filter to photos only
+                    photos = filter_by_type(all_media, "photo")
+                    
+                    # ============================================================================
+                    # PHASE 2.2: Parallel EXIF Reading for Sorting
+                    # ============================================================================
+                    with perf_measure("exif_reading_parallel"):
+                        from datetime import datetime
+                        
+                        # Use ProcessPoolExecutor for CPU-intensive EXIF parsing
+                        # Only if we have enough photos (overhead ~100ms per process start)
+                        if len(photos) > 50:
+                            try:
+                                with ProcessPoolExecutor(max_workers=4) as executor:
+                                    photo_paths = [p.path for p in photos]
+                                    capture_times = list(executor.map(get_capture_time_worker, photo_paths))
+                                    photos_with_times = list(zip(photos, capture_times))
+                            except Exception as e:
+                                logger.warning(f"ProcessPool failed, falling back to sequential: {e}")
+                                # Fallback to sequential
+                                photos_with_times = []
+                                for photo in photos:
+                                    try:
+                                        capture_time = get_capture_time(photo.path, fallback_to_mtime=True)
+                                        if capture_time is None:
+                                            capture_time = datetime.fromtimestamp(photo.path.stat().st_mtime)
+                                        photos_with_times.append((photo, capture_time))
+                                    except Exception as e2:
+                                        logger.warning(f"Error getting time for {photo.path.name}: {e2}")
+                                        photos_with_times.append((photo, datetime.now()))
+                        else:
+                            # Sequential for small batches
+                            photos_with_times = []
+                            for photo in photos:
+                                try:
+                                    capture_time = get_capture_time(photo.path, fallback_to_mtime=True)
+                                    if capture_time is None:
+                                        capture_time = datetime.fromtimestamp(photo.path.stat().st_mtime)
+                                    photos_with_times.append((photo, capture_time))
+                                except Exception as e:
+                                    logger.warning(f"Error getting time for {photo.path.name}: {e}")
+                                    photos_with_times.append((photo, datetime.now()))
+                    
+                    # Sort by capture time (newest first)
+                    photos_with_times.sort(key=lambda x: x[1], reverse=True)
+                    
+                    # Update cache
+                    _scan_cache['data'] = photos_with_times
+                    _scan_cache['folders'] = tuple(enabled_folders)
+                    _scan_cache['extensions'] = tuple(config.scan.extensions)
+                    _scan_cache['timestamp'] = time.time()
+                    logger.info(f"💾 Cached {len(photos)} photos")
+                    
+                    photos = [p[0] for p in photos_with_times]
+            
+            # Paginate
+            photos_page = photos[offset:offset + limit]
+            
+            # ============================================================================
+            # PHASE 1.2: Batch Load Metadata & Sidecars
+            # ============================================================================
+            with perf_measure("metadata_batch_loading"):
+                photo_paths = [p.path for p in photos_page]
+                metadata_map = get_metadata_batch(photo_paths)
+                sidecar_map = get_sidecar_batch(photo_paths)
+            
+            # ============================================================================
+            # PHASE 2.1: Parallel Response Building
+            # ============================================================================
+            with perf_measure("response_building_parallel"):
+                # Use ThreadPoolExecutor for I/O-bound operations
+                with ThreadPoolExecutor(max_workers=8) as executor:
+                    futures = []
+                    for photo in photos_page:
+                        future = executor.submit(
+                            load_photo_data_parallel,
+                            photo,
+                            metadata_map,
+                            sidecar_map,
+                            enabled_folders
+                        )
+                        futures.append(future)
+                    
+                    # Collect results (in order)
+                    result = []
+                    for future in futures:
+                        photo_data = future.result()
+                        if photo_data:
+                            result.append(photo_data)
+            
+            timings = get_perf_timings()
+            logger.info(f"📊 Performance: {timings}")
+            
             return jsonify({
-                'photos': [],
-                'total': 0,
-                'offset': 0,
-                'limit': 0,
-                'message': 'No folders enabled in workspace. Add and enable media folders first.'
+                'photos': result,
+                'total': len(photos),
+                'limit': limit,
+                'offset': offset,
+                'performance': timings  # Include timing info in response (for debugging)
             })
-        
-        # Get query params
-        from flask import request
-        limit = int(request.args.get('limit', 100))
-        offset = int(request.args.get('offset', 0))
-        
-        # Scan for media (only enabled folders)
-        all_media = scan_multiple_directories(
-            enabled_folders,
-            config.scan.extensions,
-            recursive=config.scan.recurse,
-            show_progress=False
-        )
-        
-        # Filter to photos only
-        photos = filter_by_type(all_media, "photo")
-        
-        # Sort by capture time (newest first)
-        from datetime import datetime
-        
-        # Build a list of (photo, capture_time) tuples for efficient sorting
-        photos_with_times = []
-        for photo in photos:
-            try:
-                capture_time = get_capture_time(photo.path, fallback_to_mtime=True)
-                if capture_time is None:
-                    # Fallback to file modification time
-                    capture_time = datetime.fromtimestamp(photo.path.stat().st_mtime)
-                photos_with_times.append((photo, capture_time))
-            except Exception as e:
-                # Ultimate fallback: use current time (will be sorted last)
-                print(f"Warning: Could not get time for {photo.path.name}: {e}")
-                photos_with_times.append((photo, datetime.now()))
-        
-        # Sort by capture time (newest first)
-        photos_with_times.sort(key=lambda x: x[1], reverse=True)
-        
-        # Extract sorted photos
-        photos = [p[0] for p in photos_with_times]
-
-        
-        # Paginate
-        photos_page = photos[offset:offset + limit]
-        
-        # Build response
-        result = []
-        for photo in photos_page:
-            # Try to get all metadata
-            metadata = get_metadata(photo.path)
-            
-            # Find which root folder this photo belongs to and calculate relative path
-            relative_path = None
-            if enabled_folders:
-                for root in enabled_folders:
-                    try:
-                        relative_path = str(photo.path.relative_to(root))
-                        break
-                    except ValueError:
-                        continue
-            
-            # Fallback to absolute path if relative path couldn't be determined
-            if relative_path is None:
-                relative_path = str(photo.path)
-            
-            # Get capture time for display
-            capture_time = get_capture_time(photo.path, fallback_to_mtime=True)
-            capture_time_str = capture_time.strftime('%Y-%m-%d %H:%M:%S') if capture_time else None
-            
-            # Get blur scores for all methods
-            blur_scores = {
-                'laplacian': metadata.get('blur_score_laplacian'),
-                'tenengrad': metadata.get('blur_score_tenengrad'),
-                'roi': metadata.get('blur_score_roi')
-            }
-            
-            # Get burst info from sidecar
-            from photo_tool.prescan import SidecarManager
-            burst_info = None
-            try:
-                sidecar = SidecarManager(photo.path)
-                if sidecar.exists:
-                    sidecar.load()
-                    burst_data = sidecar.get('analyses.burst', {})
-                    if burst_data and burst_data.get('is_burst_candidate'):
-                        burst_info = {
-                            'is_burst': True,
-                            'group_size': burst_data.get('burst_group_size', 1),
-                            'neighbor_count': len(burst_data.get('burst_neighbors', []))
-                        }
-            except:
-                pass
-            
-            result.append({
-                'id': str(photo.path),
-                'name': photo.path.name,
-                'path': relative_path,
-                'size': photo.size_bytes,
-                'rating': metadata.get('rating', 0),
-                'color': metadata.get('color'),
-                'comment': metadata.get('comment', ''),
-                'keywords': metadata.get('keywords', []),
-                'capture_time': capture_time_str,
-                'blur_scores': blur_scores,  # All blur scores
-                'blur_method': metadata.get('blur_method', 'laplacian'),  # Last used method
-                'burst': burst_info,  # Burst information
-                'thumbnail': f"/thumbnails/{photo.path.stem}.jpg",
-                'full_image': f"/images/{photo.path.stem}{photo.path.suffix}"
-            })
-        
-        return jsonify({
-            'photos': result,
-            'total': len(photos),
-            'limit': limit,
-            'offset': offset
-        })
     
     except Exception as e:
+        logger.error(f"Error in get_photos: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
+
+def invalidate_scan_cache():
+    """Invalidate the scan cache (call after rating/color changes)"""
+    with _scan_cache['lock']:
+        _scan_cache['data'] = None
+        _scan_cache['timestamp'] = None
+        logger.info("♻️ Cache invalidated")
 
 
 @app.post('/api/photos/<path:photo_id>/rate')
@@ -294,6 +494,10 @@ def rate_photo(photo_id):
                 'comment': comment if comment else None
             })
             logger.info(f"Set global rating for {photo_path.name}: {rating}")
+        
+        # Invalidate cache (metadata changed)
+        # Note: We don't invalidate for every rating change to keep cache benefits
+        # The cache will auto-expire after 60 seconds anyway
         
         return jsonify({
             'success': True,
@@ -2228,297 +2432,415 @@ def delete_project(project_id):
 @app.get('/api/projects/<project_id>/media')
 def get_project_media(project_id):
     """
-    Get all media for a specific project (only enabled folders)
+    Get all media for a specific project (OPTIMIZED - Phase 1 & 2)
     Query params:
         - limit: Max number of items (default: 2500)
         - offset: Skip N items (default: 0)
         - type: Filter by type (photo, video, audio, or 'all')
     """
     try:
-        from flask import request
-        from photo_tool.prescan import SidecarManager
-        import hashlib
-        
-        pm = get_project_manager()
-        project = pm.get_project(project_id)
-        
-        if not project:
-            return jsonify({'error': 'Project not found'}), 404
-        
-        # Get query params
-        limit = int(request.args.get('limit', 2500))
-        offset = int(request.args.get('offset', 0))
-        media_type = request.args.get('type', 'all')
-        
-        # Get enabled folders from project
-        enabled_folders = []
-        if project.folders:
-            enabled_folders = [Path(f['path']) for f in project.folders if f.get('enabled', False)]
-        
-        if not enabled_folders:
-            return jsonify({
-                'photos': [],
-                'videos': [],
-                'audio': [],
-                'total': 0,
-                'message': 'No folders enabled in project. Enable folders in Project tab.'
-            })
-        
-        # Load workspace config for scan settings
-        workspace_path = get_current_workspace()
-        ws = Workspace(workspace_path)
-        config = load_config(ws.config_file)
-        
-        # Scan enabled folders
-        all_media = scan_multiple_directories(
-            enabled_folders,
-            config.scan.extensions,
-            recursive=config.scan.recurse,
-            show_progress=False
-        )
-        
-        # Separate by type
-        photos = filter_by_type(all_media, 'photo')
-        videos = filter_by_type(all_media, 'video')
-        audio = filter_by_type(all_media, 'audio')
-        
-        # Sort photos by capture time (newest first)
-        from datetime import datetime
-        photos_with_times = []
-        for photo in photos:
-            try:
-                capture_time = get_capture_time(photo.path, fallback_to_mtime=True)
-                if capture_time is None:
-                    capture_time = datetime.fromtimestamp(photo.path.stat().st_mtime)
-                photos_with_times.append((photo, capture_time))
-            except Exception as e:
-                photos_with_times.append((photo, datetime.now()))
-        
-        photos_with_times.sort(key=lambda x: x[1], reverse=True)
-        photos = [p[0] for p in photos_with_times]
-        
-        # Apply filters based on type
-        if media_type == 'photo':
-            result_media = photos
-        elif media_type == 'video':
-            result_media = videos
-        elif media_type == 'audio':
-            result_media = audio
-        else:
-            result_media = photos + videos + audio
-        
-        # Paginate
-        result_page = result_media[offset:offset + limit]
-        
-        # Initialize project sidecar manager
-        project_dir = pm.projects_dir / project_id
-        psm = ProjectSidecarManager(project_dir)
-        
-        # Build response
-        result = []
-        for item in result_page:
-            # 1. Get global metadata
-            global_metadata = get_metadata(item.path)
+        with perf_measure("project_media_total"):
+            from flask import request
+            from photo_tool.prescan import SidecarManager
+            import hashlib
             
-            # 2. Merge with project-specific overrides
-            metadata = psm.merge_metadata(global_metadata, item.path)
+            pm = get_project_manager()
+            project = pm.get_project(project_id)
             
-            # 3. Get burst_keep flag from project sidecar
-            burst_keep = False
-            sidecar_path = psm.sidecar_dir / f"{item.path.stem}.sidecar"
-            if sidecar_path.exists():
-                try:
-                    with open(sidecar_path, 'r', encoding='utf-8') as f:
-                        project_sidecar = json.load(f)
-                        burst_keep = project_sidecar.get('burst_keep', False)
-                except Exception as e:
-                    logger.debug(f"Failed to load burst_keep for {item.path.name}: {e}")
+            if not project:
+                return jsonify({'error': 'Project not found'}), 404
             
-            # Get relative path
-            relative_path = None
-            for root in enabled_folders:
-                try:
-                    relative_path = str(item.path.relative_to(root))
-                    break
-                except ValueError:
-                    continue
+            # Get query params
+            limit = int(request.args.get('limit', 2500))
+            offset = int(request.args.get('offset', 0))
+            media_type = request.args.get('type', 'all')
             
-            if relative_path is None:
-                relative_path = str(item.path)
+            # Get enabled folders from project
+            enabled_folders = []
+            if project.folders:
+                enabled_folders = [Path(f['path']) for f in project.folders if f.get('enabled', False)]
             
-            # Get capture time
-            capture_time = get_capture_time(item.path, fallback_to_mtime=True)
-            capture_time_str = capture_time.strftime('%Y-%m-%d %H:%M:%S') if capture_time else None
+            if not enabled_folders:
+                return jsonify({
+                    'photos': [],
+                    'videos': [],
+                    'audio': [],
+                    'total': 0,
+                    'message': 'No folders enabled in project. Enable folders in Project tab.'
+                })
             
-            # Get blur scores from sidecar analyses
-            blur_scores = {
-                'laplacian': None,
-                'tenengrad': None,
-                'roi': None
-            }
-            try:
-                sidecar = SidecarManager(item.path)
-                if sidecar.exists:
-                    sidecar.load()
-                    blur_data = sidecar.get('analyses.blur')
-                    if blur_data:
-                        for method in ['laplacian', 'tenengrad', 'roi']:
-                            if method in blur_data and isinstance(blur_data[method], dict):
-                                blur_scores[method] = blur_data[method].get('score')
-            except Exception as e:
-                logger.warning(f"Failed to load blur scores from sidecar: {e}")
+            # Load workspace config for scan settings
+            workspace_path = get_current_workspace()
+            ws = Workspace(workspace_path)
+            config = load_config(ws.config_file)
             
-            result.append({
-                'id': str(item.path),
-                'name': item.path.name,
-                'path': str(item.path),
-                'relative_path': relative_path,
-                'type': item.media_type,  # MediaFile uses media_type, not type
-                'size': item.path.stat().st_size,
-                'capture_time': capture_time_str,
-                'rating': metadata.get('rating', 0),
-                'color': metadata.get('color'),
-                'keywords': metadata.get('keywords', []),
-                'blur_scores': blur_scores,
-                'burst_keep': burst_keep,  # Burst keep flag (project-specific)
-                'thumbnail': f"/thumbnails/{item.path.stem}.jpg",
-                'full_image': f"/images/{item.path.stem}{item.path.suffix}",
-                # Metadata source indicators
-                'has_project_override': metadata.get('_has_project_override', False),
-                'rating_source': metadata.get('_rating_source', 'global'),
-                'color_source': metadata.get('_color_source', 'global')
-            })
-        
-        # === BURST GROUPING ===
-        # Analyze burst relationships and add burst metadata to photos
-        burst_groups = {}  # burst_id -> list of photo paths
-        photo_to_burst = {}  # photo_path -> burst_id
-        burst_raw_data = {}  # photo_path -> raw sidecar burst data (for debugging)
-        path_by_filename = {}  # filename -> actual path in result (for fixing old sidecar paths)
-        
-        # Build filename lookup for current photos
-        for item_dict in result:
-            if item_dict['type'] == 'photo':
-                filename = Path(item_dict['path']).name
-                path_by_filename[filename] = item_dict['path']
-        
-        for item_dict in result:
-            if item_dict['type'] != 'photo':
-                continue
+            # ============================================================================
+            # PHASE 1.1: Check Cache (Project-specific)
+            # ============================================================================
+            cache_key = f"{project_id}_{tuple(enabled_folders)}_{tuple(config.scan.extensions)}"
             
-            try:
-                sidecar = SidecarManager(Path(item_dict['path']))
-                if sidecar.exists:
-                    sidecar.load()
-                    burst_data = sidecar.get('analyses.burst')
+            print(f"\n🔍 Checking cache for project: {project_id}")
+            
+            with _scan_cache['lock']:
+                cache_valid = (
+                    _scan_cache.get('project_cache') and
+                    _scan_cache['project_cache'].get(cache_key) and
+                    (time.time() - _scan_cache['project_cache'][cache_key]['timestamp']) < _scan_cache_max_age
+                )
+                
+                if cache_valid:
+                    print(f"✅ Using cached project media for {project_id}")
+                    logger.info(f"✅ Using cached project media for {project_id}")
+                    cached_data = _scan_cache['project_cache'][cache_key]
+                    photos = cached_data['photos']
+                    videos = cached_data['videos']
+                    audio = cached_data['audio']
+                else:
+                    print(f"🔄 Cache miss - scanning project {project_id}")
+                    logger.info(f"🔄 Cache miss - scanning project {project_id}")
                     
-                    # Store raw burst data for debugging
-                    if burst_data:
-                        burst_raw_data[item_dict['path']] = burst_data
-                        logger.debug(f"Burst data for {Path(item_dict['path']).name}: is_burst_candidate={burst_data.get('is_burst_candidate')}, neighbors={len(burst_data.get('burst_neighbors', []))}")
+                    # Scan enabled folders
+                    with perf_measure("directory_scan"):
+                        all_media = scan_multiple_directories(
+                            enabled_folders,
+                            config.scan.extensions,
+                            recursive=config.scan.recurse,
+                            show_progress=False
+                        )
                     
-                    if burst_data and burst_data.get('is_burst_candidate'):
-                        # Collect all photos in this burst group
-                        neighbors = burst_data.get('burst_neighbors', [])
+                    # Separate by type
+                    photos = filter_by_type(all_media, 'photo')
+                    videos = filter_by_type(all_media, 'video')
+                    audio = filter_by_type(all_media, 'audio')
+                    
+                    # ============================================================================
+                    # PHASE 2.2: Parallel EXIF Reading for Photos
+                    # ============================================================================
+                    with perf_measure("exif_reading_parallel"):
+                        from datetime import datetime
                         
-                        # FIX: Replace neighbor paths with current paths (fixes moved folders)
-                        all_paths = [item_dict['path']]
+                        print(f"📸 EXIF: Processing {len(photos)} photos...")
+                        
+                        if len(photos) > 50:
+                            try:
+                                print(f"🚀 Using ProcessPoolExecutor with 4 workers")
+                                with ProcessPoolExecutor(max_workers=4) as executor:
+                                    photo_paths = [p.path for p in photos]
+                                    capture_times = list(executor.map(get_capture_time_worker, photo_paths))
+                                    photos_with_times = list(zip(photos, capture_times))
+                                print(f"✅ ProcessPoolExecutor completed successfully")
+                            except Exception as e:
+                                print(f"❌ ProcessPool FAILED: {e}")
+                                print(f"⚠️ Falling back to sequential processing")
+                                logger.warning(f"ProcessPool failed, falling back: {e}")
+                                import traceback
+                                traceback.print_exc()
+                                
+                                photos_with_times = []
+                                for photo in photos:
+                                    try:
+                                        capture_time = get_capture_time(photo.path, fallback_to_mtime=True)
+                                        if capture_time is None:
+                                            capture_time = datetime.fromtimestamp(photo.path.stat().st_mtime)
+                                        photos_with_times.append((photo, capture_time))
+                                    except Exception as e2:
+                                        photos_with_times.append((photo, datetime.now()))
+                        else:
+                            print(f"📝 Using sequential processing (<50 photos)")
+                            photos_with_times = []
+                            for photo in photos:
+                                try:
+                                    capture_time = get_capture_time(photo.path, fallback_to_mtime=True)
+                                    if capture_time is None:
+                                        capture_time = datetime.fromtimestamp(photo.path.stat().st_mtime)
+                                    photos_with_times.append((photo, capture_time))
+                                except Exception as e:
+                                    photos_with_times.append((photo, datetime.now()))
+                    
+                    # Sort by capture time
+                    photos_with_times.sort(key=lambda x: x[1], reverse=True)
+                    photos = [p[0] for p in photos_with_times]
+                    
+                    # Update cache
+                    if 'project_cache' not in _scan_cache:
+                        _scan_cache['project_cache'] = {}
+                    
+                    _scan_cache['project_cache'][cache_key] = {
+                        'photos': photos,
+                        'videos': videos,
+                        'audio': audio,
+                        'timestamp': time.time()
+                    }
+                    print(f"💾 Cached {len(photos)} photos for project {project_id}")
+                    logger.info(f"💾 Cached {len(photos)} photos for project {project_id}")
+            
+            # Apply filters based on type
+            if media_type == 'photo':
+                result_media = photos
+            elif media_type == 'video':
+                result_media = videos
+            elif media_type == 'audio':
+                result_media = audio
+            else:
+                result_media = photos + videos + audio
+            
+            # Paginate
+            result_page = result_media[offset:offset + limit]
+            
+            # Initialize project sidecar manager
+            project_dir = pm.projects_dir / project_id
+            psm = ProjectSidecarManager(project_dir)
+            
+            # ============================================================================
+            # PHASE 1.2 & 2.1: Parallel Metadata & Sidecar Loading
+            # ============================================================================
+            with perf_measure("parallel_metadata_loading"):
+                # Collect all paths
+                item_paths = [item.path for item in result_page]
+                
+                # Parallel loading using ThreadPoolExecutor
+                def load_item_metadata(item_path):
+                    """Load all metadata for one item"""
+                    try:
+                        # 1. Global metadata
+                        global_meta = get_metadata(item_path)
+                        
+                        # 2. Project metadata merge
+                        merged_meta = psm.merge_metadata(global_meta, item_path)
+                        
+                        # 3. Burst keep flag
+                        burst_keep = False
+                        sidecar_path = psm.sidecar_dir / f"{item_path.stem}.sidecar"
+                        if sidecar_path.exists():
+                            try:
+                                with open(sidecar_path, 'r', encoding='utf-8') as f:
+                                    project_sidecar = json.load(f)
+                                    burst_keep = project_sidecar.get('burst_keep', False)
+                            except:
+                                pass
+                        
+                        # 4. Blur scores from sidecar
+                        blur_scores = {'laplacian': None, 'tenengrad': None, 'roi': None}
+                        try:
+                            sidecar = SidecarManager(item_path)
+                            if sidecar.exists:
+                                sidecar.load()
+                                blur_data = sidecar.get('analyses.blur')
+                                if blur_data:
+                                    for method in ['laplacian', 'tenengrad', 'roi']:
+                                        if method in blur_data and isinstance(blur_data[method], dict):
+                                            blur_scores[method] = blur_data[method].get('score')
+                        except:
+                            pass
+                        
+                        return {
+                            'path': item_path,
+                            'metadata': merged_meta,
+                            'burst_keep': burst_keep,
+                            'blur_scores': blur_scores
+                        }
+                    except Exception as e:
+                        logger.error(f"Error loading metadata for {item_path}: {e}")
+                        return None
+                
+                # Load all metadata in parallel
+                with ThreadPoolExecutor(max_workers=8) as executor:
+                    metadata_results = list(executor.map(load_item_metadata, item_paths))
+                
+                # Build lookup map
+                metadata_map = {}
+                for res in metadata_results:
+                    if res:
+                        metadata_map[res['path']] = res
+            
+            # Build response
+            with perf_measure("response_building"):
+                result = []
+                for item in result_page:
+                    meta_data = metadata_map.get(item.path, {})
+                    metadata = meta_data.get('metadata', {})
+                    burst_keep = meta_data.get('burst_keep', False)
+                    blur_scores = meta_data.get('blur_scores', {})
+                    
+                    # Get relative path
+                    relative_path = None
+                    for root in enabled_folders:
+                        try:
+                            relative_path = str(item.path.relative_to(root))
+                            break
+                        except ValueError:
+                            continue
+                    
+                    if relative_path is None:
+                        relative_path = str(item.path)
+                    
+                    # Get capture time
+                    capture_time = get_capture_time(item.path, fallback_to_mtime=True)
+                    capture_time_str = capture_time.strftime('%Y-%m-%d %H:%M:%S') if capture_time else None
+                    
+                    result.append({
+                        'id': str(item.path),
+                        'name': item.path.name,
+                        'path': str(item.path),
+                        'relative_path': relative_path,
+                        'type': item.media_type,
+                        'size': item.path.stat().st_size,
+                        'capture_time': capture_time_str,
+                        'rating': metadata.get('rating', 0),
+                        'color': metadata.get('color'),
+                        'keywords': metadata.get('keywords', []),
+                        'blur_scores': blur_scores,
+                        'burst_keep': burst_keep,
+                        'thumbnail': f"/thumbnails/{item.path.stem}.jpg",
+                        'full_image': f"/images/{item.path.stem}{item.path.suffix}",
+                        'has_project_override': metadata.get('_has_project_override', False),
+                        'rating_source': metadata.get('_rating_source', 'global'),
+                        'color_source': metadata.get('_color_source', 'global')
+                    })
+            
+            # ============================================================================
+            # PHASE 2.1: Parallel Burst Grouping
+            # ============================================================================
+            with perf_measure("burst_grouping"):
+                burst_groups = {}
+                photo_to_burst = {}
+                burst_raw_data = {}
+                path_by_filename = {}
+                
+                # Build filename lookup
+                for item_dict in result:
+                    if item_dict['type'] == 'photo':
+                        filename = Path(item_dict['path']).name
+                        path_by_filename[filename] = item_dict['path']
+                
+                # Parallel burst sidecar loading
+                def load_burst_info(item_dict):
+                    """Load burst info for one photo"""
+                    if item_dict['type'] != 'photo':
+                        return None
+                    
+                    try:
+                        sidecar = SidecarManager(Path(item_dict['path']))
+                        if sidecar.exists:
+                            sidecar.load()
+                            burst_data = sidecar.get('analyses.burst')
+                            if burst_data:
+                                return {
+                                    'path': item_dict['path'],
+                                    'burst_data': burst_data
+                                }
+                    except Exception as e:
+                        logger.warning(f"Error loading burst for {item_dict['path']}: {e}")
+                    return None
+                
+                # Load burst data in parallel
+                with ThreadPoolExecutor(max_workers=8) as executor:
+                    burst_results = list(executor.map(load_burst_info, result))
+                
+                # Process burst results
+                for burst_res in burst_results:
+                    if not burst_res:
+                        continue
+                    
+                    item_path = burst_res['path']
+                    burst_data = burst_res['burst_data']
+                    
+                    burst_raw_data[item_path] = burst_data
+                    
+                    if burst_data.get('is_burst_candidate'):
+                        neighbors = burst_data.get('burst_neighbors', [])
+                        all_paths = [item_path]
                         fixed_neighbors = []
+                        
                         for n in neighbors:
                             neighbor_path = n['path']
                             neighbor_filename = Path(neighbor_path).name
                             
-                            # Try to find the actual current path by filename
                             if neighbor_filename in path_by_filename:
                                 actual_path = path_by_filename[neighbor_filename]
                                 all_paths.append(actual_path)
                                 fixed_neighbors.append(actual_path)
                             elif neighbor_path in path_by_filename.values():
-                                # Path is already correct
                                 all_paths.append(neighbor_path)
                                 fixed_neighbors.append(neighbor_path)
                         
-                        # DEBUG: Log first burst in detail
+                        # DEBUG: First burst
                         if len(burst_groups) == 0:
                             print(f"\n=== FIRST BURST DEBUG ===")
-                            print(f"  Current photo: {item_dict['path']}")
+                            print(f"  Current photo: {item_path}")
                             print(f"  Neighbors from sidecar: {[n['path'] for n in neighbors]}")
                             print(f"  Fixed neighbor paths: {fixed_neighbors}")
                             print(f"  All paths in group: {all_paths}")
                             print("=" * 50)
                         
-                        # Sort to get consistent burst_id
                         all_paths_sorted = sorted(all_paths)
-                        
-                        # Generate burst_id from first photo path
                         burst_id = hashlib.md5(all_paths_sorted[0].encode()).hexdigest()[:12]
                         
-                        # Store mapping for THIS photo
-                        photo_to_burst[item_dict['path']] = burst_id
+                        photo_to_burst[item_path] = burst_id
                         
-                        # ALSO store mapping for ALL neighbors (so they get the same burst_id)
                         for neighbor_path in all_paths:
                             if neighbor_path not in photo_to_burst:
                                 photo_to_burst[neighbor_path] = burst_id
                         
                         if burst_id not in burst_groups:
                             burst_groups[burst_id] = {
-                                'photos': all_paths_sorted,  # Store ALL paths, not just discovered ones
-                                'lead_path': all_paths_sorted[0],  # First photo is lead
+                                'photos': all_paths_sorted,
+                                'lead_path': all_paths_sorted[0],
                                 'count': len(all_paths)
                             }
-            except Exception as e:
-                logger.warning(f"Error processing burst for {item_dict['path']}: {e}")
-                import traceback
-                traceback.print_exc()
-        
-        # Add burst metadata to result items
-        burst_metadata_assigned = 0
-        for item_dict in result:
-            if item_dict['path'] in photo_to_burst:
-                burst_id = photo_to_burst[item_dict['path']]
-                burst_group = burst_groups[burst_id]
                 
-                item_dict['burst_id'] = burst_id
-                item_dict['burst_count'] = burst_group['count']
-                item_dict['is_burst_lead'] = (item_dict['path'] == burst_group['lead_path'])
-                
-                # Add raw burst data for debugging
-                item_dict['burst_raw_data'] = burst_raw_data.get(item_dict['path'], {})
-                burst_metadata_assigned += 1
-            else:
-                item_dict['burst_id'] = None
-                item_dict['burst_count'] = 0
-                item_dict['is_burst_lead'] = False
-                item_dict['burst_raw_data'] = burst_raw_data.get(item_dict['path'], {})
-        
-        print(f"\n=== BURST GROUPING RESULTS ===")
-        print(f"Assigned burst metadata to {burst_metadata_assigned} photos out of {len(result)} total")
-        
-        total_burst_photos = sum(g['count'] for g in burst_groups.values())
-        print(f"Burst grouping: {len(burst_groups)} groups found with {total_burst_photos} photos in bursts")
-        print(f"photo_to_burst mapping has {len(photo_to_burst)} entries")
-        
-        if len(burst_groups) > 0:
-            print(f"\nSample burst groups: {list(burst_groups.keys())[:3]}")
-            for burst_id in list(burst_groups.keys())[:3]:
-                group = burst_groups[burst_id]
-                print(f"  Burst {burst_id}: {group['count']} photos, lead: {Path(group['lead_path']).name}")
-                print(f"    All photos: {[Path(p).name for p in group['photos'][:5]]}")
-        print("=" * 50 + "\n")
-        
-        return jsonify({
-            'media': result,
-            'total': len(result_media),
-            'offset': offset,
-            'limit': limit,
-            'project_id': project_id,
-            'counts': {
-                'photos': len(photos),
-                'videos': len(videos),
-                'audio': len(audio)
-            }
-        })
+                # Add burst metadata to results
+                burst_metadata_assigned = 0
+                for item_dict in result:
+                    if item_dict['path'] in photo_to_burst:
+                        burst_id = photo_to_burst[item_dict['path']]
+                        burst_group = burst_groups[burst_id]
+                        
+                        item_dict['burst_id'] = burst_id
+                        item_dict['burst_count'] = burst_group['count']
+                        item_dict['is_burst_lead'] = (item_dict['path'] == burst_group['lead_path'])
+                        item_dict['burst_raw_data'] = burst_raw_data.get(item_dict['path'], {})
+                        burst_metadata_assigned += 1
+                    else:
+                        item_dict['burst_id'] = None
+                        item_dict['burst_count'] = 0
+                        item_dict['is_burst_lead'] = False
+                        item_dict['burst_raw_data'] = burst_raw_data.get(item_dict['path'], {})
+            
+            # Debug output
+            print(f"\n=== BURST GROUPING RESULTS ===")
+            print(f"Assigned burst metadata to {burst_metadata_assigned} photos out of {len(result)} total")
+            
+            total_burst_photos = sum(g['count'] for g in burst_groups.values())
+            print(f"Burst grouping: {len(burst_groups)} groups found with {total_burst_photos} photos in bursts")
+            print(f"photo_to_burst mapping has {len(photo_to_burst)} entries")
+            
+            if len(burst_groups) > 0:
+                print(f"\nSample burst groups: {list(burst_groups.keys())[:3]}")
+                for burst_id in list(burst_groups.keys())[:3]:
+                    group = burst_groups[burst_id]
+                    print(f"  Burst {burst_id}: {group['count']} photos, lead: {Path(group['lead_path']).name}")
+                    print(f"    All photos: {[Path(p).name for p in group['photos'][:5]]}")
+            print("=" * 50 + "\n")
+            
+            # DEBUG: Print performance before return
+            timings = get_perf_timings()
+            print(f"\n📊 Project Media Performance: {timings}")
+            logger.info(f"📊 Project Media Performance: {timings}")
+            
+            return jsonify({
+                'media': result,
+                'total': len(result_media),
+                'offset': offset,
+                'limit': limit,
+                'project_id': project_id,
+                'counts': {
+                    'photos': len(photos),
+                    'videos': len(videos),
+                    'audio': len(audio)
+                },
+                'performance': timings  # Include timing for debugging
+            })
     
     except Exception as e:
         import traceback
