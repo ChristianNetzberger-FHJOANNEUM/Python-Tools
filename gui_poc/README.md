@@ -1,224 +1,102 @@
-# 📸 Photo Tool PoC - Web GUI
+# GUI PoC - Photo Tool
 
-**Full-featured** web interface for Photo Tool with burst detection, filtering, and gallery export.
+A modern, performance-optimized web interface for managing and rating photos.
 
-## 🚀 Quick Start
+## Quick Start
 
-### 1. Install Dependencies
-
-```powershell
-# Activate your venv first
-cd C:\_Git\Python-tools
-.\venv\Scripts\Activate.ps1
-
-# Install Flask
+```bash
+# Install dependencies
 pip install flask flask-cors
-```
 
-### 2. Start Server
-
-```powershell
-cd gui_poc
+# Start the server
 python server.py
+
+# Open browser
+http://localhost:5000
 ```
 
-### 3. Open Browser
-
-Open: **http://localhost:8000**
-
----
-
-## ✨ Features
-
-### **Core Features:**
-- ✅ **Photo Grid** - Browse all photos as thumbnails
-- ✅ **Lightbox Viewer** - Fullscreen photo viewing
-- ✅ **Star Rating** - Click stars to rate 1-5
-- ✅ **Color Labels** - Lightroom-style 🔴🟡🟢🔵🟣
-- ✅ **Keywords/Tags** - Tag & filter photos
-- ✅ **Statistics** - Total/Rated/Unrated counts
-
-### **Advanced Features:**
-- ✅ **Burst Detection** - Find & view photo series
-- ✅ **Quality Indicators** - Blur/sharpness scores
-- ✅ **Smart Filtering** - By rating, color, keywords, bursts
-- ✅ **Sorting** - By name, rating, date
-- ✅ **Web Gallery Export** - PhotoSwipe standalone galleries
-- ✅ **Keyboard Shortcuts** - Lightning-fast workflow
-- 🎬 **NEW: Slideshow Mode** - Auto-play with fade transitions, controls & loop
-- ⛶ **NEW: True Fullscreen** - Browser Fullscreen API (like YouTube, no UI!)
-- 👻 **NEW: Auto-Hide Controls** - YouTube-style UX, controls vanish after 3s!
-
-### **Performance:**
-- ✅ **Caching** - Instant burst reload
-- ✅ **Progress Bars** - Real-time analysis updates
-- ✅ **Lazy Loading** - Smooth scrolling
-- ✅ **On-the-fly Thumbnails** - Auto-generate if missing
-
----
-
-## 🎮 Usage
-
-### **Photo Management:**
-1. **Browse Photos** - Scroll through thumbnail grid
-2. **Rate Photos** - Click stars (1-5) or use keyboard (1-5 in lightbox)
-3. **Color Label** - Click color dots or press C in lightbox
-4. **Add Keywords** - Click "+ tag", type, press Enter
-5. **Lightbox** - Click photo for fullscreen view
-
-### **Burst Detection:**
-1. **Switch to Bursts Tab** - Analyzes photo series
-2. **Click Burst Group** - Opens detail viewer
-3. **Navigate** - Use ◄ ► buttons or arrow keys
-4. **Rate** - Rate individual photos in burst
-5. **View Quality** - See blur scores & BEST badge
-
-### **Filtering:**
-1. **Rating Filter** - Select 0-5 stars (multi-select)
-2. **Color Filter** - Filter by color labels
-3. **Keyword Filter** - Click tags to filter
-4. **In Bursts** - Show only photos in burst groups
-5. **Clear Filters** - Reset all filters
-
-### **Slideshow:** 🎬 **NEW!**
-1. **Filter Photos** (optional) - Select photos for slideshow
-2. **Click Slideshow** - 🎬 button next to Export
-3. **Auto-Play** - Starts automatically with smooth fade transitions
-4. **Fullscreen** - ⛶ button or press `F` for true fullscreen (no browser UI!)
-5. **Keyboard Controls:**
-   - `F` - Toggle fullscreen 🆕
-   - `Space` - Play/Pause
-   - `←` `→` - Navigate photos
-   - `↑` `↓` - Adjust speed
-   - `L` - Toggle loop
-   - `ESC` - Exit fullscreen / Exit slideshow
-6. **Settings** - Speed (2-10s), Loop on/off
-7. **Smart TV Ready** - Works on Samsung/LG browsers with fullscreen support!
-
-See: `SLIDESHOW_QUICKSTART.md` and `FULLSCREEN_GUIDE.md` for detailed guides!
-
-### **Export:**
-1. **Filter Photos** - Apply desired filters
-2. **Click Export** - Top-right button
-3. **Enter Title** - Gallery name
-4. **Choose Template** - PhotoSwipe or Simple
-5. **Export** - Creates standalone HTML gallery
-6. **Share** - Upload to Netlify/Vercel/GitHub Pages
-
----
-
-## 🔧 Configuration
-
-Edit workspace path in `server.py`:
-
-```python
-workspace_path = Path("C:/PhotoTool_Test")  # Change this
-```
-
-Or make it configurable:
-
-```python
-import os
-workspace_path = Path(os.getenv("PHOTO_TOOL_WORKSPACE", "C:/PhotoTool_Test"))
-```
-
----
-
-## 📝 API Endpoints
+## Project Structure
 
 ```
-GET  /                              # Main HTML page
-GET  /api/photos                    # List photos (paginated)
-POST /api/photos/{id}/rate          # Rate a photo
-GET  /api/stats                     # Get statistics
-GET  /thumbnails/{filename}         # Serve thumbnail
+gui_poc/
+├── server.py                    # Flask backend server
+├── static/
+│   ├── index.html              # Main HTML (optimized, 148 KB)
+│   ├── styles.css              # CSS styles (34 KB, cacheable)
+│   ├── app.js                  # Vue 3 application (127 KB, cacheable)
+│   └── index_original.html     # Backup of original file
+├── PERFORMANCE_OPTIMIZATION.md  # Detailed optimization report
+└── README.md                    # This file
 ```
 
----
+## Recent Performance Optimizations ⚡
 
-## 🐛 Troubleshooting
+The web interface has been optimized for better performance:
 
-### Thumbnails not loading?
+- **53% reduction** in main HTML file size (314 KB → 148 KB)
+- **Cacheable assets**: CSS and JS now load separately and cache efficiently
+- **Production Vue build**: Faster runtime, smaller size
+- **Resource hints**: Preconnect, DNS prefetch, and preload for faster loading
 
-Make sure you've run scan to generate thumbnails:
+See [PERFORMANCE_OPTIMIZATION.md](./PERFORMANCE_OPTIMIZATION.md) for details.
 
-```powershell
-python -m photo_tool.cli.main scan scan -w "C:\PhotoTool_Test"
+## Features
+
+### Core Functionality
+- 📸 **Media Manager**: Register and scan photo folders
+- 🗂️ **Workspaces**: Organize photo collections
+- 📁 **Projects**: Filter-based or folder-based projects
+- 🎬 **Media View**: Browse, rate, and manage photos
+- 📦 **Bursts**: Automatic burst detection and management
+- 🎬 **Slideshow**: Full-screen photo slideshow with controls
+
+### Photo Management
+- ⭐ **Rating System**: 5-star rating with keyboard shortcuts
+- 🎨 **Color Labels**: Red, Yellow, Green, Blue, Purple
+- 🏷️ **Keywords**: Tag photos with searchable keywords
+- 🔍 **Blur Detection**: Automatic detection of blurry photos
+- 🔎 **Advanced Filtering**: Filter by rating, color, keywords, blur
+
+### Export & Sharing
+- 📤 **Gallery Export**: Create standalone HTML photo galleries
+- 🖼️ **Multiple Templates**: PhotoSwipe, grid layouts
+- 📱 **Responsive**: Works on desktop, tablet, and mobile
+- 🎵 **Music Support**: Add background music to slideshows
+
+## Browser Compatibility
+
+- ✅ Chrome/Edge 90+
+- ✅ Firefox 88+
+- ✅ Safari 14+
+- ✅ Mobile browsers
+
+## Development
+
+### File Modifications
+- **index.html**: Structure and Vue templates only
+- **styles.css**: All CSS styles, animations, and media queries
+- **app.js**: Vue 3 application logic, data, and methods
+
+### Future Optimizations
+See the "Further Optimization Opportunities" section in [PERFORMANCE_OPTIMIZATION.md](./PERFORMANCE_OPTIMIZATION.md).
+
+## Rollback
+
+If you need to restore the original version:
+
+```bash
+cd static
+mv index.html index_optimized.html
+mv index_original.html index.html
 ```
 
-### CORS errors?
+## Requirements
 
-Already handled with `flask-cors`
+- Python 3.8+
+- Flask
+- Flask-CORS
+- photo_tool module (parent directory)
 
-### Port 8000 already in use?
+## License
 
-Change port in `server.py`:
-
-```python
-app.run(debug=True, port=8080)  # Use 8080 instead
-```
-
----
-
-## ⌨️ Keyboard Shortcuts
-
-### **In Lightbox:**
-```
-←/→     Navigate photos
-1-5     Quick rating
-C       Cycle color labels
-0       Clear rating
-ESC     Close lightbox
-```
-
-See `KEYBOARD_SHORTCUTS.md` for full list.
-
----
-
-## 📦 Export Galleries
-
-### **Export Process:**
-1. Filter photos (e.g., 5★ + Green + "landscape")
-2. Click "📦 Export Gallery"
-3. Enter title and choose template
-4. Gallery created in `C:\PhotoTool_Test\exports\`
-
-### **Templates:**
-- **PhotoSwipe** - Modern, fullscreen, touch-enabled
-- **Simple** - Lightweight grid, no dependencies
-
-### **Deployment:**
-```powershell
-# Upload to Netlify (free, 1 minute)
-# 1. Go to: https://app.netlify.com/drop
-# 2. Drag & drop the "gallery" folder
-# 3. Get shareable link!
-```
-
----
-
-## 🚀 Production Roadmap (v0.3.0+)
-
-Future enhancements:
-
-1. **FastAPI** instead of Flask (async, better performance)
-2. **Vue/Nuxt** proper build system (SPA/SSR)
-3. **Map View** - GPS coordinates on interactive map
-4. **Burst Management** - Select & delete from bursts
-5. **Batch Operations** - Rate/tag/color multiple photos
-6. **Video Player** - Play videos in lightbox
-7. **Audio Player** - Play audio files
-8. **Basic Editing** - Crop, rotate, adjust
-
----
-
-## 💡 Tips
-
-- **Responsive** - Works on desktop, tablet, mobile
-- **Dark Theme** - Easy on the eyes
-- **Fast** - Lazy loading for performance
-- **No Database** - Uses existing file system
-
----
-
-**Enjoy! 🎉**
+Part of the Python-tools repository.
