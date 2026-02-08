@@ -72,9 +72,18 @@ class FolderScanner:
         Returns:
             Summary statistics
         """
+        print(f"\n{'='*60}")
+        print(f"SCANNER.SCAN() CALLED")
+        print(f"Folder: {self.folder}")
+        print(f"Analyzers: {self.analyzers}")
+        print(f"Threads: {self.threads}")
+        print(f"Skip existing: {self.skip_existing}")
+        print(f"{'='*60}\n")
+        
         logger.info(f"Starting scan of {self.folder}")
         start_time = time.time()
         
+        print("DEBUG: Discovering photos...")
         # Discover photos
         media = scan_multiple_directories(
             [self.folder],
@@ -84,22 +93,29 @@ class FolderScanner:
         )
         photos = filter_by_type(media, "photo")
         
+        print(f"DEBUG: Found {len(photos)} photos")
         logger.info(f"Found {len(photos)} photos in {self.folder}")
         
         # Initialize progress
         self.progress = ScanProgress(len(photos))
         
+        print(f"DEBUG: Progress initialized, checking which photos to scan...")
         # Filter photos that need scanning
+        # IMPORTANT: For burst analysis, we should scan ALL photos together,
+        # even if some were already scanned. Burst detection needs to see
+        # relationships between ALL photos in the folder.
         photos_to_scan = []
         for photo in photos:
             sidecar = SidecarManager(photo.path)
             
             if self.skip_existing and sidecar.exists and not sidecar.is_stale():
                 # Skip - already scanned and up-to-date
+                # WARNING: This can break burst detection if only some photos are skipped!
                 self.progress.completed += 1
             else:
                 photos_to_scan.append(photo.path)
         
+        print(f"DEBUG: {len(photos_to_scan)} photos to scan, {len(photos) - len(photos_to_scan)} skipped")
         logger.info(f"Scanning {len(photos_to_scan)} photos ({len(photos) - len(photos_to_scan)} skipped)")
         
         # Scan photos in parallel
@@ -113,11 +129,14 @@ class FolderScanner:
         }
         
         if len(photos_to_scan) > 0:
+            print(f"DEBUG: Starting ThreadPoolExecutor with {self.threads} workers...")
             with ThreadPoolExecutor(max_workers=self.threads) as executor:
                 futures = {
                     executor.submit(self._scan_photo, photo): photo 
                     for photo in photos_to_scan
                 }
+                
+                print(f"DEBUG: Submitted {len(futures)} scan jobs")
                 
                 for future in as_completed(futures):
                     photo = futures[future]
@@ -137,8 +156,24 @@ class FolderScanner:
                         results['errors'] += 1
                         self.progress.errors.append(str(photo))
         
+        print(f"DEBUG: Completed individual photo scans: {results['scanned']} scanned")
+        
+        print(f"\n{'='*60}")
+        print(f"BEFORE BURST CHECK")
+        print(f"'burst' in self.analyzers: {'burst' in self.analyzers}")
+        print(f"len(photos) > 1: {len(photos) > 1}")
+        print(f"self.analyzers: {self.analyzers}")
+        print(f"{'='*60}\n")
+        
         # Run burst detection if requested
         if 'burst' in self.analyzers and len(photos) > 1:
+            print(f"\n{'='*60}")
+            print(f"BURST ANALYSIS STARTING")
+            print(f"{'='*60}")
+            print(f"Analyzers list: {self.analyzers}")
+            print(f"Total photos: {len(photos)}")
+            print(f"{'='*60}\n")
+            
             logger.info("Running burst detection...")
             self.progress.current_analyzer = 'burst'
             self.progress.current_file = 'Analyzing burst groups...'
@@ -148,6 +183,10 @@ class FolderScanner:
             
             try:
                 burst_results = self._analyze_bursts(photos)
+                
+                print(f"\n{'='*60}")
+                print(f"BURST RESULTS: {len(burst_results)} photos analyzed")
+                print(f"{'='*60}\n")
                 
                 # Update sidecars with burst data
                 for photo_path_str, burst_data in burst_results.items():
@@ -159,9 +198,18 @@ class FolderScanner:
                 
                 results['burst_groups'] = sum(1 for b in burst_results.values() if b.get('is_burst_candidate', False))
                 logger.info(f"Burst detection complete: {results['burst_groups']} burst candidates")
+                
+                print(f"\n{'='*60}")
+                print(f"BURST COMPLETE: {results['burst_groups']} candidates found")
+                print(f"{'='*60}\n")
             
             except Exception as e:
+                print(f"\n{'='*60}")
+                print(f"BURST ERROR: {e}")
+                print(f"{'='*60}\n")
                 logger.error(f"Burst detection error: {e}")
+                import traceback
+                traceback.print_exc()
                 results['burst_groups'] = 0
         
         # Final progress
@@ -222,81 +270,23 @@ class FolderScanner:
     
     def _analyze_bursts(self, photos: List) -> Dict[str, Dict[str, Any]]:
         """
-        Analyze photos for burst detection
-        Simplified version without separate analyzer class
+        Analyze photos for burst detection using BurstAnalyzer
         """
-        results = {}
+        from photo_tool.prescan.analyzers.burst import BurstAnalyzer
         
-        # Get capture times
-        photo_times = []
-        for photo in photos:
-            try:
-                capture_time = get_capture_time(photo.path)
-                photo_times.append((photo.path, capture_time))
-            except Exception as e:
-                logger.warning(f"Could not get capture time for {photo.path.name}: {e}")
-                photo_times.append((photo.path, None))
+        logger.info(f"Running burst analysis on {len(photos)} photos...")
         
-        # Sort by capture time
-        photo_times.sort(key=lambda x: x[1] if x[1] else datetime.min)
+        # Extract photo paths
+        photo_paths = [photo.path for photo in photos]
         
-        # Analyze each photo
-        time_threshold = 3  # seconds
-        similarity_threshold = 0.85
-        max_neighbors = 10
+        # Create analyzer and run
+        analyzer = BurstAnalyzer(
+            time_threshold=3,
+            similarity_threshold=0.85,
+            max_neighbors=20
+        )
         
-        for i, (photo_path, capture_time) in enumerate(photo_times):
-            if capture_time is None:
-                results[str(photo_path)] = {
-                    'burst_neighbors': [],
-                    'is_burst_candidate': False,
-                    'burst_group_size': 1,
-                    'error': 'No capture time'
-                }
-                continue
-            
-            # Find potential burst neighbors
-            neighbors = []
-            
-            # Check previous photos
-            for j in range(max(0, i - max_neighbors), i):
-                prev_path, prev_time = photo_times[j]
-                if prev_time is None:
-                    continue
-                
-                time_diff = (capture_time - prev_time).total_seconds()
-                if time_diff <= time_threshold:
-                    neighbors.append({
-                        'path': str(prev_path),
-                        'time_diff': time_diff,
-                        'similarity': 0.9,  # Simplified: just use time-based
-                        'direction': 'previous'
-                    })
-            
-            # Check next photos
-            for j in range(i + 1, min(len(photo_times), i + max_neighbors + 1)):
-                next_path, next_time = photo_times[j]
-                if next_time is None:
-                    continue
-                
-                time_diff = (next_time - capture_time).total_seconds()
-                if time_diff <= time_threshold:
-                    neighbors.append({
-                        'path': str(next_path),
-                        'time_diff': time_diff,
-                        'similarity': 0.9,  # Simplified: just use time-based
-                        'direction': 'next'
-                    })
-                else:
-                    break
-            
-            # Store results
-            results[str(photo_path)] = {
-                'burst_neighbors': neighbors,
-                'is_burst_candidate': len(neighbors) > 0,
-                'burst_group_size': len(neighbors) + 1,
-                'computed_at': datetime.now().isoformat()
-            }
+        results = analyzer.analyze_batch(photo_paths)
         
         logger.info(f"Burst analysis complete: {sum(1 for r in results.values() if r['is_burst_candidate'])} burst candidates")
         return results

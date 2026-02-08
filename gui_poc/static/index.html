@@ -176,7 +176,8 @@
                             <button @click="scanMediaFolder(folder.path)"
                                     :disabled="!isFolderAvailable(folder) || isScanningFolder(folder.path)"
                                     style="background: linear-gradient(135deg, #f59e0b, #ef4444); color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-weight: 600;"
-                                    :style="{ opacity: (!isFolderAvailable(folder) || isScanningFolder(folder.path)) ? 0.5 : 1 }">
+                                    :style="{ opacity: (!isFolderAvailable(folder) || isScanningFolder(folder.path)) ? 0.5 : 1 }"
+                                    title="Complete scan with blur + burst analysis">
                                 {{ isScanningFolder(folder.path) ? '⏳ Scanning...' : '🔍 Scan' }}
                             </button>
                             <button @click="removeMediaFolder(folder.path)"

@@ -877,13 +877,14 @@ const { createApp } = Vue;
                         // Small delay to let SSE connection establish
                         await new Promise(resolve => setTimeout(resolve, 100));
                         
-                        // Trigger scan with both blur and burst analyzers
+                        // IMPORTANT: Always force=true for complete scan!
+                        // Burst detection requires analyzing ALL photos together
                         const res = await fetch(`/api/media/folders/${encodeURIComponent(folderPath)}/scan`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
                                 analyzers: ['blur', 'burst'],  // Enable both analyzers
-                                force: false,
+                                force: true,  // ALWAYS force complete scan
                                 threads: 4
                             })
                         });

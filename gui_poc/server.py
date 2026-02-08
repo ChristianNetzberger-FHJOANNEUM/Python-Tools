@@ -2432,11 +2432,12 @@ def delete_project(project_id):
 @app.get('/api/projects/<project_id>/media')
 def get_project_media(project_id):
     """
-    Get all media for a specific project (OPTIMIZED - Phase 1 & 2)
+    Get all media for a specific project (OPTIMIZED - Phase 3: SQLite)
     Query params:
         - limit: Max number of items (default: 2500)
         - offset: Skip N items (default: 0)
         - type: Filter by type (photo, video, audio, or 'all')
+        - use_sqlite: Use SQLite cache (default: auto)
     """
     try:
         with perf_measure("project_media_total"):
@@ -2454,6 +2455,7 @@ def get_project_media(project_id):
             limit = int(request.args.get('limit', 2500))
             offset = int(request.args.get('offset', 0))
             media_type = request.args.get('type', 'all')
+            use_sqlite = request.args.get('use_sqlite', 'auto')
             
             # Get enabled folders from project
             enabled_folders = []
@@ -2475,7 +2477,266 @@ def get_project_media(project_id):
             config = load_config(ws.config_file)
             
             # ============================================================================
-            # PHASE 1.1: Check Cache (Project-specific)
+            # PHASE 3: Try SQLite-backed loading (FAST!)
+            # ============================================================================
+            # The workspace root for DB is the tool root (where gui_poc/ is located)
+            workspace_root_for_db = str(Path(__file__).parent.parent)
+            
+            # Check if SQLite is available and has data
+            try:
+                from hybrid_manager import get_hybrid_manager
+                hybrid_mgr = get_hybrid_manager(workspace_root_for_db)
+                
+                # Check if database exists and has media
+                db_path = hybrid_mgr.db_manager.workspace_db_path
+                db_exists = db_path.exists()
+                
+                if db_exists:
+                    conn = hybrid_mgr.db_manager.get_workspace_db()
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT COUNT(*) as count FROM media")
+                    media_count = cursor.fetchone()['count']
+                    conn.close()
+                    
+                    sqlite_available = media_count > 0
+                else:
+                    sqlite_available = False
+                
+                # Auto-detect: Use SQLite if available, otherwise fall back
+                if use_sqlite == 'auto':
+                    use_sqlite = sqlite_available
+                elif use_sqlite == 'true':
+                    use_sqlite = True
+                    if not sqlite_available:
+                        print(f"⚠️ SQLite requested but not available, running migration...")
+                        logger.warning("SQLite not available, running migration...")
+                        hybrid_mgr.migrate_folders_if_needed([str(f) for f in enabled_folders], force=False)
+                        sqlite_available = True
+                else:
+                    use_sqlite = False
+                
+                if use_sqlite and sqlite_available:
+                    print(f"\n💾 Using SQLite for project {project_id} (FAST PATH)")
+                    logger.info(f"💾 SQLite-backed loading for project {project_id}")
+                    
+                    with perf_measure("sqlite_load_total"):
+                        # Ensure project DB exists
+                        try:
+                            project_conn = hybrid_mgr.db_manager.get_project_db(project_id)
+                            project_conn.close()
+                        except:
+                            # Project DB doesn't exist yet, create it
+                            hybrid_mgr.db_manager.init_project_db(project_id)
+                        
+                        # ========================================================================
+                        # AUTO-MIGRATION: Check if folders need migration
+                        # ========================================================================
+                        workspace_conn = hybrid_mgr.db_manager.get_workspace_db()
+                        cursor = workspace_conn.cursor()
+                        
+                        # Check which folders are already in workspace DB
+                        folders_to_migrate = []
+                        for folder in enabled_folders:
+                            cursor.execute(
+                                "SELECT COUNT(*) as count FROM media WHERE folder LIKE ?",
+                                (f"{str(folder)}%",)
+                            )
+                            count = cursor.fetchone()['count']
+                            if count == 0:
+                                folders_to_migrate.append(folder)
+                                print(f"📂 New folder detected: {folder}")
+                        
+                        workspace_conn.close()
+                        
+                        # Auto-migrate new folders
+                        if folders_to_migrate:
+                            print(f"\n🚀 Auto-migrating {len(folders_to_migrate)} new folders...")
+                            logger.info(f"Auto-migrating {len(folders_to_migrate)} folders: {folders_to_migrate}")
+                            
+                            try:
+                                migration_stats = hybrid_mgr.migrate_folders_if_needed(
+                                    [str(f) for f in folders_to_migrate], 
+                                    force=True
+                                )
+                                
+                                if migration_stats:
+                                    print(f"✅ Auto-migration complete: {migration_stats['items_added']} items added to global pool")
+                                    logger.info(f"Auto-migration stats: {migration_stats}")
+                                    
+                            except Exception as e:
+                                logger.error(f"❌ Auto-migration failed: {e}")
+                                print(f"⚠️ Auto-migration failed: {e}")
+                                # Continue anyway - will fall back to legacy if needed
+                        
+                        # Load from SQLite
+                        with perf_measure("sqlite_query"):
+                            # Convert media_type 'all' to None
+                            query_media_type = None if media_type == 'all' else media_type
+                            
+                            # ========================================================================
+                            # NEW APPROACH: Always load from Workspace DB filtered by enabled_folders
+                            # No Project DB population needed! Just filter on-the-fly!
+                            # ========================================================================
+                            workspace_conn = hybrid_mgr.db_manager.get_workspace_db()
+                            cursor = workspace_conn.cursor()
+                            
+                            # Build query for enabled folders
+                            folder_conditions = ' OR '.join(['folder LIKE ?' for _ in enabled_folders])
+                            folder_params = [f"{str(f)}%" for f in enabled_folders]
+                            
+                            if query_media_type:
+                                query = f"""
+                                    SELECT 
+                                        m.id, m.path, m.filename, m.folder, m.media_type,
+                                        m.file_size, m.file_mtime, m.is_available,
+                                        m.rating, m.color, m.keywords, m.comment,
+                                        m.created_at, m.updated_at,
+                                        pm.capture_time, pm.width, pm.height,
+                                        pm.camera_make, pm.camera_model, pm.lens_model,
+                                        pm.iso, pm.aperture, pm.shutter_speed, pm.focal_length,
+                                        pm.blur_laplacian, pm.blur_tenengrad, pm.blur_roi,
+                                        pm.burst_id, pm.is_burst_candidate, pm.burst_neighbors
+                                    FROM media m
+                                    LEFT JOIN photo_metadata pm ON m.id = pm.media_id
+                                    WHERE ({folder_conditions}) 
+                                      AND m.media_type = ?
+                                      AND m.is_available = 1
+                                    ORDER BY m.filename
+                                """
+                                cursor.execute(query, folder_params + [query_media_type])
+                            else:
+                                query = f"""
+                                    SELECT 
+                                        m.id, m.path, m.filename, m.folder, m.media_type,
+                                        m.file_size, m.file_mtime, m.is_available,
+                                        m.rating, m.color, m.keywords, m.comment,
+                                        m.created_at, m.updated_at,
+                                        pm.capture_time, pm.width, pm.height,
+                                        pm.camera_make, pm.camera_model, pm.lens_model,
+                                        pm.iso, pm.aperture, pm.shutter_speed, pm.focal_length,
+                                        pm.blur_laplacian, pm.blur_tenengrad, pm.blur_roi,
+                                        pm.burst_id, pm.is_burst_candidate, pm.burst_neighbors
+                                    FROM media m
+                                    LEFT JOIN photo_metadata pm ON m.id = pm.media_id
+                                    WHERE ({folder_conditions})
+                                      AND m.is_available = 1
+                                    ORDER BY m.filename
+                                """
+                                cursor.execute(query, folder_params)
+                            
+                            media_list = [dict(row) for row in cursor.fetchall()]
+                            workspace_conn.close()
+                            
+                            # DEBUG: Check if color data is present
+                            colored_items = [m for m in media_list if m.get('color')]
+                            print(f"📊 DEBUG: {len(media_list)} total items, {len(colored_items)} with color labels")
+                            if colored_items:
+                                sample = colored_items[0]
+                                print(f"   Sample: {sample['filename']} - color={sample['color']}, rating={sample['rating']}")
+                            
+                            print(f"✅ Loaded {len(media_list)} items from workspace DB (filtered by {len(enabled_folders)} folders)")
+                        
+                        # Parse JSON fields and build response
+                        result = []
+                        for media in media_list:
+                            # Parse keywords (JSON string → array)
+                            keywords = []
+                            if media.get('keywords'):
+                                try:
+                                    keywords = json.loads(media['keywords'])
+                                except:
+                                    keywords = []
+                            
+                            # Parse burst_neighbors JSON
+                            burst_neighbors_list = []
+                            if media.get('burst_neighbors'):
+                                try:
+                                    burst_neighbors_list = json.loads(media['burst_neighbors'])
+                                except:
+                                    burst_neighbors_list = []
+                            
+                            # Build response item with ALL fields
+                            item = {
+                                'id': media['path'],
+                                'path': media['path'],
+                                'name': media['filename'],
+                                'type': media['media_type'],
+                                'size': media.get('file_size', 0),
+                                'rating': media.get('rating', 0),
+                                'color': media.get('color'),
+                                'keywords': keywords,
+                                'comment': media.get('comment'),
+                                'capture_time': media.get('capture_time'),
+                                'width': media.get('width'),
+                                'height': media.get('height'),
+                                'camera_model': media.get('camera_model'),
+                                # Blur scores
+                                'blur': {
+                                    'laplacian': media.get('blur_laplacian'),
+                                    'tenengrad': media.get('blur_tenengrad'),
+                                    'roi': media.get('blur_roi')
+                                },
+                                'blur_scores': {
+                                    'laplacian': media.get('blur_laplacian'),
+                                    'tenengrad': media.get('blur_tenengrad'),
+                                    'roi': media.get('blur_roi')
+                                },
+                                # Burst metadata (CORRECTED FIELD NAMES!)
+                                'burst_id': media.get('burst_id'),
+                                'is_burst_candidate': bool(media.get('is_burst_candidate', 0)),
+                                # Only mark as burst_lead if there's a valid burst_id AND neighbors
+                                'is_burst_lead': bool(media.get('burst_id') and burst_neighbors_list),
+                                'burst_neighbors': burst_neighbors_list,
+                                # Only set burst_count if there's a valid burst_id
+                                'burst_count': len(burst_neighbors_list) + 1 if (media.get('burst_id') and burst_neighbors_list) else 0,
+                                # Critical: thumbnail paths
+                                'thumbnail': f"/thumbnails/{Path(media['filename']).stem}.jpg",
+                                'full_image': f"/images/{Path(media['filename']).stem}{Path(media['filename']).suffix}",
+                                # Relative path for display
+                                'relative_path': media['filename'],
+                                'has_project_override': False,
+                                'rating_source': 'global',
+                                'color_source': 'global'
+                            }
+                            
+                            result.append(item)
+                        
+                        # Apply pagination
+                        total_count = len(result)
+                        result = result[offset:offset + limit]
+                        
+                        # Log performance
+                        timings = get_perf_timings()
+                        print(f"✅ SQLite load complete: {total_count} items in {timings.get('sqlite_load_total', 0):.3f}s")
+                        logger.info(f"📊 SQLite Performance: {timings}")
+                        
+                        # Return in the SAME format as legacy (media array)
+                        return jsonify({
+                            'media': result,  # Use 'media' like legacy does!
+                            'total': total_count,
+                            'limit': limit,
+                            'offset': offset,
+                            'performance': timings,
+                            'source': 'sqlite',
+                            'project_id': project_id,
+                            'counts': {
+                                'photos': len([m for m in result if m['type'] == 'photo']),
+                                'videos': len([m for m in result if m['type'] == 'video']),
+                                'audio': len([m for m in result if m['type'] == 'audio'])
+                            }
+                        })
+                
+                # Fall through to old method if SQLite not used
+                print(f"\n🐌 Using legacy file-based loading (SQLite not available)")
+                logger.info("Falling back to legacy file-based loading")
+                
+            except Exception as e:
+                print(f"❌ SQLite loading failed: {e}")
+                logger.error(f"SQLite loading failed: {e}", exc_info=True)
+                print(f"⚠️ Falling back to legacy method")
+            
+            # ============================================================================
+            # LEGACY METHOD: File-based loading (Phase 1 & 2 optimizations)
             # ============================================================================
             cache_key = f"{project_id}_{tuple(enabled_folders)}_{tuple(config.scan.extensions)}"
             
@@ -2839,7 +3100,8 @@ def get_project_media(project_id):
                     'videos': len(videos),
                     'audio': len(audio)
                 },
-                'performance': timings  # Include timing for debugging
+                'performance': timings,  # Include timing for debugging
+                'source': 'legacy'  # Indicate legacy file-based loading
             })
     
     except Exception as e:
@@ -3087,6 +3349,11 @@ def get_config_info():
 
 if __name__ == '__main__':
     import socket
+    from datetime import datetime
+    
+    # Version info
+    SERVER_VERSION = "3.0.0"
+    BUILD_DATE = "2026-02-08 21:20"
     
     # Get local IP for Smart TV access
     try:
@@ -3098,9 +3365,17 @@ if __name__ == '__main__':
     print("\n" + "="*60)
     print("Photo Tool Web GUI - Server Starting")
     print("="*60)
+    print(f"Version:          {SERVER_VERSION}")
+    print(f"Build Date:       {BUILD_DATE}")
+    print(f"Started:          {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("="*60)
     print(f"PC Browser:       http://localhost:8000")
     print(f"Smart TV/Mobile:  http://{local_ip}:8000")
     print("="*60)
+    print("\nFeatures:")
+    print("   - SQLite performance cache (Phase 3a)")
+    print("   - Burst detection (Version 2 format)")
+    print("   - Auto-migration on folder enable")
     print("\nFor Smart TV access:")
     print("   1. Make sure Windows Firewall allows port 8000")
     print("   2. Open Smart TV browser")

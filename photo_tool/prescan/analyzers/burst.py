@@ -55,19 +55,26 @@ class BurstAnalyzer:
             progress_callback: Optional callback(completed, total)
         
         Returns:
-            Dictionary mapping photo path to burst analysis:
+            Dictionary mapping photo path to burst analysis (Version 2 format):
             {
                 'photo1.jpg': {
-                    'burst_neighbors': [
-                        {'path': 'photo2.jpg', 'time_diff': 0.5, 'similarity': 0.92},
-                        ...
-                    ],
                     'is_burst_candidate': True,
-                    'burst_group_size': 5
+                    'burst_id': 'a4720613550b',
+                    'neighbors': ['photo2.jpg', 'photo3.jpg'],
+                    'score': 0.92,
+                    'detection_date': 1739024645
                 },
                 ...
             }
+        
+        Format: Version 2 (Spec-compliant)
+        - Uses 'neighbors' (array of strings) not 'burst_neighbors' (array of objects)
+        - Generates 'burst_id' for each burst group
+        - Uses 'detection_date' (Unix timestamp) not 'computed_at' (ISO string)
         """
+        import hashlib
+        import time
+        
         # Import here to avoid circular dependencies
         from photo_tool.io import get_capture_time
         from photo_tool.util.logging import get_logger
@@ -75,7 +82,8 @@ class BurstAnalyzer:
         logger = get_logger("burst_analyzer")
         logger.info(f"Analyzing {len(photos)} photos for bursts...")
         
-        results = {}
+        # Phase 1: Find neighbors for each photo
+        photo_neighbors = {}  # path -> list of neighbor paths
         
         # Get capture times
         photo_times = []
@@ -96,16 +104,12 @@ class BurstAnalyzer:
                 progress_callback(i + 1, len(photo_times))
             
             if capture_time is None:
-                results[str(photo)] = {
-                    'burst_neighbors': [],
-                    'is_burst_candidate': False,
-                    'burst_group_size': 1,
-                    'error': 'No capture time'
-                }
+                photo_neighbors[str(photo)] = []
                 continue
             
             # Find potential burst neighbors
             neighbors = []
+            similarities = []
             
             # Check previous photos
             for j in range(max(0, i - self.max_neighbors), i):
@@ -118,12 +122,8 @@ class BurstAnalyzer:
                     # Calculate similarity
                     similarity = self._calculate_similarity(photo, prev_photo)
                     if similarity >= self.similarity_threshold:
-                        neighbors.append({
-                            'path': str(prev_photo),
-                            'time_diff': time_diff,
-                            'similarity': similarity,
-                            'direction': 'previous'
-                        })
+                        neighbors.append(str(prev_photo))
+                        similarities.append(similarity)
             
             # Check next photos
             for j in range(i + 1, min(len(photo_times), i + self.max_neighbors + 1)):
@@ -136,27 +136,80 @@ class BurstAnalyzer:
                     # Calculate similarity
                     similarity = self._calculate_similarity(photo, next_photo)
                     if similarity >= self.similarity_threshold:
-                        neighbors.append({
-                            'path': str(next_photo),
-                            'time_diff': time_diff,
-                            'similarity': similarity,
-                            'direction': 'next'
-                        })
+                        neighbors.append(str(next_photo))
+                        similarities.append(similarity)
                 else:
                     break  # Too far apart, no need to check further
             
-            # Store results
-            results[str(photo)] = {
-                'burst_neighbors': neighbors,
-                'is_burst_candidate': len(neighbors) > 0,
-                'burst_group_size': len(neighbors) + 1,
-                'computed_at': datetime.now().isoformat()
+            photo_neighbors[str(photo)] = {
+                'neighbors': neighbors,
+                'avg_similarity': sum(similarities) / len(similarities) if similarities else 0.0
             }
-            
-            if len(neighbors) > 0:
-                logger.debug(f"Found burst: {photo.name} has {len(neighbors)} neighbors")
         
-        logger.info(f"Burst analysis complete: {sum(1 for r in results.values() if r['is_burst_candidate'])} burst candidates found")
+        # Phase 2: Group photos into burst groups (connected components)
+        visited = set()
+        burst_groups = []
+        
+        def dfs(photo_path, group):
+            """Depth-first search to find all photos in a burst group"""
+            if photo_path in visited:
+                return
+            visited.add(photo_path)
+            group.append(photo_path)
+            
+            # Visit all neighbors
+            for neighbor_path in photo_neighbors.get(photo_path, {}).get('neighbors', []):
+                dfs(neighbor_path, group)
+        
+        # Find all burst groups
+        for photo_path in photo_neighbors:
+            if photo_path not in visited and photo_neighbors[photo_path]['neighbors']:
+                group = []
+                dfs(photo_path, group)
+                if len(group) > 1:
+                    burst_groups.append(sorted(group))  # Sort for consistency
+        
+        logger.info(f"Found {len(burst_groups)} burst groups")
+        
+        # Phase 3: Assign burst_id to each group
+        burst_ids = {}  # photo_path -> burst_id
+        detection_ts = int(time.time())
+        
+        for group in burst_groups:
+            # Generate consistent burst_id from sorted group members
+            group_str = '|'.join(sorted(group))
+            burst_id = hashlib.md5(group_str.encode()).hexdigest()[:12]
+            
+            for photo_path in group:
+                burst_ids[photo_path] = burst_id
+        
+        # Phase 4: Build results in Version 2 format
+        results = {}
+        for photo_path, neighbor_info in photo_neighbors.items():
+            neighbors = neighbor_info['neighbors']
+            avg_similarity = neighbor_info['avg_similarity']
+            
+            if neighbors:
+                # Photo is in a burst
+                results[photo_path] = {
+                    'is_burst_candidate': True,
+                    'burst_id': burst_ids.get(photo_path),
+                    'neighbors': neighbors,
+                    'score': round(avg_similarity, 2),
+                    'detection_date': detection_ts
+                }
+                logger.debug(f"Burst: {Path(photo_path).name} -> group {burst_ids.get(photo_path)}")
+            else:
+                # Photo is not in a burst
+                results[photo_path] = {
+                    'is_burst_candidate': False,
+                    'burst_id': None,
+                    'neighbors': [],
+                    'score': 0.0,
+                    'detection_date': detection_ts
+                }
+        
+        logger.info(f"Burst analysis complete: {sum(1 for r in results.values() if r['is_burst_candidate'])} burst candidates in {len(burst_groups)} groups")
         
         return results
     
