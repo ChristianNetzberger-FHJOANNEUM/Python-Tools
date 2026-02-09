@@ -131,6 +131,12 @@ const { createApp } = Vue;
                     lightboxIndex: 0,
                     // Image Editing (Phase 3b)
                     showEditPanel: true,  // Show edit panel in lightbox
+                    canvasProcessor: null,  // ImageCanvasProcessor instance
+                    canvasLoading: false,
+                    canvasPerformance: 0,  // Last render time in ms
+                    editDebounceTimer: null,  // Debounce timer for slider changes
+                    isSliderDragging: false,  // Track if user is actively dragging
+                    lastRenderTime: 0,  // Timestamp of last render
                     currentEdits: {
                         exposure: 0,
                         contrast: 0,
@@ -2379,6 +2385,12 @@ const { createApp } = Vue;
                     this.showLightbox = true;
                     document.addEventListener('keydown', this.handleLightboxKeyboard);
                     
+                    // Wait for canvas to be mounted
+                    await this.$nextTick();
+                    
+                    // Initialize canvas processor
+                    await this.initializeCanvasForPhoto(photo);
+                    
                     // Load edits for this photo
                     await this.loadEditsForPhoto(photo.path);
                 },
@@ -2389,17 +2401,25 @@ const { createApp } = Vue;
                     document.removeEventListener('keydown', this.handleLightboxKeyboard);
                 },
                 
-                nextPhoto() {
+                async nextPhoto() {
                     if (this.lightboxIndex < this.filteredPhotos.length - 1) {
                         this.lightboxIndex++;
                         this.lightboxPhoto = this.filteredPhotos[this.lightboxIndex];
+                        
+                        // Reload canvas and edits for new photo
+                        await this.initializeCanvasForPhoto(this.lightboxPhoto);
+                        await this.loadEditsForPhoto(this.lightboxPhoto.path);
                     }
                 },
                 
-                prevPhoto() {
+                async prevPhoto() {
                     if (this.lightboxIndex > 0) {
                         this.lightboxIndex--;
                         this.lightboxPhoto = this.filteredPhotos[this.lightboxIndex];
+                        
+                        // Reload canvas and edits for new photo
+                        await this.initializeCanvasForPhoto(this.lightboxPhoto);
+                        await this.loadEditsForPhoto(this.lightboxPhoto.path);
                     }
                 },
                 
@@ -2410,6 +2430,31 @@ const { createApp } = Vue;
                 // ========================================
                 // IMAGE EDITING METHODS (Phase 3b)
                 // ========================================
+                
+                async initializeCanvasForPhoto(photo) {
+                    const canvas = document.getElementById('lightbox-canvas');
+                    if (!canvas) {
+                        console.error('Canvas not found');
+                        return;
+                    }
+                    
+                    this.canvasLoading = true;
+                    
+                    try {
+                        // Create new processor
+                        this.canvasProcessor = new ImageCanvasProcessor(canvas);
+                        
+                        // Load image
+                        const imageUrl = photo.full_image || photo.thumbnail;
+                        await this.canvasProcessor.loadImage(imageUrl);
+                        
+                        console.log('✅ Canvas initialized for', photo.name);
+                    } catch (err) {
+                        console.error('Error initializing canvas:', err);
+                    } finally {
+                        this.canvasLoading = false;
+                    }
+                },
                 
                 async loadEditsForPhoto(photoPath) {
                     if (!photoPath) return;
@@ -2431,6 +2476,15 @@ const { createApp } = Vue;
                             this.resetEdits();
                         }
                         this.editsChanged = false;
+                        
+                        // Apply edits to canvas
+                        if (this.canvasProcessor) {
+                            this.canvasProcessor.applyEdits(this.currentEdits);
+                            this.canvasPerformance = this.canvasProcessor.getPerformance();
+                            
+                            // Draw initial histogram
+                            this.drawHistogram();
+                        }
                     } catch (err) {
                         console.error('Error loading edits:', err);
                         this.resetEdits();
@@ -2500,10 +2554,110 @@ const { createApp } = Vue;
                         blacks: 0
                     };
                     this.editsChanged = false;
+                    
+                    // Reset canvas to original
+                    if (this.canvasProcessor) {
+                        this.canvasProcessor.reset();
+                    }
                 },
                 
                 onEditChange() {
                     this.editsChanged = true;
+                    
+                    // Smart throttling: Only update every 150ms during drag for performance
+                    const now = Date.now();
+                    const timeSinceLastRender = now - this.lastRenderTime;
+                    
+                    clearTimeout(this.editDebounceTimer);
+                    
+                    // If enough time passed, render immediately
+                    if (timeSinceLastRender > 150) {
+                        this.applyEditsToCanvas();
+                    } else {
+                        // Otherwise, wait for next throttle window
+                        this.editDebounceTimer = setTimeout(() => {
+                            this.applyEditsToCanvas();
+                        }, 150 - timeSinceLastRender);
+                    }
+                },
+                
+                applyEditsToCanvas() {
+                    if (this.canvasProcessor) {
+                        this.lastRenderTime = Date.now();
+                        this.canvasProcessor.applyEdits(this.currentEdits);
+                        this.canvasPerformance = this.canvasProcessor.getPerformance();
+                        
+                        // Update histogram
+                        this.drawHistogram();
+                    }
+                },
+                
+                drawHistogram() {
+                    const canvas = document.getElementById('histogram-canvas');
+                    if (!canvas || !this.canvasProcessor) return;
+                    
+                    const histogram = this.canvasProcessor.getHistogram();
+                    if (!histogram) return;
+                    
+                    const ctx = canvas.getContext('2d');
+                    const width = canvas.width;
+                    const height = canvas.height;
+                    
+                    // Clear completely (fix persistence)
+                    ctx.clearRect(0, 0, width, height);
+                    ctx.fillStyle = '#0a0a0a';
+                    ctx.fillRect(0, 0, width, height);
+                    
+                    // Draw luminance histogram with FIXED scale (no autoscale!)
+                    const data = histogram.luminance;
+                    
+                    // Fixed scale: Find 99th percentile to avoid single outliers
+                    const sortedData = [...data].sort((a, b) => b - a);
+                    const percentile99 = sortedData[Math.floor(sortedData.length * 0.01)] || 1;
+                    const maxValue = percentile99 * 1.5;  // Fixed scale based on 99th percentile
+                    
+                    // Draw histogram bars
+                    ctx.fillStyle = 'rgba(168, 139, 250, 0.7)';
+                    
+                    const barWidth = width / 256;
+                    for (let i = 0; i < 256; i++) {
+                        const x = i * barWidth;
+                        const normalizedHeight = Math.min(data[i] / maxValue, 1);  // Clamp to 0-1
+                        const barHeight = normalizedHeight * (height - 10);
+                        
+                        if (barHeight > 0) {
+                            ctx.fillRect(x, height - barHeight, barWidth, barHeight);
+                        }
+                    }
+                    
+                    // Draw grid lines for 0%, 50%, 100%
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+                    ctx.lineWidth = 1;
+                    
+                    // 0% (left - pure black)
+                    ctx.beginPath();
+                    ctx.moveTo(0, 0);
+                    ctx.lineTo(0, height);
+                    ctx.stroke();
+                    
+                    // 50% (middle - mid gray)
+                    ctx.beginPath();
+                    ctx.moveTo(width / 2, 0);
+                    ctx.lineTo(width / 2, height);
+                    ctx.stroke();
+                    
+                    // 100% (right - pure white)
+                    ctx.beginPath();
+                    ctx.moveTo(width - 1, 0);
+                    ctx.lineTo(width - 1, height);
+                    ctx.stroke();
+                    
+                    // Label the scale
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+                    ctx.font = '9px monospace';
+                    ctx.fillText('0', 2, height - 2);
+                    ctx.fillText('128', width / 2 - 10, height - 2);
+                    ctx.fillText('255', width - 20, height - 2);
                 },
                 
                 // ========================================

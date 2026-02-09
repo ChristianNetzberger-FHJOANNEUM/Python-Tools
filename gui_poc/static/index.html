@@ -18,6 +18,9 @@
     
     <!-- Vue 3 Production Build -->
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    
+    <!-- Image Canvas Processor for Live Preview -->
+    <script src="/static/image_canvas.js"></script>
 </head>
 <body>
     <div id="app">
@@ -1225,9 +1228,19 @@
             
             <div class="lightbox-content">
                 <div class="lightbox-main">
-                <img :src="lightboxPhoto.full_image || lightboxPhoto.thumbnail" 
-                     :alt="lightboxPhoto.name" 
-                     class="lightbox-image">
+                <!-- Canvas for live preview (replaces <img>) -->
+                <canvas id="lightbox-canvas" 
+                        ref="lightboxCanvas"
+                        class="lightbox-image"
+                        v-show="!canvasLoading"
+                        style="max-width: 90%; max-height: 90%; object-fit: contain;">
+                </canvas>
+                
+                <!-- Loading indicator -->
+                <div v-if="canvasLoading" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #a78bfa; font-size: 1.2rem;">
+                    <div class="spinner" style="margin: 0 auto 10px;"></div>
+                    Loading image...
+                </div>
                 
                 <button class="lightbox-nav prev" 
                         @click="prevPhoto" 
@@ -1333,6 +1346,10 @@
                             <input type="range" min="-2" max="2" step="0.1" 
                                    v-model.number="currentEdits.exposure"
                                    @input="onEditChange"
+                                   @mousedown="isSliderDragging = true"
+                                   @mouseup="isSliderDragging = false"
+                                   @touchstart="isSliderDragging = true"
+                                   @touchend="isSliderDragging = false"
                                    style="width: 100%; cursor: pointer;">
                         </div>
                         
@@ -1396,12 +1413,31 @@
                                    style="width: 100%; cursor: pointer;">
                         </div>
                         
+                        <!-- Histogram -->
+                        <div style="margin-top: 20px; margin-bottom: 15px;">
+                            <div style="color: #888; font-size: 0.85rem; margin-bottom: 8px;">📊 Histogram</div>
+                            <canvas id="histogram-canvas" 
+                                    width="300" 
+                                    height="100" 
+                                    style="width: 100%; height: 100px; background: rgba(0,0,0,0.3); border-radius: 4px; border: 1px solid rgba(255,255,255,0.1);">
+                            </canvas>
+                        </div>
+                        
                         <!-- Info Footer -->
                         <div v-if="editsChanged" style="margin-top: 15px; padding: 8px; background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: 4px; font-size: 0.75rem; color: #fbbf24;">
                             ⚠️ Unsaved changes - Click Save to apply edits
                         </div>
                         <div style="margin-top: 10px; padding: 8px; background: rgba(139, 92, 246, 0.1); border-radius: 4px; font-size: 0.7rem; color: #888; line-height: 1.5;">
                             ℹ️ Non-destructive edits • Original untouched • Applied on export
+                        </div>
+                        
+                        <!-- Performance indicator (always visible) -->
+                        <div v-if="canvasPerformance > 0" style="margin-top: 8px; padding: 6px 10px; background: rgba(0,0,0,0.3); border-radius: 4px; font-size: 0.7rem; font-family: monospace; display: flex; justify-content: space-between; align-items: center;">
+                            <span style="color: #888;">⚡ Render Time:</span>
+                            <span :style="{ 
+                                color: canvasPerformance < 50 ? '#4ade80' : canvasPerformance < 150 ? '#fbbf24' : '#ef4444',
+                                fontWeight: 'bold'
+                            }">{{ canvasPerformance }}ms</span>
                         </div>
                     </div>
                 </div>
