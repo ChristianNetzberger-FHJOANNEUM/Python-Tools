@@ -1317,8 +1317,8 @@ h1 {
 }
 
 .lightbox-image {
-    max-width: 90%;
-    max-height: 80vh;
+    max-width: 95%;
+    max-height: 90vh;
     object-fit: contain;
     border-radius: 8px;
     box-shadow: 0 8px 40px rgba(0, 0, 0, 0.8);
@@ -1359,10 +1359,10 @@ h1 {
 }
 
 .lightbox-sidebar {
-    width: 350px;
-    min-width: 350px;
+    width: 280px;
+    min-width: 280px;
     background: rgba(0, 0, 0, 0.9);
-    padding: 20px;
+    padding: 15px;
     border-left: 1px solid rgba(255, 255, 255, 0.1);
     overflow-y: auto;
     overflow-x: hidden;

@@ -1228,18 +1228,16 @@
             
             <div class="lightbox-content">
                 <div class="lightbox-main">
-                <!-- Canvas for live preview (replaces <img>) -->
-                <canvas id="lightbox-canvas" 
-                        ref="lightboxCanvas"
-                        class="lightbox-image"
-                        v-show="!canvasLoading"
-                        style="max-width: 90%; max-height: 90%; object-fit: contain;">
-                </canvas>
+                <!-- Image with server-side preview -->
+                <img :src="previewUrl || lightboxPhoto.full_image || lightboxPhoto.thumbnail" 
+                     :alt="lightboxPhoto.name" 
+                     class="lightbox-image"
+                     :style="{ opacity: previewLoading ? 0.5 : 1, transition: 'opacity 0.2s' }">
                 
-                <!-- Loading indicator -->
-                <div v-if="canvasLoading" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #a78bfa; font-size: 1.2rem;">
-                    <div class="spinner" style="margin: 0 auto 10px;"></div>
-                    Loading image...
+                <!-- Loading overlay during preview generation -->
+                <div v-if="previewLoading" style="position: absolute; top: 20px; right: 20px; background: rgba(139, 92, 246, 0.9); color: white; padding: 8px 16px; border-radius: 20px; font-size: 0.85rem; font-weight: 600; box-shadow: 0 4px 12px rgba(0,0,0,0.5);">
+                    <div class="spinner" style="width: 12px; height: 12px; display: inline-block; margin-right: 8px; vertical-align: middle;"></div>
+                    Rendering...
                 </div>
                 
                 <button class="lightbox-nav prev" 
@@ -1431,13 +1429,39 @@
                             ℹ️ Non-destructive edits • Original untouched • Applied on export
                         </div>
                         
-                        <!-- Performance indicator (always visible) -->
-                        <div v-if="canvasPerformance > 0" style="margin-top: 8px; padding: 6px 10px; background: rgba(0,0,0,0.3); border-radius: 4px; font-size: 0.7rem; font-family: monospace; display: flex; justify-content: space-between; align-items: center;">
-                            <span style="color: #888;">⚡ Render Time:</span>
-                            <span :style="{ 
-                                color: canvasPerformance < 50 ? '#4ade80' : canvasPerformance < 150 ? '#fbbf24' : '#ef4444',
-                                fontWeight: 'bold'
-                            }">{{ canvasPerformance }}ms</span>
+                        <!-- Performance indicator with detailed timing -->
+                        <div v-if="previewPerformance > 0" style="margin-top: 8px;">
+                            <!-- Total time -->
+                            <div style="padding: 6px 10px; background: rgba(0,0,0,0.3); border-radius: 4px; font-size: 0.7rem; font-family: monospace; display: flex; justify-content: space-between; align-items: center;">
+                                <span style="color: #888;">⚡ Total Time:</span>
+                                <span :style="{ 
+                                    color: previewPerformance < 200 ? '#4ade80' : previewPerformance < 500 ? '#fbbf24' : '#ef4444',
+                                    fontWeight: 'bold'
+                                }">{{ previewPerformance }}ms</span>
+                            </div>
+                            
+                            <!-- Timing breakdown -->
+                            <div v-if="previewTimings" style="margin-top: 4px; padding: 6px 10px; background: rgba(0,0,0,0.2); border-radius: 4px; font-size: 0.65rem; font-family: monospace; line-height: 1.6; color: #888;">
+                                <div style="display: flex; justify-content: space-between;">
+                                    <span>📁 Load:</span>
+                                    <span :style="{ color: previewTimings.load_image > 200 ? '#ef4444' : '#4ade80' }">{{ previewTimings.load_image }}ms</span>
+                                </div>
+                                <div style="display: flex; justify-content: space-between;">
+                                    <span>📐 Resize:</span>
+                                    <span :style="{ color: previewTimings.downsample > 100 ? '#ef4444' : '#4ade80' }">{{ previewTimings.downsample }}ms</span>
+                                </div>
+                                <div style="display: flex; justify-content: space-between;">
+                                    <span>🎨 Edits:</span>
+                                    <span :style="{ color: previewTimings.apply_edits > 300 ? '#ef4444' : '#4ade80', fontWeight: 'bold' }">{{ previewTimings.apply_edits }}ms</span>
+                                </div>
+                                <div style="display: flex; justify-content: space-between;">
+                                    <span>📦 JPEG:</span>
+                                    <span :style="{ color: previewTimings.jpeg_encode > 100 ? '#ef4444' : '#4ade80' }">{{ previewTimings.jpeg_encode }}ms</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div style="margin-top: 6px; padding: 6px 10px; background: rgba(0,0,0,0.3); border-radius: 4px; font-size: 0.65rem; color: #666;">
+                            💡 Server-side rendering with Python/PIL
                         </div>
                     </div>
                 </div>

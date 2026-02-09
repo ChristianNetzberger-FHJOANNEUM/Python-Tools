@@ -129,14 +129,14 @@ const { createApp } = Vue;
                     showLightbox: false,
                     lightboxPhoto: null,
                     lightboxIndex: 0,
-                    // Image Editing (Phase 3b)
+                    // Image Editing (Phase 3b) - Server-Side Preview
                     showEditPanel: true,  // Show edit panel in lightbox
-                    canvasProcessor: null,  // ImageCanvasProcessor instance
-                    canvasLoading: false,
-                    canvasPerformance: 0,  // Last render time in ms
+                    previewUrl: null,  // Current preview image URL
+                    previewLoading: false,  // Server is rendering preview
+                    previewPerformance: 0,  // Server render time in ms
+                    previewTimings: null,  // Detailed timing breakdown
+                    histogramData: null,  // Histogram from server
                     editDebounceTimer: null,  // Debounce timer for slider changes
-                    isSliderDragging: false,  // Track if user is actively dragging
-                    lastRenderTime: 0,  // Timestamp of last render
                     currentEdits: {
                         exposure: 0,
                         contrast: 0,
@@ -2383,13 +2383,8 @@ const { createApp } = Vue;
                     this.lightboxPhoto = photo;
                     this.lightboxIndex = index;
                     this.showLightbox = true;
+                    this.previewUrl = null;  // Reset preview
                     document.addEventListener('keydown', this.handleLightboxKeyboard);
-                    
-                    // Wait for canvas to be mounted
-                    await this.$nextTick();
-                    
-                    // Initialize canvas processor
-                    await this.initializeCanvasForPhoto(photo);
                     
                     // Load edits for this photo
                     await this.loadEditsForPhoto(photo.path);
@@ -2405,9 +2400,9 @@ const { createApp } = Vue;
                     if (this.lightboxIndex < this.filteredPhotos.length - 1) {
                         this.lightboxIndex++;
                         this.lightboxPhoto = this.filteredPhotos[this.lightboxIndex];
+                        this.previewUrl = null;  // Reset preview
                         
-                        // Reload canvas and edits for new photo
-                        await this.initializeCanvasForPhoto(this.lightboxPhoto);
+                        // Load edits for new photo
                         await this.loadEditsForPhoto(this.lightboxPhoto.path);
                     }
                 },
@@ -2416,9 +2411,9 @@ const { createApp } = Vue;
                     if (this.lightboxIndex > 0) {
                         this.lightboxIndex--;
                         this.lightboxPhoto = this.filteredPhotos[this.lightboxIndex];
+                        this.previewUrl = null;  // Reset preview
                         
-                        // Reload canvas and edits for new photo
-                        await this.initializeCanvasForPhoto(this.lightboxPhoto);
+                        // Load edits for new photo
                         await this.loadEditsForPhoto(this.lightboxPhoto.path);
                     }
                 },
@@ -2428,33 +2423,8 @@ const { createApp } = Vue;
                 },
                 
                 // ========================================
-                // IMAGE EDITING METHODS (Phase 3b)
+                // IMAGE EDITING METHODS (Phase 3b) - Server-Side
                 // ========================================
-                
-                async initializeCanvasForPhoto(photo) {
-                    const canvas = document.getElementById('lightbox-canvas');
-                    if (!canvas) {
-                        console.error('Canvas not found');
-                        return;
-                    }
-                    
-                    this.canvasLoading = true;
-                    
-                    try {
-                        // Create new processor
-                        this.canvasProcessor = new ImageCanvasProcessor(canvas);
-                        
-                        // Load image
-                        const imageUrl = photo.full_image || photo.thumbnail;
-                        await this.canvasProcessor.loadImage(imageUrl);
-                        
-                        console.log('✅ Canvas initialized for', photo.name);
-                    } catch (err) {
-                        console.error('Error initializing canvas:', err);
-                    } finally {
-                        this.canvasLoading = false;
-                    }
-                },
                 
                 async loadEditsForPhoto(photoPath) {
                     if (!photoPath) return;
@@ -2477,13 +2447,14 @@ const { createApp } = Vue;
                         }
                         this.editsChanged = false;
                         
-                        // Apply edits to canvas
-                        if (this.canvasProcessor) {
-                            this.canvasProcessor.applyEdits(this.currentEdits);
-                            this.canvasPerformance = this.canvasProcessor.getPerformance();
-                            
-                            // Draw initial histogram
-                            this.drawHistogram();
+                        // Load histogram
+                        await this.loadHistogram(photoPath);
+                        
+                        // Generate preview if edits exist
+                        if (Object.values(this.currentEdits).some(v => v !== 0)) {
+                            await this.generateServerPreview();
+                        } else {
+                            this.previewUrl = null;  // Use original
                         }
                     } catch (err) {
                         console.error('Error loading edits:', err);
@@ -2555,48 +2526,110 @@ const { createApp } = Vue;
                     };
                     this.editsChanged = false;
                     
-                    // Reset canvas to original
-                    if (this.canvasProcessor) {
-                        this.canvasProcessor.reset();
+                    // Clear preview (show original)
+                    if (this.previewUrl) {
+                        URL.revokeObjectURL(this.previewUrl);
+                        this.previewUrl = null;
                     }
+                    this.previewPerformance = 0;
                 },
                 
                 onEditChange() {
                     this.editsChanged = true;
                     
-                    // Smart throttling: Only update every 150ms during drag for performance
-                    const now = Date.now();
-                    const timeSinceLastRender = now - this.lastRenderTime;
-                    
+                    // Debounce server preview (wait 500ms after last change)
                     clearTimeout(this.editDebounceTimer);
+                    this.editDebounceTimer = setTimeout(() => {
+                        this.generateServerPreview();
+                    }, 500);  // Wait for user to stop moving slider
+                },
+                
+                async loadHistogram(photoPath) {
+                    if (!photoPath) return;
                     
-                    // If enough time passed, render immediately
-                    if (timeSinceLastRender > 150) {
-                        this.applyEditsToCanvas();
-                    } else {
-                        // Otherwise, wait for next throttle window
-                        this.editDebounceTimer = setTimeout(() => {
-                            this.applyEditsToCanvas();
-                        }, 150 - timeSinceLastRender);
+                    try {
+                        const response = await fetch(
+                            `/api/photos/${encodeURIComponent(photoPath)}/histogram?mode=luminance&downsample=8`
+                        );
+                        const data = await response.json();
+                        
+                        if (data.success && data.histogram) {
+                            this.histogramData = data.histogram;
+                            
+                            // Draw histogram
+                            this.$nextTick(() => {
+                                this.drawHistogram();
+                            });
+                        }
+                    } catch (err) {
+                        console.error('Error loading histogram:', err);
                     }
                 },
                 
-                applyEditsToCanvas() {
-                    if (this.canvasProcessor) {
-                        this.lastRenderTime = Date.now();
-                        this.canvasProcessor.applyEdits(this.currentEdits);
-                        this.canvasPerformance = this.canvasProcessor.getPerformance();
+                async generateServerPreview() {
+                    if (!this.lightboxPhoto || !this.lightboxPhoto.path) return;
+                    
+                    // If all edits are zero, show original
+                    if (Object.values(this.currentEdits).every(v => v === 0)) {
+                        this.previewUrl = null;
+                        this.previewPerformance = 0;
+                        return;
+                    }
+                    
+                    this.previewLoading = true;
+                    const startTime = performance.now();
+                    
+                    try {
+                        const response = await fetch(`/api/photos/${encodeURIComponent(this.lightboxPhoto.path)}/preview`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(this.currentEdits)
+                        });
                         
-                        // Update histogram
-                        this.drawHistogram();
+                        if (response.ok) {
+                            const blob = await response.blob();
+                            
+                            // Get timing details from response headers
+                            const timingHeader = response.headers.get('X-Timing-Details');
+                            if (timingHeader) {
+                                this.previewTimings = JSON.parse(timingHeader);
+                            }
+                            
+                            // Revoke old preview URL to free memory
+                            if (this.previewUrl) {
+                                URL.revokeObjectURL(this.previewUrl);
+                            }
+                            
+                            // Create new preview URL
+                            this.previewUrl = URL.createObjectURL(blob);
+                            
+                            this.previewPerformance = Math.round(performance.now() - startTime);
+                            
+                            // Log detailed timing
+                            if (this.previewTimings) {
+                                console.log(`✅ Preview generated (Total: ${this.previewPerformance}ms)`);
+                                console.log(`   Load Image:  ${this.previewTimings.load_image}ms`);
+                                console.log(`   Downsample:  ${this.previewTimings.downsample}ms`);
+                                console.log(`   Apply Edits: ${this.previewTimings.apply_edits}ms ← Bottleneck?`);
+                                console.log(`   JPEG Encode: ${this.previewTimings.jpeg_encode}ms`);
+                            }
+                        } else {
+                            console.error('Preview generation failed:', response.status);
+                            alert('Failed to generate preview');
+                        }
+                    } catch (err) {
+                        console.error('Error generating preview:', err);
+                        alert('Error generating preview: ' + err.message);
+                    } finally {
+                        this.previewLoading = false;
                     }
                 },
                 
                 drawHistogram() {
                     const canvas = document.getElementById('histogram-canvas');
-                    if (!canvas || !this.canvasProcessor) return;
+                    if (!canvas || !this.histogramData) return;
                     
-                    const histogram = this.canvasProcessor.getHistogram();
+                    const histogram = this.histogramData.histogram;
                     if (!histogram) return;
                     
                     const ctx = canvas.getContext('2d');
@@ -2609,7 +2642,7 @@ const { createApp } = Vue;
                     ctx.fillRect(0, 0, width, height);
                     
                     // Draw luminance histogram with FIXED scale (no autoscale!)
-                    const data = histogram.luminance;
+                    const data = histogram;
                     
                     // Fixed scale: Find 99th percentile to avoid single outliers
                     const sortedData = [...data].sort((a, b) => b - a);

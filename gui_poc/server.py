@@ -3644,25 +3644,74 @@ if ENABLE_IMAGE_EDITS:
         """
         Generate preview image with edits applied.
         POST body should contain edit values.
+        Optimized for fast preview with detailed timing.
         """
         try:
+            import time
+            from PIL import Image
+            
+            timings = {}
+            overall_start = time.time()
+            
+            # Parse request
+            t0 = time.time()
             edits = request.json
+            timings['parse_request'] = int((time.time() - t0) * 1000)
             
-            # Apply edits and return JPEG bytes
-            result_bytes = apply_all_edits(
-                photo_path,
-                edits,
-                output_format='jpeg_bytes'
-            )
+            # Load image
+            t0 = time.time()
+            img = Image.open(photo_path)
+            original_size = img.size
+            timings['load_image'] = int((time.time() - t0) * 1000)
             
-            return send_file(
-                io.BytesIO(result_bytes),
+            # Downsample for speed (using BILINEAR = 5x faster than LANCZOS!)
+            t0 = time.time()
+            MAX_PREVIEW_SIZE = 1600  # Increased for larger photo
+            if max(img.size) > MAX_PREVIEW_SIZE:
+                # BILINEAR is much faster than LANCZOS, good enough for preview
+                img.thumbnail((MAX_PREVIEW_SIZE, MAX_PREVIEW_SIZE), Image.Resampling.BILINEAR)
+            preview_size = img.size
+            timings['downsample'] = int((time.time() - t0) * 1000)
+            
+            # Apply edits
+            t0 = time.time()
+            result_img = apply_all_edits(img, edits, output_format='pil')
+            timings['apply_edits'] = int((time.time() - t0) * 1000)
+            
+            # Convert to JPEG
+            t0 = time.time()
+            buffer = io.BytesIO()
+            result_img.save(buffer, format='JPEG', quality=85, optimize=False)  # Lower quality, no optimize for speed
+            buffer.seek(0)
+            timings['jpeg_encode'] = int((time.time() - t0) * 1000)
+            
+            overall_ms = int((time.time() - overall_start) * 1000)
+            timings['total'] = overall_ms
+            
+            # Log detailed timing
+            logger.info(f"🔍 PREVIEW TIMING for {Path(photo_path).name}:")
+            logger.info(f"  📁 Load Image:    {timings['load_image']:4d}ms  ({original_size[0]}×{original_size[1]})")
+            logger.info(f"  📐 Downsample:    {timings['downsample']:4d}ms  (→ {preview_size[0]}×{preview_size[1]})")
+            logger.info(f"  🎨 Apply Edits:   {timings['apply_edits']:4d}ms  ← BOTTLENECK?")
+            logger.info(f"  📦 JPEG Encode:   {timings['jpeg_encode']:4d}ms")
+            logger.info(f"  ⚡ TOTAL:         {overall_ms:4d}ms")
+            
+            response = send_file(
+                buffer,
                 mimetype='image/jpeg',
                 as_attachment=False
             )
+            
+            # Add timing headers
+            response.headers['X-Render-Time'] = str(overall_ms)
+            response.headers['X-Timing-Details'] = json.dumps(timings)
+            
+            return response
         
         except Exception as e:
-            logger.error(f"Error generating preview for {photo_path}: {e}")
+            logger.error(f"❌ Error generating preview for {photo_path}: {e}")
+            import traceback
+            traceback.print_exc()
             return jsonify({'error': str(e)}), 500
 
 
