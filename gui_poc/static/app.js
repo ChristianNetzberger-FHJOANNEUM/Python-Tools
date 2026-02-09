@@ -169,7 +169,7 @@ const { createApp } = Vue;
                     },
                     colorFilterMode: 'include',  // 'include' or 'exclude'
                     sortBy: 'date', // name, date, rating, quality
-                    sortOrder: 'desc' // asc, desc (desc = newest first)
+                    sortOrder: 'asc' // asc, desc (asc = oldest first, chronological)
                 }
             },
             computed: {
@@ -929,6 +929,72 @@ const { createApp } = Vue;
                         eventSource.close();
                         this.currentScanningFolder = null;
                     };
+                },
+                
+                async checkJsonMetadata(folderPath) {
+                    try {
+                        const res = await fetch(`/api/media/folders/${encodeURIComponent(folderPath)}/check-json`);
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            alert(`Error: ${data.error}`);
+                            return;
+                        }
+                        
+                        // Format report
+                        let report = `JSON Sidecar Check: ${folderPath}\n\n`;
+                        report += `Total JSON files: ${data.total}\n`;
+                        report += `Photos with burst data: ${data.burst_count}\n`;
+                        report += `Unique burst groups: ${data.burst_groups}\n\n`;
+                        
+                        if (data.samples && data.samples.length > 0) {
+                            report += `Sample entries:\n`;
+                            data.samples.forEach(sample => {
+                                report += `\n📄 ${sample.filename}\n`;
+                                report += `   burst_id: ${sample.burst_id || 'none'}\n`;
+                                report += `   neighbors: ${sample.neighbor_count}\n`;
+                            });
+                        }
+                        
+                        alert(report);
+                        console.log('JSON Check:', data);
+                    } catch (err) {
+                        alert(`Error checking JSON: ${err.message}`);
+                        console.error('JSON check error:', err);
+                    }
+                },
+                
+                async checkDatabaseMetadata(folderPath) {
+                    try {
+                        const res = await fetch(`/api/media/folders/${encodeURIComponent(folderPath)}/check-db`);
+                        const data = await res.json();
+                        
+                        if (data.error) {
+                            alert(`Error: ${data.error}`);
+                            return;
+                        }
+                        
+                        // Format report
+                        let report = `Database Check: ${folderPath}\n\n`;
+                        report += `Total photos in DB: ${data.total}\n`;
+                        report += `Photos with burst data: ${data.burst_count}\n`;
+                        report += `Unique burst groups: ${data.burst_groups}\n\n`;
+                        
+                        if (data.samples && data.samples.length > 0) {
+                            report += `Sample entries:\n`;
+                            data.samples.forEach(sample => {
+                                report += `\n🗄️ ${sample.filename}\n`;
+                                report += `   burst_id: ${sample.burst_id || 'none'}\n`;
+                                report += `   neighbors: ${sample.neighbor_count}\n`;
+                            });
+                        }
+                        
+                        alert(report);
+                        console.log('DB Check:', data);
+                    } catch (err) {
+                        alert(`Error checking database: ${err.message}`);
+                        console.error('DB check error:', err);
+                    }
                 },
                 
                 isFolderAvailable(folder) {

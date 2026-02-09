@@ -408,20 +408,16 @@ class WorkspaceMediaDB:
         blur_data = sidecar_data.get('blur', {})
         burst_data = sidecar_data.get('burst', {})
         
-        # Handle burst_neighbors field (can be 'neighbors' or 'burst_neighbors')
-        # Also extract paths from object array if needed
-        burst_neighbors = burst_data.get('neighbors', burst_data.get('burst_neighbors', []))
-        if burst_neighbors and isinstance(burst_neighbors[0], dict):
-            # Extract 'path' from each object: [{"path": "...", "similarity": ...}] → ["..."]
-            burst_neighbors = [n.get('path') or n.get('photo_path') for n in burst_neighbors if isinstance(n, dict)]
-        
-        # Generate burst_id if missing but has neighbors
+        # Version 2: neighbors are simple string paths, burst_id is always present
+        burst_neighbors = burst_data.get('neighbors', [])
         burst_id = burst_data.get('burst_id')
+        
+        # Fallback: generate burst_id if somehow missing (should not happen in Version 2)
         if not burst_id and burst_neighbors:
-            # Generate a consistent burst_id from the first neighbor's filename
             import hashlib
             first_neighbor = burst_neighbors[0] if burst_neighbors else ''
             burst_id = hashlib.md5(first_neighbor.encode()).hexdigest()[:12]
+            logger.warning(f"Missing burst_id in JSON, generated: {burst_id}")
         
         # Insert photo metadata
         cursor.execute("""

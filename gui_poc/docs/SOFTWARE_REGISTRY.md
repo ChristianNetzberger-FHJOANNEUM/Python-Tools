@@ -131,10 +131,10 @@ Components that **read** JSON sidecars and **write** to database
   - `.{filename}.phototool.json` (analysis data)
 - **Writes To:** `workspace_media.db` (SQLite)
 - **Spec Compliance:** ✅ **Full**
-  - Supports both Version 1 and Version 2 burst formats
+  - Supports Version 2 burst format (simplified neighbors array)
   - Handles missing fields gracefully (uses defaults)
 - **Status:** ✅ Active, In Use
-- **Last Updated:** 2026-02-08
+- **Last Updated:** 2026-02-09
 
 #### 3.2 Database Manager
 - **Location:** `gui_poc/db_manager.py`

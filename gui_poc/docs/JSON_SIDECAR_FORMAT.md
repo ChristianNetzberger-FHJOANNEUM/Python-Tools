@@ -283,50 +283,10 @@ Blur/sharpness detection results.
 #### `burst` (Object)
 Burst photo detection and grouping.
 
-**⚠️ IMPORTANT: Two Format Versions**
+**Current Format (Version 2):**
 
-The burst analyzer (`photo_tool/prescan/analyzers/burst.py`) currently writes **Version 1** format.
-The migration system (`db_manager.py`) supports **both versions** for compatibility.
+The burst analyzer (`photo_tool/prescan/analyzers/burst.py`) writes the following format:
 
----
-
-**Version 1 (Current - Written by BurstAnalyzer):**
-```json
-{
-  "burst_neighbors": [
-    {
-      "path": "E:\\Photos\\P1012336.JPG",
-      "time_diff": 1.0,
-      "similarity": 0.9,
-      "direction": "previous"
-    },
-    {
-      "path": "E:\\Photos\\P1012338.JPG",
-      "time_diff": 0.8,
-      "similarity": 0.92,
-      "direction": "next"
-    }
-  ],
-  "is_burst_candidate": true,
-  "burst_group_size": 3,
-  "computed_at": "2026-02-06T21:01:16.392467"
-}
-```
-
-**Version 1 Fields:**
-- `burst_neighbors` (Array of Objects): Detailed neighbor information
-  - `path` (String): Full path to neighbor photo
-  - `time_diff` (Float): Time difference in seconds
-  - `similarity` (Float, 0-1): Visual similarity score
-  - `direction` (String): "previous" or "next"
-- `is_burst_candidate` (Boolean): Whether photo is part of a burst
-- `burst_group_size` (Integer): Total photos in burst (including this one)
-- `computed_at` (String, ISO 8601): When analysis was performed
-- **NOTE:** No `burst_id` field - generated during migration
-
----
-
-**Version 2 (Planned - Ideal Format):**
 ```json
 {
   "is_burst_candidate": true,
@@ -340,35 +300,18 @@ The migration system (`db_manager.py`) supports **both versions** for compatibil
 }
 ```
 
-**Version 2 Fields:**
+**Fields:**
 - `is_burst_candidate` (Boolean): Whether photo is part of a burst
-- `burst_id` (String): Unique ID for the burst group (12 chars, hex)
-- `neighbors` (Array of Strings): Full paths to neighboring burst photos (simplified)
+- `burst_id` (String): Unique ID for the burst group (12 chars, hex hash)
+- `neighbors` (Array of Strings): Full paths to neighboring burst photos
 - `score` (Float, 0-1): Average similarity score with neighbors
-- `detection_date` (Integer): Unix timestamp
+- `detection_date` (Integer): Unix timestamp when burst was detected
 
----
-
-**Migration Behavior:**
-
-The migration system (`db_manager.py`) handles both formats:
-
-1. **Detect format:**
-   - If `burst_neighbors` exists → Version 1
-   - If `neighbors` exists → Version 2
-
-2. **Extract paths:**
-   - Version 1: Extract `path` from each object in `burst_neighbors`
-   - Version 2: Use `neighbors` array directly
-
-3. **Generate `burst_id` if missing:**
-   - MD5 hash of first neighbor path (for Version 1)
-   - Or use existing `burst_id` (for Version 2)
-
-4. **Post-processing burst grouping:**
-   - Analyze neighbor relationships (graph DFS)
-   - Assign **consistent `burst_id`** to all photos in same burst
-   - This ensures photos with mutual neighbors get the same ID
+**Generation Process:**
+1. **Burst detection:** Scan all photos in a folder, identify candidates (time < 3s, similarity > 0.85)
+2. **Graph clustering:** Group mutually-linked photos into burst groups using graph DFS
+3. **Assign `burst_id`:** Generate consistent 12-char hex ID for each burst group
+4. **Write to sidecar:** Save burst data including all neighbor paths
 
 **Burst Detection Criteria:**
 - Time threshold: Photos within 3 seconds

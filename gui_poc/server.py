@@ -386,8 +386,8 @@ def get_photos():
                                     logger.warning(f"Error getting time for {photo.path.name}: {e}")
                                     photos_with_times.append((photo, datetime.now()))
                     
-                    # Sort by capture time (newest first)
-                    photos_with_times.sort(key=lambda x: x[1], reverse=True)
+                    # Sort by capture time (oldest first - chronological)
+                    photos_with_times.sort(key=lambda x: x[1], reverse=False)
                     
                     # Update cache
                     _scan_cache['data'] = photos_with_times
@@ -1837,6 +1837,126 @@ def get_scan_progress(folder_path):
     return Response(stream_with_context(generate()), mimetype='text/event-stream')
 
 
+@app.get('/api/media/folders/<path:folder_path>/check-json')
+def check_json_metadata(folder_path):
+    """Check JSON sidecar files for a folder"""
+    try:
+        from pathlib import Path
+        import json
+        
+        folder = Path(folder_path)
+        if not folder.exists():
+            return jsonify({'error': 'Folder not found'}), 404
+        
+        # Find all .phototool.json files
+        json_files = list(folder.glob('*.phototool.json'))
+        
+        burst_count = 0
+        burst_ids = set()
+        samples = []
+        
+        for json_file in json_files[:100]:  # Limit to first 100 for performance
+            try:
+                with open(json_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                burst = data.get('analyses', {}).get('burst', {})
+                burst_id = burst.get('burst_id')
+                neighbors = burst.get('neighbors', [])
+                
+                if burst_id:
+                    burst_count += 1
+                    burst_ids.add(burst_id)
+                    
+                    if len(samples) < 5:
+                        samples.append({
+                            'filename': data.get('photo', {}).get('name', json_file.stem),
+                            'burst_id': burst_id,
+                            'neighbor_count': len(neighbors)
+                        })
+            except Exception as e:
+                logger.warning(f"Error reading {json_file}: {e}")
+        
+        return jsonify({
+            'total': len(json_files),
+            'burst_count': burst_count,
+            'burst_groups': len(burst_ids),
+            'samples': samples
+        })
+    
+    except Exception as e:
+        logger.error(f"Error checking JSON: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.get('/api/media/folders/<path:folder_path>/check-db')
+def check_database_metadata(folder_path):
+    """Check database records for a folder"""
+    try:
+        import sqlite3
+        from pathlib import Path
+        
+        db_path = Path(__file__).parent / 'db' / 'workspace_media.db'
+        if not db_path.exists():
+            return jsonify({'error': 'Database not found'}), 404
+        
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # Get stats for this folder
+        cursor.execute('''
+            SELECT 
+                COUNT(*) as total,
+                SUM(CASE WHEN pm.burst_id IS NOT NULL THEN 1 ELSE 0 END) as burst_count,
+                COUNT(DISTINCT pm.burst_id) - 1 as burst_groups
+            FROM media m
+            LEFT JOIN photo_metadata pm ON m.id = pm.media_id
+            WHERE m.folder = ? AND m.media_type = 'photo'
+        ''', (folder_path,))
+        
+        row = cursor.fetchone()
+        total = row['total']
+        burst_count = row['burst_count']
+        burst_groups = row['burst_groups']
+        
+        # Get sample entries
+        cursor.execute('''
+            SELECT 
+                m.filename,
+                pm.burst_id,
+                pm.burst_neighbors
+            FROM media m
+            LEFT JOIN photo_metadata pm ON m.id = pm.media_id
+            WHERE m.folder = ? AND m.media_type = 'photo' AND pm.burst_id IS NOT NULL
+            LIMIT 5
+        ''', (folder_path,))
+        
+        samples = []
+        for row in cursor.fetchall():
+            neighbors = json.loads(row['burst_neighbors']) if row['burst_neighbors'] else []
+            samples.append({
+                'filename': row['filename'],
+                'burst_id': row['burst_id'],
+                'neighbor_count': len(neighbors)
+            })
+        
+        conn.close()
+        
+        return jsonify({
+            'total': total,
+            'burst_count': burst_count,
+            'burst_groups': burst_groups,
+            'samples': samples
+        })
+    
+    except Exception as e:
+        logger.error(f"Error checking database: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 # =============================================================================
 # WORKSPACE MANAGEMENT ENDPOINTS
 # =============================================================================
@@ -2618,7 +2738,12 @@ def get_project_media(project_id):
                                     WHERE ({folder_conditions}) 
                                       AND m.media_type = ?
                                       AND m.is_available = 1
-                                    ORDER BY m.filename
+                                    ORDER BY 
+                                        CASE 
+                                            WHEN pm.capture_time IS NOT NULL THEN pm.capture_time
+                                            WHEN m.file_mtime IS NOT NULL THEN datetime(m.file_mtime, 'unixepoch')
+                                            ELSE m.filename
+                                        END ASC
                                 """
                                 cursor.execute(query, folder_params + [query_media_type])
                             else:
@@ -2637,16 +2762,35 @@ def get_project_media(project_id):
                                     LEFT JOIN photo_metadata pm ON m.id = pm.media_id
                                     WHERE ({folder_conditions})
                                       AND m.is_available = 1
-                                    ORDER BY m.filename
+                                    ORDER BY 
+                                        CASE 
+                                            WHEN pm.capture_time IS NOT NULL THEN pm.capture_time
+                                            WHEN m.file_mtime IS NOT NULL THEN datetime(m.file_mtime, 'unixepoch')
+                                            ELSE m.filename
+                                        END ASC
                                 """
                                 cursor.execute(query, folder_params)
                             
                             media_list = [dict(row) for row in cursor.fetchall()]
                             workspace_conn.close()
                             
+                            # DEBUG: Check actual sort order from database
+                            if len(media_list) > 0:
+                                print(f"📊 DEBUG: {len(media_list)} total items loaded")
+                                # Show first 5 and last 5 items with timestamps
+                                print(f"📅 First 5 items (should be oldest):")
+                                for item in media_list[:5]:
+                                    mtime = f"mtime:{item.get('file_mtime', 'NULL')}" if not item.get('capture_time') else ""
+                                    print(f"   {item.get('capture_time') or 'None'} {mtime} - {item['filename']} - {Path(item['folder']).name}")
+                                if len(media_list) > 10:
+                                    print(f"📅 Last 5 items (should be newest):")
+                                    for item in media_list[-5:]:
+                                        mtime = f"mtime:{item.get('file_mtime', 'NULL')}" if not item.get('capture_time') else ""
+                                        print(f"   {item.get('capture_time') or 'None'} {mtime} - {item['filename']} - {Path(item['folder']).name}")
+                            
                             # DEBUG: Check if color data is present
                             colored_items = [m for m in media_list if m.get('color')]
-                            print(f"📊 DEBUG: {len(media_list)} total items, {len(colored_items)} with color labels")
+                            print(f"📊 Color labels: {len(colored_items)} with color")
                             if colored_items:
                                 sample = colored_items[0]
                                 print(f"   Sample: {sample['filename']} - color={sample['color']}, rating={sample['rating']}")
@@ -2667,14 +2811,23 @@ def get_project_media(project_id):
                                 burst_groups[burst_id].append(media)
                         
                         # Select one leader per burst group (first photo alphabetically)
+                        total_burst_photos = 0
                         for burst_id, group in burst_groups.items():
                             if group:
                                 # Sort by filename to ensure consistent leader selection
                                 group.sort(key=lambda x: x['filename'])
                                 leader = group[0]
                                 burst_leaders.add(leader['path'])
+                                total_burst_photos += len(group)
                         
-                        print(f"📦 Burst grouping: {len(burst_groups)} groups, {len(burst_leaders)} leaders")
+                        print(f"📦 Burst grouping: {len(burst_groups)} groups, {len(burst_leaders)} leaders, {total_burst_photos} total photos in bursts")
+                        
+                        # Debug: Show a few sample groups
+                        sample_groups = list(burst_groups.items())[:3]
+                        if sample_groups:
+                            print(f"📦 Sample burst groups:")
+                            for burst_id, group in sample_groups:
+                                print(f"   {burst_id}: {len(group)} photos - {[m['filename'] for m in group]}")
                         
                         # ============================================================================
                         # STEP 2: Parse JSON fields and build response
@@ -2864,8 +3017,8 @@ def get_project_media(project_id):
                                 except Exception as e:
                                     photos_with_times.append((photo, datetime.now()))
                     
-                    # Sort by capture time
-                    photos_with_times.sort(key=lambda x: x[1], reverse=True)
+                    # Sort by capture time (oldest first - chronological)
+                    photos_with_times.sort(key=lambda x: x[1], reverse=False)
                     photos = [p[0] for p in photos_with_times]
                     
                     # Update cache
@@ -3055,12 +3208,15 @@ def get_project_media(project_id):
                     burst_raw_data[item_path] = burst_data
                     
                     if burst_data.get('is_burst_candidate'):
-                        neighbors = burst_data.get('burst_neighbors', [])
+                        # Version 2: neighbors are simple string paths
+                        neighbors = burst_data.get('neighbors', [])
                         all_paths = [item_path]
                         fixed_neighbors = []
                         
-                        for n in neighbors:
-                            neighbor_path = n['path']
+                        for neighbor_path in neighbors:
+                            if not neighbor_path:
+                                continue
+                            
                             neighbor_filename = Path(neighbor_path).name
                             
                             if neighbor_filename in path_by_filename:
@@ -3075,13 +3231,18 @@ def get_project_media(project_id):
                         if len(burst_groups) == 0:
                             print(f"\n=== FIRST BURST DEBUG ===")
                             print(f"  Current photo: {item_path}")
-                            print(f"  Neighbors from sidecar: {[n['path'] for n in neighbors]}")
+                            print(f"  Neighbors from sidecar: {neighbors}")
                             print(f"  Fixed neighbor paths: {fixed_neighbors}")
                             print(f"  All paths in group: {all_paths}")
                             print("=" * 50)
                         
                         all_paths_sorted = sorted(all_paths)
-                        burst_id = hashlib.md5(all_paths_sorted[0].encode()).hexdigest()[:12]
+                        # Version 2: burst_id is always present in JSON
+                        burst_id = burst_data.get('burst_id')
+                        if not burst_id:
+                            # Fallback: generate if somehow missing
+                            burst_id = hashlib.md5(all_paths_sorted[0].encode()).hexdigest()[:12]
+                            logger.warning(f"Missing burst_id in JSON for {item_path}, generated: {burst_id}")
                         
                         photo_to_burst[item_path] = burst_id
                         
@@ -3396,10 +3557,15 @@ def get_config_info():
 if __name__ == '__main__':
     import socket
     from datetime import datetime
+    import logging
+    
+    # Disable verbose HTTP request logging (only show errors)
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)
     
     # Version info
     SERVER_VERSION = "3.0.0"
-    BUILD_DATE = "2026-02-08 21:20"
+    BUILD_DATE = "2026-02-09 11:00"
     
     # Get local IP for Smart TV access
     try:

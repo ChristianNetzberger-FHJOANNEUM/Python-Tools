@@ -180,6 +180,20 @@
                                     title="Complete scan with blur + burst analysis">
                                 {{ isScanningFolder(folder.path) ? '⏳ Scanning...' : '🔍 Scan' }}
                             </button>
+                            <button @click="checkJsonMetadata(folder.path)"
+                                    :disabled="!isFolderAvailable(folder)"
+                                    style="background: #6b7280; color: white; border: none; padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem;"
+                                    :style="{ opacity: !isFolderAvailable(folder) ? 0.5 : 1 }"
+                                    title="Check JSON sidecar files">
+                                📄 JSON
+                            </button>
+                            <button @click="checkDatabaseMetadata(folder.path)"
+                                    :disabled="!isFolderAvailable(folder)"
+                                    style="background: #6b7280; color: white; border: none; padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem;"
+                                    :style="{ opacity: !isFolderAvailable(folder) ? 0.5 : 1 }"
+                                    title="Check database records">
+                                🗄️ DB
+                            </button>
                             <button @click="removeMediaFolder(folder.path)"
                                     style="background: rgba(239, 68, 68, 0.2); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-weight: 600;">
                                 🗑️
