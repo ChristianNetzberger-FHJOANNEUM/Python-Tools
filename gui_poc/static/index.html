@@ -709,7 +709,7 @@
             </div>
             
             <div v-if="filteredPhotos.length > 0" class="grid">
-                <template v-for="(photo, index) in filteredPhotos" :key="photo.id">
+                <template v-for="(photo, index) in visiblePhotos" :key="photo.id">
                     <!-- BURST: Expanded Inline View -->
                     <div v-if="photo.is_burst_lead && expandedBursts.has(photo.burst_id) && !activeBurstId"
                          class="photo-card burst-expanded">
@@ -954,6 +954,26 @@
                         </div>
                     </div>
                 </template>
+            </div>
+            
+            <!-- Infinite Scroll: Loading Indicator -->
+            <div v-if="filteredPhotos.length > 0 && visiblePhotoCount < filteredPhotos.length"
+                 style="text-align: center; padding: 40px 20px; color: #888;">
+                <div class="spinner" style="width: 40px; height: 40px; margin: 0 auto 15px;"></div>
+                <div style="font-size: 1rem; margin-bottom: 10px;">
+                    Loading more photos...
+                </div>
+                <div style="font-size: 0.85rem;">
+                    Showing {{ visiblePhotoCount }} of {{ filteredPhotos.length }} photos
+                </div>
+            </div>
+            
+            <!-- End of Results Indicator -->
+            <div v-if="filteredPhotos.length > 0 && visiblePhotoCount >= filteredPhotos.length"
+                 style="text-align: center; padding: 40px 20px; color: #666; border-top: 1px solid rgba(255,255,255,0.1); margin-top: 20px;">
+                <div style="font-size: 0.9rem;">
+                    ✓ All {{ filteredPhotos.length }} photos loaded
+                </div>
             </div>
             
             <div v-if="photos.length > 0 && filteredPhotos.length === 0" class="loading">

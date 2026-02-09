@@ -843,8 +843,11 @@ def get_thumbnail(filename):
                     break
         
         if thumb_path.exists():
+            # ✅ Serving cached thumbnail
             return send_from_directory(thumb_dir, thumb_path.name)
         else:
+            # ⚠️ Cache miss - generating on-the-fly (slow!)
+            print(f"⚠️ Thumbnail cache miss: {filename} (looking in {thumb_dir})", flush=True)
             # FALLBACK: Generate thumbnail on-the-fly from original image
             # Get workspace folders
             ws = Workspace(workspace_path)

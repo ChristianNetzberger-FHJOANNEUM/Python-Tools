@@ -169,7 +169,12 @@ const { createApp } = Vue;
                     },
                     colorFilterMode: 'include',  // 'include' or 'exclude'
                     sortBy: 'date', // name, date, rating, quality
-                    sortOrder: 'asc' // asc, desc (asc = oldest first, chronological)
+                    sortOrder: 'asc', // asc, desc (asc = oldest first, chronological)
+                    // Infinite Scroll with Preloading
+                    visiblePhotoCount: 200,  // Start with 200 photos
+                    photoLoadIncrement: 200,  // Load 200 more at a time
+                    scrollThreshold: 0.7,     // Load more at 70% scroll
+                    isLoadingMore: false      // Prevent multiple simultaneous loads
                 }
             },
             computed: {
@@ -304,6 +309,13 @@ const { createApp } = Vue;
                     return filtered;
                 },
                 
+                // Infinite scroll: Only show a subset of filteredPhotos for performance
+                visiblePhotos() {
+                    const visible = this.filteredPhotos.slice(0, this.visiblePhotoCount);
+                    console.log(`🖼️ visiblePhotos: ${visible.length} of ${this.filteredPhotos.length} total`);
+                    return visible;
+                },
+                
                 activeFilterCount() {
                     let count = 0;
                     count += Object.values(this.filters.ratings).filter(v => v).length;
@@ -344,6 +356,29 @@ const { createApp } = Vue;
                     }, 0);
                 }
             },
+            
+            watch: {
+                // Reset visible photos when filters or sort changes
+                'filters': {
+                    handler() {
+                        this.resetVisiblePhotos();
+                    },
+                    deep: true
+                },
+                'sortBy'() {
+                    this.resetVisiblePhotos();
+                },
+                'sortOrder'() {
+                    this.resetVisiblePhotos();
+                },
+                'currentView'(newView) {
+                    // Reset when switching to media view
+                    if (newView === 'media') {
+                        this.resetVisiblePhotos();
+                    }
+                }
+            },
+            
             methods: {
                 async loadPhotos() {
                     try {
@@ -1654,6 +1689,9 @@ const { createApp } = Vue;
                         return;
                     }
                     
+                    // Reset visible count when loading new media
+                    this.resetVisiblePhotos();
+                    
                     try {
                         this.loading = true;
                         this.error = null;
@@ -2819,6 +2857,53 @@ const { createApp } = Vue;
                             this.toggleFullscreen();
                             break;
                     }
+                },
+                
+                // Infinite Scroll: Detect when user scrolls near bottom and load more photos
+                handleScroll() {
+                    // Only apply to media view
+                    if (this.currentView !== 'media') return;
+                    
+                    // Don't load if already loading
+                    if (this.isLoadingMore) return;
+                    
+                    // Don't load if all photos are visible
+                    if (this.visiblePhotoCount >= this.filteredPhotos.length) return;
+                    
+                    // Calculate scroll position
+                    const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+                    const windowHeight = window.innerHeight;
+                    const documentHeight = document.documentElement.scrollHeight;
+                    
+                    // Calculate scroll percentage
+                    const scrollPercentage = (scrollTop + windowHeight) / documentHeight;
+                    
+                    // Load more when user reaches threshold (70% by default)
+                    if (scrollPercentage >= this.scrollThreshold) {
+                        this.loadMorePhotos();
+                    }
+                },
+                
+                loadMorePhotos() {
+                    this.isLoadingMore = true;
+                    
+                    const newCount = this.visiblePhotoCount + this.photoLoadIncrement;
+                    const maxCount = this.filteredPhotos.length;
+                    
+                    // Update visible count (capped at total filtered photos)
+                    this.visiblePhotoCount = Math.min(newCount, maxCount);
+                    
+                    console.log(`📸 Loaded ${this.photoLoadIncrement} more photos (${this.visiblePhotoCount}/${maxCount})`);
+                    
+                    // Small delay to prevent rapid loading
+                    setTimeout(() => {
+                        this.isLoadingMore = false;
+                    }, 100);
+                },
+                
+                // Reset visible count when filters/sorting changes
+                resetVisiblePhotos() {
+                    this.visiblePhotoCount = 200;  // Reset to initial count
                 }
             },
             
@@ -2839,5 +2924,9 @@ const { createApp } = Vue;
                 document.addEventListener('click', () => {
                     this.showQuickRateMenu = false;
                 });
+                
+                // Infinite scroll: Set up scroll listener
+                window.addEventListener('scroll', this.handleScroll);
+                console.log('✅ Infinite scroll enabled (loads 200 photos at a time)');
             }
         }).mount('#app');
