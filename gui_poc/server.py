@@ -1713,6 +1713,13 @@ def scan_media_folder(folder_path):
     """
     global _scan_progress
     
+    # Check if scan already running
+    if _scan_progress['status'] == 'running':
+        return jsonify({
+            'error': 'Scan already in progress',
+            'current_progress': _scan_progress
+        }), 409  # HTTP 409 Conflict
+    
     try:
         from flask import request
         # Lazy import to avoid circular dependencies
@@ -1749,47 +1756,57 @@ def scan_media_folder(folder_path):
             global _scan_progress
             _scan_progress = progress
         
-        # Run scan in background thread
-        def run_scan():
-            try:
-                scanner = FolderScanner(
-                    Path(folder.path),
-                    analyzers=analyzers,
-                    threads=threads,
-                    skip_existing=not force,
-                    progress_callback=progress_callback
-                )
-                
-                results = scanner.scan()
-                
-                # Update media manager
-                coverage = {}
-                for analyzer in analyzers:
-                    coverage[analyzer] = 100.0  # 100% if scan completed
-                
-                media_manager.update_scan_status(
-                    folder.path,
-                    is_scanned=True,
-                    scan_coverage=coverage,
-                    stats={'photos': results['total']}
-                )
-                
-                _scan_progress['status'] = 'complete'
-                _scan_progress['message'] = f"Complete! Scanned {results['scanned']}, skipped {results['skipped']}"
+        # Run scan synchronously (blocking) for reliability
+        # This ensures scan completes and progress updates work correctly
+        try:
+            print(f"🚀 Starting synchronous scan of {folder.path}", flush=True)
             
-            except Exception as e:
-                logger.error(f"Scan error: {e}")
-                _scan_progress['status'] = 'error'
-                _scan_progress['message'] = str(e)
+            scanner = FolderScanner(
+                Path(folder.path),
+                analyzers=analyzers,
+                threads=threads,
+                skip_existing=False,  # ALWAYS force complete scan
+                progress_callback=progress_callback
+            )
+            
+            results = scanner.scan()
+            
+            print(f"✅ Scan completed: {results['scanned']} scanned, {results['skipped']} skipped, {results['errors']} errors", flush=True)
+            
+            # Update media manager
+            coverage = {}
+            for analyzer in analyzers:
+                coverage[analyzer] = 100.0  # 100% if scan completed
+            
+            media_manager.update_scan_status(
+                folder.path,
+                is_scanned=True,
+                scan_coverage=coverage,
+                stats={'photos': results['total']}
+            )
+            
+            _scan_progress['status'] = 'complete'
+            _scan_progress['message'] = f"Complete! Scanned {results['scanned']}, skipped {results['skipped']}"
+            
+            return jsonify({
+                'success': True,
+                'message': f"Scan complete! Scanned {results['scanned']} photos",
+                'folder': folder.path,
+                'results': results
+            })
         
-        thread = threading.Thread(target=run_scan, daemon=True)
-        thread.start()
-        
-        return jsonify({
-            'success': True,
-            'message': 'Scan started',
-            'folder': folder.path
-        })
+        except Exception as e:
+            logger.error(f"Scan error: {e}")
+            import traceback
+            traceback.print_exc()
+            _scan_progress['status'] = 'error'
+            _scan_progress['message'] = str(e)
+            
+            return jsonify({
+                'success': False,
+                'error': str(e),
+                'folder': folder.path
+            }), 500
     
     except Exception as e:
         import traceback
@@ -2636,7 +2653,32 @@ def get_project_media(project_id):
                             
                             print(f"✅ Loaded {len(media_list)} items from workspace DB (filtered by {len(enabled_folders)} folders)")
                         
-                        # Parse JSON fields and build response
+                        # ============================================================================
+                        # STEP 1: Identify burst leaders (one per burst_id)
+                        # ============================================================================
+                        burst_groups = {}  # burst_id -> list of media items
+                        burst_leaders = set()  # Set of paths that are burst leaders
+                        
+                        for media in media_list:
+                            burst_id = media.get('burst_id')
+                            if burst_id:
+                                if burst_id not in burst_groups:
+                                    burst_groups[burst_id] = []
+                                burst_groups[burst_id].append(media)
+                        
+                        # Select one leader per burst group (first photo alphabetically)
+                        for burst_id, group in burst_groups.items():
+                            if group:
+                                # Sort by filename to ensure consistent leader selection
+                                group.sort(key=lambda x: x['filename'])
+                                leader = group[0]
+                                burst_leaders.add(leader['path'])
+                        
+                        print(f"📦 Burst grouping: {len(burst_groups)} groups, {len(burst_leaders)} leaders")
+                        
+                        # ============================================================================
+                        # STEP 2: Parse JSON fields and build response
+                        # ============================================================================
                         result = []
                         for media in media_list:
                             # Parse keywords (JSON string → array)
@@ -2654,6 +2696,10 @@ def get_project_media(project_id):
                                     burst_neighbors_list = json.loads(media['burst_neighbors'])
                                 except:
                                     burst_neighbors_list = []
+                            
+                            # Determine if this photo is a burst leader
+                            burst_id = media.get('burst_id')
+                            is_burst_lead = (media['path'] in burst_leaders)
                             
                             # Build response item with ALL fields
                             item = {
@@ -2681,14 +2727,14 @@ def get_project_media(project_id):
                                     'tenengrad': media.get('blur_tenengrad'),
                                     'roi': media.get('blur_roi')
                                 },
-                                # Burst metadata (CORRECTED FIELD NAMES!)
-                                'burst_id': media.get('burst_id'),
+                                # Burst metadata (CORRECTED LEADER SELECTION!)
+                                'burst_id': burst_id,
                                 'is_burst_candidate': bool(media.get('is_burst_candidate', 0)),
-                                # Only mark as burst_lead if there's a valid burst_id AND neighbors
-                                'is_burst_lead': bool(media.get('burst_id') and burst_neighbors_list),
+                                # Only the selected leader is marked as burst_lead
+                                'is_burst_lead': is_burst_lead,
                                 'burst_neighbors': burst_neighbors_list,
-                                # Only set burst_count if there's a valid burst_id
-                                'burst_count': len(burst_neighbors_list) + 1 if (media.get('burst_id') and burst_neighbors_list) else 0,
+                                # Only set burst_count for leaders
+                                'burst_count': len(burst_groups.get(burst_id, [])) if is_burst_lead else 0,
                                 # Critical: thumbnail paths
                                 'thumbnail': f"/thumbnails/{Path(media['filename']).stem}.jpg",
                                 'full_image': f"/images/{Path(media['filename']).stem}{Path(media['filename']).suffix}",

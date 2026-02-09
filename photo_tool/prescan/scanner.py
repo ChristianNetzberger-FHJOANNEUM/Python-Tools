@@ -83,7 +83,7 @@ class FolderScanner:
         logger.info(f"Starting scan of {self.folder}")
         start_time = time.time()
         
-        print("DEBUG: Discovering photos...")
+        print("🔍 Discovering photos...", flush=True)
         # Discover photos
         media = scan_multiple_directories(
             [self.folder],
@@ -93,13 +93,12 @@ class FolderScanner:
         )
         photos = filter_by_type(media, "photo")
         
-        print(f"DEBUG: Found {len(photos)} photos")
+        print(f"📁 Found {len(photos)} photos", flush=True)
         logger.info(f"Found {len(photos)} photos in {self.folder}")
         
         # Initialize progress
         self.progress = ScanProgress(len(photos))
         
-        print(f"DEBUG: Progress initialized, checking which photos to scan...")
         # Filter photos that need scanning
         # IMPORTANT: For burst analysis, we should scan ALL photos together,
         # even if some were already scanned. Burst detection needs to see
@@ -115,7 +114,7 @@ class FolderScanner:
             else:
                 photos_to_scan.append(photo.path)
         
-        print(f"DEBUG: {len(photos_to_scan)} photos to scan, {len(photos) - len(photos_to_scan)} skipped")
+        print(f"📊 Scanning {len(photos_to_scan)} photos ({len(photos) - len(photos_to_scan)} skipped)", flush=True)
         logger.info(f"Scanning {len(photos_to_scan)} photos ({len(photos) - len(photos_to_scan)} skipped)")
         
         # Scan photos in parallel
@@ -129,50 +128,65 @@ class FolderScanner:
         }
         
         if len(photos_to_scan) > 0:
-            print(f"DEBUG: Starting ThreadPoolExecutor with {self.threads} workers...")
-            with ThreadPoolExecutor(max_workers=self.threads) as executor:
+            # Use single thread to avoid PIL/OpenCV deadlock
+            actual_threads = 1 if len(photos_to_scan) > 100 else self.threads
+            print(f"⚙️ Using {actual_threads} worker thread(s) for stability", flush=True)
+            
+            with ThreadPoolExecutor(max_workers=actual_threads) as executor:
                 futures = {
                     executor.submit(self._scan_photo, photo): photo 
                     for photo in photos_to_scan
                 }
                 
-                print(f"DEBUG: Submitted {len(futures)} scan jobs")
+                print(f"📦 Submitted {len(futures)} scan jobs to worker pool", flush=True)
                 
-                for future in as_completed(futures):
-                    photo = futures[future]
-                    try:
-                        result = future.result()
-                        results['scanned'] += 1
+                # Process results with timeout to prevent hanging
+                completed_count = 0
+                try:
+                    for future in as_completed(futures, timeout=3600):  # 1 hour timeout
+                        photo = futures[future]
                         
-                        # Update progress
-                        self.progress.completed += 1
-                        self.progress.current_file = ""
+                        try:
+                            result = future.result(timeout=30)  # 30s per photo
+                            results['scanned'] += 1
+                            completed_count += 1
+                            
+                            # Update progress
+                            self.progress.completed += 1
+                            self.progress.current_file = ""
+                            
+                            if self.progress_callback:
+                                self.progress_callback(self.progress.to_dict())
+                            
+                            # Log progress periodically (cleaner output)
+                            if completed_count == 1:
+                                print(f"✅ First photo completed", flush=True)
+                            elif completed_count % 50 == 0:
+                                print(f"📊 Progress: {completed_count}/{len(futures)} photos ({completed_count*100//len(futures)}%)", flush=True)
+                            elif completed_count % 10 == 0:
+                                print(".", end="", flush=True)  # Dot every 10 photos
                         
-                        if self.progress_callback:
-                            self.progress_callback(self.progress.to_dict())
-                    
-                    except Exception as e:
-                        logger.error(f"Error scanning {photo}: {e}")
-                        results['errors'] += 1
-                        self.progress.errors.append(str(photo))
+                        except TimeoutError:
+                            logger.error(f"TIMEOUT scanning {photo} - skipping")
+                            print(f"\n⚠️ TIMEOUT: {photo}", flush=True)
+                            results['errors'] += 1
+                            self.progress.errors.append(f"TIMEOUT: {str(photo)}")
+                        
+                        except Exception as e:
+                            logger.error(f"Error scanning {photo}: {e}")
+                            print(f"\n❌ ERROR scanning {photo}: {e}", flush=True)
+                            results['errors'] += 1
+                            self.progress.errors.append(str(photo))
+                
+                except TimeoutError:
+                    print(f"\n⚠️ OVERALL TIMEOUT: Scanner exceeded 1 hour - aborting", flush=True)
+                    logger.error("Scanner timed out after 1 hour")
         
-        print(f"DEBUG: Completed individual photo scans: {results['scanned']} scanned")
-        
-        print(f"\n{'='*60}")
-        print(f"BEFORE BURST CHECK")
-        print(f"'burst' in self.analyzers: {'burst' in self.analyzers}")
-        print(f"len(photos) > 1: {len(photos) > 1}")
-        print(f"self.analyzers: {self.analyzers}")
-        print(f"{'='*60}\n")
+        print(f"\n✅ Individual photo scans complete: {results['scanned']} scanned", flush=True)
         
         # Run burst detection if requested
         if 'burst' in self.analyzers and len(photos) > 1:
-            print(f"\n{'='*60}")
-            print(f"BURST ANALYSIS STARTING")
-            print(f"{'='*60}")
-            print(f"Analyzers list: {self.analyzers}")
-            print(f"Total photos: {len(photos)}")
-            print(f"{'='*60}\n")
+            print(f"\n📦 Starting burst analysis on {len(photos)} photos...", flush=True)
             
             logger.info("Running burst detection...")
             self.progress.current_analyzer = 'burst'
@@ -183,12 +197,12 @@ class FolderScanner:
             
             try:
                 burst_results = self._analyze_bursts(photos)
+                results['burst_groups'] = sum(1 for b in burst_results.values() if b.get('is_burst_candidate', False))
                 
-                print(f"\n{'='*60}")
-                print(f"BURST RESULTS: {len(burst_results)} photos analyzed")
-                print(f"{'='*60}\n")
+                print(f"📦 Found {results['burst_groups']} burst candidates in {len(burst_results)} analyzed photos", flush=True)
                 
                 # Update sidecars with burst data
+                print(f"💾 Writing burst data to sidecar files...", flush=True)
                 for photo_path_str, burst_data in burst_results.items():
                     photo_path = Path(photo_path_str)
                     sidecar = SidecarManager(photo_path)
@@ -196,17 +210,11 @@ class FolderScanner:
                     sidecar.update_analysis('burst', burst_data)
                     sidecar.save()
                 
-                results['burst_groups'] = sum(1 for b in burst_results.values() if b.get('is_burst_candidate', False))
+                print(f"✅ Burst analysis complete!", flush=True)
                 logger.info(f"Burst detection complete: {results['burst_groups']} burst candidates")
-                
-                print(f"\n{'='*60}")
-                print(f"BURST COMPLETE: {results['burst_groups']} candidates found")
-                print(f"{'='*60}\n")
             
             except Exception as e:
-                print(f"\n{'='*60}")
-                print(f"BURST ERROR: {e}")
-                print(f"{'='*60}\n")
+                print(f"\n❌ BURST ERROR: {e}", flush=True)
                 logger.error(f"Burst detection error: {e}")
                 import traceback
                 traceback.print_exc()

@@ -375,6 +375,27 @@ The migration system (`db_manager.py`) handles both formats:
 - Similarity threshold: Visual similarity > 0.85 (histogram correlation)
 - Grouping: All photos with same `burst_id` belong to same burst
 
+**Burst Leader Selection (for UI display):**
+
+The frontend displays burst groups as **collapsed containers** with a single "leader" photo shown. The leader selection happens in the API layer (`server.py`) during data loading:
+
+1. **Group photos by `burst_id`:** All photos sharing the same `burst_id` are grouped together
+2. **Select one leader per group:** The first photo alphabetically (by filename) becomes the leader
+3. **Mark as `is_burst_lead: true`:** Only the leader gets this flag set to `true`
+4. **Set `burst_count`:** Only the leader shows the count (total photos in burst)
+5. **Non-leaders hidden:** Photos with `is_burst_lead: false` are hidden from the main grid (shown only when burst is expanded)
+
+**Example:**
+- Burst group with `burst_id = "a4720613550b"`:
+  - `P1012336.JPG` → `is_burst_lead: true`, `burst_count: 3` (shown in grid)
+  - `P1012337.JPG` → `is_burst_lead: false`, `burst_count: 0` (hidden until expanded)
+  - `P1012338.JPG` → `is_burst_lead: false`, `burst_count: 0` (hidden until expanded)
+
+This ensures that:
+- **95 photos in bursts** with **30 unique burst groups** → Display **30 containers** (not 95!)
+- Clicking a container expands it to show all photos in that burst
+- Users see a clean, organized grid without duplicates
+
 #### `faces` (Object)
 Face detection results.
 
