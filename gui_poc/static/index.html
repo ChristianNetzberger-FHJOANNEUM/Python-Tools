@@ -419,7 +419,7 @@
                         <div class="filter-label">⭐ Rating</div>
                         <!-- Quick Rate All Dropdown -->
                         <div style="position: relative;">
-                            <button @click="showQuickRateMenu = !showQuickRateMenu"
+                            <button @click.stop="showQuickRateMenu = !showQuickRateMenu"
                                     style="background: rgba(139, 92, 246, 0.2); border: 2px solid rgba(139, 92, 246, 0.5); color: #a78bfa; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 600; transition: all 0.2s;"
                                     :style="{ 
                                         background: showQuickRateMenu ? 'rgba(139, 92, 246, 0.3)' : 'rgba(139, 92, 246, 0.2)'
@@ -1223,7 +1223,8 @@
                 </div>
             </div>
             
-            <div class="lightbox-main">
+            <div class="lightbox-content">
+                <div class="lightbox-main">
                 <img :src="lightboxPhoto.full_image || lightboxPhoto.thumbnail" 
                      :alt="lightboxPhoto.name" 
                      class="lightbox-image">
@@ -1250,7 +1251,7 @@
                 </div>
             </div>
             
-            <div class="lightbox-sidebar">
+                <div class="lightbox-sidebar">
                 <div class="lightbox-metadata">
                     <div class="lightbox-rating">
                         <span style="color: #888; margin-right: 10px;">Rating:</span>
@@ -1304,9 +1305,109 @@
                             </span>
                         </div>
                     </div>
+                    
+                    <!-- 🎨 EDIT PANEL (Phase 3b: Image Editing) -->
+                    <div v-if="showEditPanel" style="margin-top: 30px; padding-top: 20px; border-top: 1px solid rgba(255,255,255,0.1);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                            <h3 style="margin: 0; font-size: 1rem; color: #a78bfa;">🎨 Image Edits</h3>
+                            <div style="display: flex; gap: 8px;">
+                                <button @click="saveCurrentEdits" 
+                                        :disabled="!editsChanged || editsSaving"
+                                        style="padding: 4px 12px; font-size: 0.75rem; border-radius: 4px; border: 1px solid rgba(139, 92, 246, 0.5); background: rgba(139, 92, 246, 0.2); color: #a78bfa; cursor: pointer;"
+                                        :style="{ opacity: (!editsChanged || editsSaving) ? 0.5 : 1 }">
+                                    {{ editsSaving ? '💾 Saving...' : '💾 Save' }}
+                                </button>
+                                <button @click="resetCurrentEdits"
+                                        style="padding: 4px 12px; font-size: 0.75rem; border-radius: 4px; border: 1px solid rgba(239, 68, 68, 0.5); background: rgba(239, 68, 68, 0.2); color: #ef4444; cursor: pointer;">
+                                    🔄 Reset
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- Exposure Slider -->
+                        <div style="margin-bottom: 15px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                <label style="color: #888; font-size: 0.85rem;">☀️ Exposure</label>
+                                <span style="color: #a78bfa; font-size: 0.85rem; font-weight: 600;">{{ currentEdits.exposure.toFixed(2) }} EV</span>
+                            </div>
+                            <input type="range" min="-2" max="2" step="0.1" 
+                                   v-model.number="currentEdits.exposure"
+                                   @input="onEditChange"
+                                   style="width: 100%; cursor: pointer;">
+                        </div>
+                        
+                        <!-- Contrast Slider -->
+                        <div style="margin-bottom: 15px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                <label style="color: #888; font-size: 0.85rem;">◐ Contrast</label>
+                                <span style="color: #a78bfa; font-size: 0.85rem; font-weight: 600;">{{ Math.round(currentEdits.contrast) }}</span>
+                            </div>
+                            <input type="range" min="-100" max="100" step="1" 
+                                   v-model.number="currentEdits.contrast"
+                                   @input="onEditChange"
+                                   style="width: 100%; cursor: pointer;">
+                        </div>
+                        
+                        <!-- Highlights Slider -->
+                        <div style="margin-bottom: 15px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                <label style="color: #888; font-size: 0.85rem;">☀ Highlights</label>
+                                <span style="color: #a78bfa; font-size: 0.85rem; font-weight: 600;">{{ Math.round(currentEdits.highlights) }}</span>
+                            </div>
+                            <input type="range" min="-100" max="100" step="1" 
+                                   v-model.number="currentEdits.highlights"
+                                   @input="onEditChange"
+                                   style="width: 100%; cursor: pointer;">
+                        </div>
+                        
+                        <!-- Shadows Slider -->
+                        <div style="margin-bottom: 15px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                <label style="color: #888; font-size: 0.85rem;">🌙 Shadows</label>
+                                <span style="color: #a78bfa; font-size: 0.85rem; font-weight: 600;">{{ Math.round(currentEdits.shadows) }}</span>
+                            </div>
+                            <input type="range" min="-100" max="100" step="1" 
+                                   v-model.number="currentEdits.shadows"
+                                   @input="onEditChange"
+                                   style="width: 100%; cursor: pointer;">
+                        </div>
+                        
+                        <!-- Whites Slider -->
+                        <div style="margin-bottom: 15px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                <label style="color: #888; font-size: 0.85rem;">⚪ Whites</label>
+                                <span style="color: #a78bfa; font-size: 0.85rem; font-weight: 600;">{{ Math.round(currentEdits.whites) }}</span>
+                            </div>
+                            <input type="range" min="-100" max="100" step="1" 
+                                   v-model.number="currentEdits.whites"
+                                   @input="onEditChange"
+                                   style="width: 100%; cursor: pointer;">
+                        </div>
+                        
+                        <!-- Blacks Slider -->
+                        <div style="margin-bottom: 15px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                <label style="color: #888; font-size: 0.85rem;">⚫ Blacks</label>
+                                <span style="color: #a78bfa; font-size: 0.85rem; font-weight: 600;">{{ Math.round(currentEdits.blacks) }}</span>
+                            </div>
+                            <input type="range" min="-100" max="100" step="1" 
+                                   v-model.number="currentEdits.blacks"
+                                   @input="onEditChange"
+                                   style="width: 100%; cursor: pointer;">
+                        </div>
+                        
+                        <!-- Info Footer -->
+                        <div v-if="editsChanged" style="margin-top: 15px; padding: 8px; background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: 4px; font-size: 0.75rem; color: #fbbf24;">
+                            ⚠️ Unsaved changes - Click Save to apply edits
+                        </div>
+                        <div style="margin-top: 10px; padding: 8px; background: rgba(139, 92, 246, 0.1); border-radius: 4px; font-size: 0.7rem; color: #888; line-height: 1.5;">
+                            ℹ️ Non-destructive edits • Original untouched • Applied on export
+                        </div>
+                    </div>
                 </div>
             </div>
-        </div>
+            </div><!-- END .lightbox-content -->
+        </div><!-- END .lightbox -->
         
         <!-- Slideshow Modal -->
         <div v-if="showSlideshow" 

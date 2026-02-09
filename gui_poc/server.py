@@ -3557,6 +3557,115 @@ def get_config_info():
         return jsonify({'error': str(e)}), 500
 
 
+# ============================================================
+# IMAGE EDITS API (Phase 3b: Non-destructive Editing)
+# ============================================================
+# Feature flag: Set to False to disable editing features
+ENABLE_IMAGE_EDITS = True
+
+if ENABLE_IMAGE_EDITS:
+    from photo_tool.actions.edits import get_edits, set_edits, clear_edits, has_edits
+    from photo_tool.image_processing import calculate_histogram, apply_all_edits
+    from flask import request, send_file
+    import io
+    
+    @app.route('/api/photos/<path:photo_path>/edits', methods=['GET'])
+    def get_photo_edits(photo_path):
+        """Get edit metadata for a photo"""
+        try:
+            edits = get_edits(photo_path)
+            return jsonify({
+                'success': True,
+                'edits': edits,
+                'has_edits': has_edits(photo_path)
+            })
+        except Exception as e:
+            logger.error(f"Error getting edits for {photo_path}: {e}")
+            return jsonify({'error': str(e)}), 500
+    
+    @app.route('/api/photos/<path:photo_path>/edits', methods=['POST'])
+    def update_photo_edits(photo_path):
+        """Update edit metadata for a photo"""
+        try:
+            edits = request.json
+            success = set_edits(photo_path, edits, merge=True)
+            
+            if success:
+                return jsonify({'success': True})
+            else:
+                return jsonify({'error': 'Failed to save edits'}), 500
+        
+        except Exception as e:
+            logger.error(f"Error saving edits for {photo_path}: {e}")
+            return jsonify({'error': str(e)}), 500
+    
+    @app.route('/api/photos/<path:photo_path>/edits', methods=['DELETE'])
+    def delete_photo_edits(photo_path):
+        """Clear all edits for a photo"""
+        try:
+            success = clear_edits(photo_path)
+            
+            if success:
+                return jsonify({'success': True})
+            else:
+                return jsonify({'error': 'Failed to clear edits'}), 500
+        
+        except Exception as e:
+            logger.error(f"Error clearing edits for {photo_path}: {e}")
+            return jsonify({'error': str(e)}), 500
+    
+    @app.route('/api/photos/<path:photo_path>/histogram', methods=['GET'])
+    def get_photo_histogram(photo_path):
+        """Calculate histogram for a photo"""
+        try:
+            # Get query parameters
+            mode = request.args.get('mode', 'luminance')  # 'luminance' or 'rgb'
+            bins = int(request.args.get('bins', 256))
+            downsample = int(request.args.get('downsample', 4))  # Performance optimization
+            
+            histogram_data = calculate_histogram(
+                photo_path,
+                mode=mode,
+                bins=bins,
+                downsample=downsample
+            )
+            
+            return jsonify({
+                'success': True,
+                'histogram': histogram_data
+            })
+        
+        except Exception as e:
+            logger.error(f"Error calculating histogram for {photo_path}: {e}")
+            return jsonify({'error': str(e)}), 500
+    
+    @app.route('/api/photos/<path:photo_path>/preview', methods=['POST'])
+    def get_preview_with_edits(photo_path):
+        """
+        Generate preview image with edits applied.
+        POST body should contain edit values.
+        """
+        try:
+            edits = request.json
+            
+            # Apply edits and return JPEG bytes
+            result_bytes = apply_all_edits(
+                photo_path,
+                edits,
+                output_format='jpeg_bytes'
+            )
+            
+            return send_file(
+                io.BytesIO(result_bytes),
+                mimetype='image/jpeg',
+                as_attachment=False
+            )
+        
+        except Exception as e:
+            logger.error(f"Error generating preview for {photo_path}: {e}")
+            return jsonify({'error': str(e)}), 500
+
+
 if __name__ == '__main__':
     import socket
     from datetime import datetime

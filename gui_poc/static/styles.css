@@ -1263,6 +1263,12 @@ h1 {
     z-index: 2000;
 }
 
+.lightbox-content {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+}
+
 .lightbox-header {
     display: flex;
     justify-content: space-between;
@@ -1306,6 +1312,8 @@ h1 {
     justify-content: center;
     position: relative;
     padding: 20px;
+    overflow: hidden;
+    min-width: 0;
 }
 
 .lightbox-image {
@@ -1351,14 +1359,13 @@ h1 {
 }
 
 .lightbox-sidebar {
-    background: rgba(0, 0, 0, 0.8);
-    padding: 30px;
-    border-top: 1px solid rgba(255, 255, 255, 0.1);
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 30px;
-    flex-wrap: wrap;
+    width: 350px;
+    min-width: 350px;
+    background: rgba(0, 0, 0, 0.9);
+    padding: 20px;
+    border-left: 1px solid rgba(255, 255, 255, 0.1);
+    overflow-y: auto;
+    overflow-x: hidden;
 }
 
 .lightbox-metadata {
@@ -1746,4 +1753,74 @@ h1 {
 @keyframes fadeIn {
     from { opacity: 0; }
     to { opacity: 1; }
+}
+
+/* ============================================================
+   IMAGE EDITING SLIDERS (Phase 3b)
+   ============================================================ */
+
+/* Range slider styling */
+input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+    outline: none;
+    transition: background 0.2s;
+}
+
+input[type="range"]:hover {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+/* Webkit (Chrome, Safari, Edge) */
+input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #a78bfa, #8b5cf6);
+    cursor: pointer;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    transition: all 0.2s;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+    transform: scale(1.2);
+    box-shadow: 0 0 10px rgba(139, 92, 246, 0.5);
+}
+
+input[type="range"]::-webkit-slider-thumb:active {
+    transform: scale(1.1);
+    background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+}
+
+/* Firefox */
+input[type="range"]::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #a78bfa, #8b5cf6);
+    cursor: pointer;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    transition: all 0.2s;
+}
+
+input[type="range"]::-moz-range-thumb:hover {
+    transform: scale(1.2);
+    box-shadow: 0 0 10px rgba(139, 92, 246, 0.5);
+}
+
+input[type="range"]::-moz-range-thumb:active {
+    transform: scale(1.1);
+    background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+}
+
+/* Track styling */
+input[type="range"]::-moz-range-track {
+    height: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
 }

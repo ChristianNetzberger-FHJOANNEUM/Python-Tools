@@ -39,6 +39,7 @@ def export_gallery(
     slideshow_enabled: bool = False,
     slideshow_duration: int = 5,
     smart_tv_mode: bool = False,
+    apply_edits: bool = True,  # NEW: Apply non-destructive edits during export
     # Legacy parameters (deprecated, use profile instead)
     max_image_size: Optional[int] = None,
     thumbnail_size: Optional[int] = None
@@ -128,17 +129,45 @@ def export_gallery(
             img_path = images_dir / img_filename
             thumb_path = thumbs_dir / thumb_filename
             
+            # Apply edits if enabled and edits exist
+            source_for_export = photo_path
+            temp_edited_path = None
+            
+            if apply_edits:
+                try:
+                    from .edits import get_edits, has_edits
+                    from ..image_processing import apply_all_edits as apply_image_edits
+                    
+                    if has_edits(photo_path):
+                        edits = get_edits(photo_path)
+                        
+                        # Apply edits to temporary file
+                        temp_edited_path = output_dir / f"temp_edited_{i:04d}.jpg"
+                        edited_img = apply_image_edits(photo_path, edits, output_format='pil')
+                        edited_img.save(temp_edited_path, quality=95)
+                        
+                        source_for_export = temp_edited_path
+                        logger.info(f"  ✨ Applied edits to {photo_path.name}")
+                except ImportError:
+                    logger.warning("Image editing module not available, exporting originals")
+                except Exception as e:
+                    logger.warning(f"Error applying edits to {photo_path.name}: {e}")
+            
             # Optimize main image using profile
             img_result = optimize_image(
-                source_path=photo_path,
+                source_path=source_for_export,
                 output_path=img_path,
                 profile=export_profile,
                 generate_webp=generate_webp
             )
             
-            # Generate optimized thumbnail
+            # Clean up temp file if created
+            if temp_edited_path and temp_edited_path.exists():
+                temp_edited_path.unlink()
+            
+            # Generate optimized thumbnail (from already edited source if applicable)
             thumb_result = generate_optimized_thumbnail(
-                source_path=photo_path,
+                source_path=source_for_export if apply_edits else photo_path,
                 output_path=thumb_path,
                 profile=export_profile,
                 generate_webp=generate_webp

@@ -129,6 +129,18 @@ const { createApp } = Vue;
                     showLightbox: false,
                     lightboxPhoto: null,
                     lightboxIndex: 0,
+                    // Image Editing (Phase 3b)
+                    showEditPanel: true,  // Show edit panel in lightbox
+                    currentEdits: {
+                        exposure: 0,
+                        contrast: 0,
+                        highlights: 0,
+                        shadows: 0,
+                        whites: 0,
+                        blacks: 0
+                    },
+                    editsSaving: false,
+                    editsChanged: false,
                     // Slideshow
                     showSlideshow: false,
                     slideshowPhotos: [],
@@ -2361,11 +2373,14 @@ const { createApp } = Vue;
                     };
                 },
                 
-                openLightbox(photo, index) {
+                async openLightbox(photo, index) {
                     this.lightboxPhoto = photo;
                     this.lightboxIndex = index;
                     this.showLightbox = true;
                     document.addEventListener('keydown', this.handleLightboxKeyboard);
+                    
+                    // Load edits for this photo
+                    await this.loadEditsForPhoto(photo.path);
                 },
                 
                 closeLightbox() {
@@ -2391,6 +2406,109 @@ const { createApp } = Vue;
                 async rateLightboxPhoto(rating) {
                     await this.rate(this.lightboxPhoto, rating);
                 },
+                
+                // ========================================
+                // IMAGE EDITING METHODS (Phase 3b)
+                // ========================================
+                
+                async loadEditsForPhoto(photoPath) {
+                    if (!photoPath) return;
+                    
+                    try {
+                        const response = await fetch(`/api/photos/${encodeURIComponent(photoPath)}/edits`);
+                        const data = await response.json();
+                        
+                        if (data.success && data.edits) {
+                            this.currentEdits = {
+                                exposure: data.edits.exposure || 0,
+                                contrast: data.edits.contrast || 0,
+                                highlights: data.edits.highlights || 0,
+                                shadows: data.edits.shadows || 0,
+                                whites: data.edits.whites || 0,
+                                blacks: data.edits.blacks || 0
+                            };
+                        } else {
+                            this.resetEdits();
+                        }
+                        this.editsChanged = false;
+                    } catch (err) {
+                        console.error('Error loading edits:', err);
+                        this.resetEdits();
+                    }
+                },
+                
+                async saveCurrentEdits() {
+                    if (!this.lightboxPhoto || !this.lightboxPhoto.path) return;
+                    
+                    this.editsSaving = true;
+                    
+                    try {
+                        const response = await fetch(`/api/photos/${encodeURIComponent(this.lightboxPhoto.path)}/edits`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(this.currentEdits)
+                        });
+                        
+                        const data = await response.json();
+                        
+                        if (data.success) {
+                            this.editsChanged = false;
+                            console.log('✅ Edits saved');
+                        } else {
+                            console.error('Failed to save edits');
+                            alert('Failed to save edits: ' + (data.error || 'Unknown error'));
+                        }
+                    } catch (err) {
+                        console.error('Error saving edits:', err);
+                        alert('Error saving edits: ' + err.message);
+                    } finally {
+                        this.editsSaving = false;
+                    }
+                },
+                
+                async resetCurrentEdits() {
+                    if (!this.lightboxPhoto || !this.lightboxPhoto.path) return;
+                    
+                    if (!confirm('Reset all edits to default values?')) return;
+                    
+                    try {
+                        const response = await fetch(`/api/photos/${encodeURIComponent(this.lightboxPhoto.path)}/edits`, {
+                            method: 'DELETE'
+                        });
+                        
+                        const data = await response.json();
+                        
+                        if (data.success) {
+                            this.resetEdits();
+                            console.log('✅ Edits cleared');
+                        } else {
+                            alert('Failed to clear edits');
+                        }
+                    } catch (err) {
+                        console.error('Error clearing edits:', err);
+                        alert('Error clearing edits: ' + err.message);
+                    }
+                },
+                
+                resetEdits() {
+                    this.currentEdits = {
+                        exposure: 0,
+                        contrast: 0,
+                        highlights: 0,
+                        shadows: 0,
+                        whites: 0,
+                        blacks: 0
+                    };
+                    this.editsChanged = false;
+                },
+                
+                onEditChange() {
+                    this.editsChanged = true;
+                },
+                
+                // ========================================
+                // KEYBOARD SHORTCUTS
+                // ========================================
                 
                 handleLightboxKeyboard(e) {
                     if (!this.showLightbox) return;
