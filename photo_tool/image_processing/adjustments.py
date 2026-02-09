@@ -252,6 +252,90 @@ def apply_all_edits_fast(
         # Apply combined adjustment
         img_array *= adjustment[:, :, np.newaxis]
     
+    # 7. Temperature (Color Balance: Blue-Orange shift)
+    if edits.get('temperature', 0) != 0:
+        temp = edits['temperature'] / 100.0  # -1.0 to +1.0
+        if temp > 0:  # Warmer (add orange/red, reduce blue)
+            img_array[:, :, 0] *= (1 + temp * 0.3)  # R
+            img_array[:, :, 2] *= (1 - temp * 0.3)  # B
+        else:  # Cooler (add blue, reduce orange/red)
+            img_array[:, :, 0] *= (1 + temp * 0.3)  # R (reduce)
+            img_array[:, :, 2] *= (1 - temp * 0.3)  # B (increase)
+    
+    # 8. Saturation (HSV color space)
+    if edits.get('saturation', 0) != 0:
+        sat_factor = 1.0 + (edits['saturation'] / 100.0)
+        
+        # Convert RGB to HSV-like calculation (fast approximation)
+        max_rgb = np.max(img_array, axis=2)
+        min_rgb = np.min(img_array, axis=2)
+        delta = max_rgb - min_rgb
+        
+        # Avoid division by zero
+        mask = delta > 0.001
+        
+        # Apply saturation adjustment
+        for c in range(3):
+            diff = img_array[:, :, c] - min_rgb
+            img_array[:, :, c] = np.where(mask, min_rgb + diff * sat_factor, img_array[:, :, c])
+    
+    # 9. Vibrance (Selective saturation boost for muted colors)
+    if edits.get('vibrance', 0) != 0:
+        vib_factor = edits['vibrance'] / 100.0
+        
+        # Calculate saturation level
+        max_rgb = np.max(img_array, axis=2)
+        min_rgb = np.min(img_array, axis=2)
+        delta = max_rgb - min_rgb
+        saturation = np.where(max_rgb > 0, delta / (max_rgb + 0.001), 0)
+        
+        # Vibrance affects low-saturation pixels more (inverse mask)
+        vib_mask = 1.0 - saturation
+        vib_adjustment = 1.0 + vib_factor * vib_mask
+        
+        # Apply vibrance
+        for c in range(3):
+            diff = img_array[:, :, c] - min_rgb
+            img_array[:, :, c] = min_rgb + diff * vib_adjustment
+    
+    # 10. Sharpening (Unsharp mask approximation)
+    if edits.get('sharpening', 0) != 0:
+        sharp_amount = edits['sharpening'] / 100.0
+        
+        try:
+            from scipy.ndimage import gaussian_filter
+            
+            # Blur image using Gaussian filter
+            blurred = np.zeros_like(img_array)
+            for c in range(3):
+                blurred[:, :, c] = gaussian_filter(img_array[:, :, c], sigma=1.0)
+            
+            # High-pass = Original - Blurred
+            high_pass = img_array - blurred
+            
+            # Add high-pass back with intensity
+            img_array = img_array + high_pass * sharp_amount
+        
+        except ImportError:
+            # Fallback: Simple box blur if scipy not available
+            # Create blurred version using numpy only
+            kernel_size = 3
+            pad = kernel_size // 2
+            
+            blurred = np.zeros_like(img_array)
+            for c in range(3):
+                # Pad image
+                padded = np.pad(img_array[:, :, c], pad, mode='edge')
+                
+                # Box blur (average of neighbors)
+                for i in range(img_array.shape[0]):
+                    for j in range(img_array.shape[1]):
+                        blurred[i, j, c] = np.mean(padded[i:i+kernel_size, j:j+kernel_size])
+            
+            # Unsharp mask
+            high_pass = img_array - blurred
+            img_array = img_array + high_pass * sharp_amount
+    
     # Clip and convert back
     img_array = np.clip(img_array, 0, 255).astype(np.uint8)
     

@@ -1344,6 +1344,7 @@
                             <input type="range" min="-2" max="2" step="0.1" 
                                    v-model.number="currentEdits.exposure"
                                    @input="onEditChange"
+                                   @change="onSliderRelease"
                                    @mousedown="isSliderDragging = true"
                                    @mouseup="isSliderDragging = false"
                                    @touchstart="isSliderDragging = true"
@@ -1360,6 +1361,7 @@
                             <input type="range" min="-100" max="100" step="1" 
                                    v-model.number="currentEdits.contrast"
                                    @input="onEditChange"
+                                   @change="onSliderRelease"
                                    style="width: 100%; cursor: pointer;">
                         </div>
                         
@@ -1372,6 +1374,7 @@
                             <input type="range" min="-100" max="100" step="1" 
                                    v-model.number="currentEdits.highlights"
                                    @input="onEditChange"
+                                   @change="onSliderRelease"
                                    style="width: 100%; cursor: pointer;">
                         </div>
                         
@@ -1384,6 +1387,7 @@
                             <input type="range" min="-100" max="100" step="1" 
                                    v-model.number="currentEdits.shadows"
                                    @input="onEditChange"
+                                   @change="onSliderRelease"
                                    style="width: 100%; cursor: pointer;">
                         </div>
                         
@@ -1396,6 +1400,7 @@
                             <input type="range" min="-100" max="100" step="1" 
                                    v-model.number="currentEdits.whites"
                                    @input="onEditChange"
+                                   @change="onSliderRelease"
                                    style="width: 100%; cursor: pointer;">
                         </div>
                         
@@ -1408,6 +1413,62 @@
                             <input type="range" min="-100" max="100" step="1" 
                                    v-model.number="currentEdits.blacks"
                                    @input="onEditChange"
+                                   @change="onSliderRelease"
+                                   style="width: 100%; cursor: pointer;">
+                        </div>
+                        
+                        <!-- Divider -->
+                        <div style="border-top: 1px solid rgba(255,255,255,0.1); margin: 20px 0;"></div>
+                        
+                        <!-- Temperature Slider -->
+                        <div style="margin-bottom: 15px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                <label style="color: #888; font-size: 0.85rem;">🌡️ Temperature</label>
+                                <span style="color: #a78bfa; font-size: 0.85rem; font-weight: 600;">{{ Math.round(currentEdits.temperature) }}</span>
+                            </div>
+                            <input type="range" min="-100" max="100" step="1" 
+                                   v-model.number="currentEdits.temperature"
+                                   @input="onEditChange"
+                                   @change="onSliderRelease"
+                                   style="width: 100%; cursor: pointer;">
+                        </div>
+                        
+                        <!-- Saturation Slider -->
+                        <div style="margin-bottom: 15px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                <label style="color: #888; font-size: 0.85rem;">🎨 Saturation</label>
+                                <span style="color: #a78bfa; font-size: 0.85rem; font-weight: 600;">{{ Math.round(currentEdits.saturation) }}</span>
+                            </div>
+                            <input type="range" min="-100" max="100" step="1" 
+                                   v-model.number="currentEdits.saturation"
+                                   @input="onEditChange"
+                                   @change="onSliderRelease"
+                                   style="width: 100%; cursor: pointer;">
+                        </div>
+                        
+                        <!-- Vibrance Slider -->
+                        <div style="margin-bottom: 15px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                <label style="color: #888; font-size: 0.85rem;">✨ Vibrance</label>
+                                <span style="color: #a78bfa; font-size: 0.85rem; font-weight: 600;">{{ Math.round(currentEdits.vibrance) }}</span>
+                            </div>
+                            <input type="range" min="-100" max="100" step="1" 
+                                   v-model.number="currentEdits.vibrance"
+                                   @input="onEditChange"
+                                   @change="onSliderRelease"
+                                   style="width: 100%; cursor: pointer;">
+                        </div>
+                        
+                        <!-- Sharpening Slider -->
+                        <div style="margin-bottom: 15px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                <label style="color: #888; font-size: 0.85rem;">🔪 Sharpening</label>
+                                <span style="color: #a78bfa; font-size: 0.85rem; font-weight: 600;">{{ Math.round(currentEdits.sharpening) }}</span>
+                            </div>
+                            <input type="range" min="0" max="100" step="1" 
+                                   v-model.number="currentEdits.sharpening"
+                                   @input="onEditChange"
+                                   @change="onSliderRelease"
                                    style="width: 100%; cursor: pointer;">
                         </div>
                         

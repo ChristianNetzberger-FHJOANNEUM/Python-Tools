@@ -137,14 +137,18 @@ const { createApp } = Vue;
                     previewTimings: null,  // Detailed timing breakdown
                     histogramData: null,  // Histogram from server
                     editDebounceTimer: null,  // Debounce timer for slider changes
-                    currentEdits: {
-                        exposure: 0,
-                        contrast: 0,
-                        highlights: 0,
-                        shadows: 0,
-                        whites: 0,
-                        blacks: 0
-                    },
+                currentEdits: {
+                    exposure: 0,
+                    contrast: 0,
+                    highlights: 0,
+                    shadows: 0,
+                    whites: 0,
+                    blacks: 0,
+                    temperature: 0,
+                    saturation: 0,
+                    vibrance: 0,
+                    sharpening: 0
+                },
                     editsSaving: false,
                     editsChanged: false,
                     // Slideshow
@@ -2383,7 +2387,13 @@ const { createApp } = Vue;
                     this.lightboxPhoto = photo;
                     this.lightboxIndex = index;
                     this.showLightbox = true;
-                    this.previewUrl = null;  // Reset preview
+                    
+                    // Clear old preview when opening new photo (with cleanup)
+                    if (this.previewUrl) {
+                        URL.revokeObjectURL(this.previewUrl);
+                        this.previewUrl = null;
+                    }
+                    
                     document.addEventListener('keydown', this.handleLightboxKeyboard);
                     
                     // Load edits for this photo
@@ -2400,7 +2410,12 @@ const { createApp } = Vue;
                     if (this.lightboxIndex < this.filteredPhotos.length - 1) {
                         this.lightboxIndex++;
                         this.lightboxPhoto = this.filteredPhotos[this.lightboxIndex];
-                        this.previewUrl = null;  // Reset preview
+                        
+                        // Clear old preview (with cleanup)
+                        if (this.previewUrl) {
+                            URL.revokeObjectURL(this.previewUrl);
+                            this.previewUrl = null;
+                        }
                         
                         // Load edits for new photo
                         await this.loadEditsForPhoto(this.lightboxPhoto.path);
@@ -2411,7 +2426,12 @@ const { createApp } = Vue;
                     if (this.lightboxIndex > 0) {
                         this.lightboxIndex--;
                         this.lightboxPhoto = this.filteredPhotos[this.lightboxIndex];
-                        this.previewUrl = null;  // Reset preview
+                        
+                        // Clear old preview (with cleanup)
+                        if (this.previewUrl) {
+                            URL.revokeObjectURL(this.previewUrl);
+                            this.previewUrl = null;
+                        }
                         
                         // Load edits for new photo
                         await this.loadEditsForPhoto(this.lightboxPhoto.path);
@@ -2434,13 +2454,18 @@ const { createApp } = Vue;
                         const data = await response.json();
                         
                         if (data.success && data.edits) {
+                            // Merge with defaults to ensure ALL properties exist (fix NaN!)
                             this.currentEdits = {
                                 exposure: data.edits.exposure || 0,
                                 contrast: data.edits.contrast || 0,
                                 highlights: data.edits.highlights || 0,
                                 shadows: data.edits.shadows || 0,
                                 whites: data.edits.whites || 0,
-                                blacks: data.edits.blacks || 0
+                                blacks: data.edits.blacks || 0,
+                                temperature: data.edits.temperature || 0,
+                                saturation: data.edits.saturation || 0,
+                                vibrance: data.edits.vibrance || 0,
+                                sharpening: data.edits.sharpening || 0
                             };
                         } else {
                             this.resetEdits();
@@ -2522,7 +2547,11 @@ const { createApp } = Vue;
                         highlights: 0,
                         shadows: 0,
                         whites: 0,
-                        blacks: 0
+                        blacks: 0,
+                        temperature: 0,
+                        saturation: 0,
+                        vibrance: 0,
+                        sharpening: 0
                     };
                     this.editsChanged = false;
                     
@@ -2532,24 +2561,40 @@ const { createApp } = Vue;
                         this.previewUrl = null;
                     }
                     this.previewPerformance = 0;
+                    
+                    // Reload histogram for original image
+                    this.loadHistogram(this.lightboxPhoto.path);
                 },
                 
                 onEditChange() {
                     this.editsChanged = true;
                     
-                    // Debounce server preview (wait 500ms after last change)
+                    // Debounce PREVIEW ONLY (fast, frequent updates)
                     clearTimeout(this.editDebounceTimer);
-                    this.editDebounceTimer = setTimeout(() => {
-                        this.generateServerPreview();
-                    }, 500);  // Wait for user to stop moving slider
+                    this.editDebounceTimer = setTimeout(async () => {
+                        await this.generateServerPreview();
+                        // Histogram updated on slider release, not during drag!
+                    }, 500);
+                },
+                
+                onSliderRelease() {
+                    // Update histogram ONLY when slider is released (less frequent)
+                    this.loadHistogram(this.lightboxPhoto.path);
+                    console.log('🔄 Histogram updated (slider released)');
                 },
                 
                 async loadHistogram(photoPath) {
                     if (!photoPath) return;
                     
                     try {
+                        // Send current edits to get histogram of edited image (not saved!)
                         const response = await fetch(
-                            `/api/photos/${encodeURIComponent(photoPath)}/histogram?mode=luminance&downsample=8`
+                            `/api/photos/${encodeURIComponent(photoPath)}/histogram?mode=luminance&downsample=8`,
+                            {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(this.currentEdits)  // CRITICAL: Send current edits!
+                            }
                         );
                         const data = await response.json();
                         
@@ -2576,7 +2621,8 @@ const { createApp } = Vue;
                         return;
                     }
                     
-                    this.previewLoading = true;
+                    // DON'T show "Rendering..." overlay (causes flicker!)
+                    // this.previewLoading = true;  // DISABLED!
                     const startTime = performance.now();
                     
                     try {
@@ -2595,22 +2641,28 @@ const { createApp } = Vue;
                                 this.previewTimings = JSON.parse(timingHeader);
                             }
                             
-                            // Revoke old preview URL to free memory
-                            if (this.previewUrl) {
-                                URL.revokeObjectURL(this.previewUrl);
-                            }
-                            
                             // Create new preview URL
-                            this.previewUrl = URL.createObjectURL(blob);
+                            const newPreviewUrl = URL.createObjectURL(blob);
+                            
+                            // Store old URL to revoke AFTER new one is displayed
+                            const oldPreviewUrl = this.previewUrl;
+                            
+                            // Set new URL (no flicker! Old preview stays until this is ready)
+                            this.previewUrl = newPreviewUrl;
+                            
+                            // Revoke old URL AFTER new one is set (free memory, avoid flicker)
+                            if (oldPreviewUrl) {
+                                setTimeout(() => URL.revokeObjectURL(oldPreviewUrl), 100);
+                            }
                             
                             this.previewPerformance = Math.round(performance.now() - startTime);
                             
-                            // Log detailed timing
-                            if (this.previewTimings) {
-                                console.log(`✅ Preview generated (Total: ${this.previewPerformance}ms)`);
-                                console.log(`   Load Image:  ${this.previewTimings.load_image}ms`);
+                            // Log detailed timing (only if > 500ms to reduce spam)
+                            if (this.previewTimings && this.previewPerformance > 500) {
+                                console.log(`⚠️ Slow preview (Total: ${this.previewPerformance}ms)`);
+                                console.log(`   Load Image:  ${this.previewTimings.load_image}ms ${this.previewTimings.load_image === 0 ? '(cached ✅)' : ''}`);
                                 console.log(`   Downsample:  ${this.previewTimings.downsample}ms`);
-                                console.log(`   Apply Edits: ${this.previewTimings.apply_edits}ms ← Bottleneck?`);
+                                console.log(`   Apply Edits: ${this.previewTimings.apply_edits}ms`);
                                 console.log(`   JPEG Encode: ${this.previewTimings.jpeg_encode}ms`);
                             }
                         } else {
@@ -2621,16 +2673,23 @@ const { createApp } = Vue;
                         console.error('Error generating preview:', err);
                         alert('Error generating preview: ' + err.message);
                     } finally {
-                        this.previewLoading = false;
+                        // this.previewLoading = false;  // DISABLED (overlay removed)
                     }
                 },
                 
                 drawHistogram() {
                     const canvas = document.getElementById('histogram-canvas');
-                    if (!canvas || !this.histogramData) return;
+                    if (!canvas || !this.histogramData) {
+                        console.log('⚠️ Histogram: No canvas or data', {canvas: !!canvas, data: !!this.histogramData});
+                        return;
+                    }
                     
-                    const histogram = this.histogramData.histogram;
-                    if (!histogram) return;
+                    // histogramData directly contains luminance array (not nested!)
+                    const histogram = this.histogramData.luminance || this.histogramData.histogram;
+                    if (!histogram) {
+                        console.log('⚠️ Histogram: No luminance data', this.histogramData);
+                        return;
+                    }
                     
                     const ctx = canvas.getContext('2d');
                     const width = canvas.width;

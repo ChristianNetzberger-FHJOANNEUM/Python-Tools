@@ -3614,21 +3614,57 @@ if ENABLE_IMAGE_EDITS:
             logger.error(f"Error clearing edits for {photo_path}: {e}")
             return jsonify({'error': str(e)}), 500
     
-    @app.route('/api/photos/<path:photo_path>/histogram', methods=['GET'])
+    @app.route('/api/photos/<path:photo_path>/histogram', methods=['GET', 'POST'])
     def get_photo_histogram(photo_path):
-        """Calculate histogram for a photo"""
+        """Calculate histogram for a photo WITH current edits applied"""
         try:
+            import numpy as np
+            from PIL import Image, ImageOps
+            
             # Get query parameters
             mode = request.args.get('mode', 'luminance')  # 'luminance' or 'rgb'
             bins = int(request.args.get('bins', 256))
             downsample = int(request.args.get('downsample', 4))  # Performance optimization
             
-            histogram_data = calculate_histogram(
-                photo_path,
-                mode=mode,
-                bins=bins,
-                downsample=downsample
-            )
+            # Load image with EXIF orientation
+            img = Image.open(photo_path)
+            img = ImageOps.exif_transpose(img)  # Apply EXIF rotation
+            
+            # Get current edits (from POST body OR from saved file)
+            if request.method == 'POST' and request.json:
+                # Use edits from request (live preview, not saved yet!)
+                current_edits = request.json
+            else:
+                # Use saved edits from file
+                current_edits = get_edits(photo_path)
+            
+            if current_edits:
+                img = apply_all_edits(img, current_edits, output_format='pil')
+            
+            # Convert to numpy for histogram calculation
+            img_array = np.array(img)
+            
+            # Downsample for performance
+            if downsample > 1:
+                img_array = img_array[::downsample, ::downsample]
+            
+            # Calculate histogram from edited image
+            if mode == 'luminance':
+                # Convert RGB to grayscale (luminance)
+                luminance = 0.299 * img_array[:, :, 0] + 0.587 * img_array[:, :, 1] + 0.114 * img_array[:, :, 2]
+                hist, _ = np.histogram(luminance.flatten(), bins=bins, range=(0, 255))
+                histogram_data = {
+                    'luminance': hist.tolist()
+                }
+            else:  # rgb mode
+                r_hist, _ = np.histogram(img_array[:, :, 0].flatten(), bins=bins, range=(0, 255))
+                g_hist, _ = np.histogram(img_array[:, :, 1].flatten(), bins=bins, range=(0, 255))
+                b_hist, _ = np.histogram(img_array[:, :, 2].flatten(), bins=bins, range=(0, 255))
+                histogram_data = {
+                    'r': r_hist.tolist(),
+                    'g': g_hist.tolist(),
+                    'b': b_hist.tolist()
+                }
             
             return jsonify({
                 'success': True,
@@ -3639,16 +3675,19 @@ if ENABLE_IMAGE_EDITS:
             logger.error(f"Error calculating histogram for {photo_path}: {e}")
             return jsonify({'error': str(e)}), 500
     
+    # Simple cache for currently edited image (avoid reloading from disk)
+    _preview_cache = {'path': None, 'image': None, 'size': None}
+    
     @app.route('/api/photos/<path:photo_path>/preview', methods=['POST'])
     def get_preview_with_edits(photo_path):
         """
         Generate preview image with edits applied.
         POST body should contain edit values.
-        Optimized for fast preview with detailed timing.
+        Optimized for fast preview with detailed timing + image caching.
         """
         try:
             import time
-            from PIL import Image
+            from PIL import Image, ImageOps
             
             timings = {}
             overall_start = time.time()
@@ -3658,11 +3697,26 @@ if ENABLE_IMAGE_EDITS:
             edits = request.json
             timings['parse_request'] = int((time.time() - t0) * 1000)
             
-            # Load image
+            # Load image with EXIF orientation fix (WITH CACHING!)
             t0 = time.time()
-            img = Image.open(photo_path)
-            original_size = img.size
-            timings['load_image'] = int((time.time() - t0) * 1000)
+            
+            # Check cache (avoid 400ms disk load!)
+            if _preview_cache['path'] == photo_path and _preview_cache['image'] is not None:
+                img = _preview_cache['image'].copy()  # Use cached image
+                original_size = _preview_cache['size']
+                timings['load_image'] = 0  # Cached!
+            else:
+                # Load from disk and cache it
+                img = Image.open(photo_path)
+                img = ImageOps.exif_transpose(img)  # Apply EXIF rotation
+                original_size = img.size
+                
+                # Cache for next preview (same photo)
+                _preview_cache['path'] = photo_path
+                _preview_cache['image'] = img.copy()
+                _preview_cache['size'] = original_size
+                
+                timings['load_image'] = int((time.time() - t0) * 1000)
             
             # Downsample for speed (using BILINEAR = 5x faster than LANCZOS!)
             t0 = time.time()
