@@ -59,10 +59,15 @@ const { createApp } = Vue;
                     exportTemplate: 'photoswipe',
                     exportProfile: 'web',              // ðŸŽ¯ Export optimization profile
                     exportWebP: false,                 // ðŸš€ WebP generation
+                    exportQuickUpdate: false,          // âš¡ Quick update (HTML only, skip image processing)
                     exportSlideshowEnabled: true,      // ðŸ†• Slideshow enabled by default
                     exportSlideshowDuration: 5,        // ðŸ†• 5 seconds per photo
                     exportSmartTVMode: false,          // ðŸ†• Smart TV mode
+                    exportSplashTitle: '',             // ðŸŽ¬ Splash screen title
+                    exportSplashSubtitle: '',          // ðŸŽ¬ Splash screen subtitle
                     exportMusicFiles: '',              // ðŸ†• Music file paths (newline separated)
+                    exportMusicAutoplay: false,        // ðŸŽµ Autoplay music on load (default: OFF)
+                    exportMusicDuckingVolume: 30,      // ðŸŽšï¸ Music volume during pause (0-100%)
                     exporting: false,
                     exportProgress: {
                         show: false,
@@ -147,10 +152,18 @@ const { createApp } = Vue;
                     temperature: 0,
                     saturation: 0,
                     vibrance: 0,
-                    sharpening: 0
+                    sharpening: 0,
+                    crop: null  // {x, y, width, height} in pixels
                 },
-                    editsSaving: false,
-                    editsChanged: false,
+                editsSaving: false,
+                editsChanged: false,
+                // Cropping
+                cropMode: false,
+                cropper: null,
+                cropAspectRatio: NaN,  // Free aspect ratio (NaN, 16/9, 4/3, 1/1, etc.)
+                cropRotation: 0,       // Rotation in degrees (0, 90, 180, 270)
+                cropFlipH: false,      // Horizontal flip
+                cropFlipV: false,      // Vertical flip
                     // Slideshow
                     showSlideshow: false,
                     slideshowPhotos: [],
@@ -402,6 +415,49 @@ const { createApp } = Vue;
             },
             
             methods: {
+                // 💾 Load export settings from localStorage
+                loadExportSettings() {
+                    const saved = localStorage.getItem('exportSettings');
+                    if (saved) {
+                        try {
+                            const settings = JSON.parse(saved);
+                            this.exportTemplate = settings.template || 'photoswipe';
+                            this.exportProfile = settings.profile || 'web';
+                            this.exportWebP = settings.webp || false;
+                            this.exportSlideshowEnabled = settings.slideshowEnabled !== undefined ? settings.slideshowEnabled : true;
+                            this.exportSlideshowDuration = settings.slideshowDuration || 5;
+                            this.exportSmartTVMode = settings.smartTVMode || false;
+                            this.exportSplashTitle = settings.splashTitle || '';
+                            this.exportSplashSubtitle = settings.splashSubtitle || '';
+                            this.exportMusicFiles = settings.musicFiles || '';
+                            this.exportMusicAutoplay = settings.musicAutoplay || false;
+                            this.exportMusicDuckingVolume = settings.musicDuckingVolume !== undefined ? settings.musicDuckingVolume : 30;
+                            console.log('✅ Loaded export settings from localStorage');
+                        } catch (e) {
+                            console.error('Failed to load export settings:', e);
+                        }
+                    }
+                },
+                
+                // 💾 Save export settings to localStorage
+                saveExportSettings() {
+                    const settings = {
+                        template: this.exportTemplate,
+                        profile: this.exportProfile,
+                        webp: this.exportWebP,
+                        slideshowEnabled: this.exportSlideshowEnabled,
+                        slideshowDuration: this.exportSlideshowDuration,
+                        smartTVMode: this.exportSmartTVMode,
+                        splashTitle: this.exportSplashTitle,
+                        splashSubtitle: this.exportSplashSubtitle,
+                        musicFiles: this.exportMusicFiles,
+                        musicAutoplay: this.exportMusicAutoplay,
+                        musicDuckingVolume: this.exportMusicDuckingVolume
+                    };
+                    localStorage.setItem('exportSettings', JSON.stringify(settings));
+                    console.log('💾 Saved export settings to localStorage');
+                },
+                
                 async loadPhotos() {
                     try {
                         this.loading = true;
@@ -1571,7 +1627,11 @@ const { createApp } = Vue;
                             slideshow_duration: this.exportSlideshowDuration,
                             smart_tv_mode: this.exportSmartTVMode,
                             template: this.exportTemplate,
-                            music_files: this.exportMusicFiles.split('\n').map(f => f.trim()).filter(f => f)
+                            music_files: this.exportMusicFiles.split('\n').map(f => f.trim()).filter(f => f),
+                            music_autoplay: this.exportMusicAutoplay,  // ðŸŽµ Autoplay toggle
+                            music_ducking_volume: this.exportMusicDuckingVolume,  // ðŸŽšï¸ Ducking volume
+                            splash_title: this.exportSplashTitle || null,      // ðŸŽ¬ Custom splash title
+                            splash_subtitle: this.exportSplashSubtitle || null // ðŸŽ¬ Custom splash subtitle
                         };
                         
                         const res = await fetch('/api/projects', {
@@ -2293,6 +2353,9 @@ const { createApp } = Vue;
                         return;
                     }
                     
+                    // 💾 Save settings before export
+                    this.saveExportSettings();
+                    
                     this.exporting = true;
                     this.exportProgress.show = true;
                     this.exportProgress.total = this.filteredPhotos.length;
@@ -2324,11 +2387,16 @@ const { createApp } = Vue;
                                 template: this.exportTemplate,
                                 profile: this.exportProfile,           // ðŸŽ¯ Export profile
                                 generate_webp: this.exportWebP,        // ðŸš€ WebP generation
+                                quick_update: this.exportQuickUpdate,  // âš¡ Quick update (HTML only)
                                 // ðŸ†• NEW PARAMETERS
                                 slideshow_enabled: this.exportSlideshowEnabled,
                                 slideshow_duration: this.exportSlideshowDuration,
                                 smart_tv_mode: this.exportSmartTVMode,
-                                music_files: musicFiles.length > 0 ? musicFiles : undefined
+                                splash_title: this.exportSplashTitle || undefined,      // ðŸŽ¬ Custom splash title
+                                splash_subtitle: this.exportSplashSubtitle || undefined, // ðŸŽ¬ Custom splash subtitle
+                                music_files: musicFiles.length > 0 ? musicFiles : undefined,
+                                music_autoplay: this.exportMusicAutoplay,  // ðŸŽµ Autoplay toggle
+                                music_ducking_volume: this.exportMusicDuckingVolume  // ðŸŽšï¸ Ducking volume (0-100%)
                             })
                         });
                         
@@ -2465,8 +2533,16 @@ const { createApp } = Vue;
                                 temperature: data.edits.temperature || 0,
                                 saturation: data.edits.saturation || 0,
                                 vibrance: data.edits.vibrance || 0,
-                                sharpening: data.edits.sharpening || 0
+                                sharpening: data.edits.sharpening || 0,
+                                crop: data.edits.crop || null
                             };
+                            
+                            // Load crop transformations if crop exists
+                            if (data.edits.crop) {
+                                this.cropRotation = data.edits.crop.rotate || 0;
+                                this.cropFlipH = data.edits.crop.flipH || false;
+                                this.cropFlipV = data.edits.crop.flipV || false;
+                            }
                         } else {
                             this.resetEdits();
                         }
@@ -2551,9 +2627,16 @@ const { createApp } = Vue;
                         temperature: 0,
                         saturation: 0,
                         vibrance: 0,
-                        sharpening: 0
+                        sharpening: 0,
+                        crop: null
                     };
                     this.editsChanged = false;
+                    
+                    // Reset crop transformations
+                    this.cropRotation = 0;
+                    this.cropFlipH = false;
+                    this.cropFlipV = false;
+                    this.cropAspectRatio = NaN;
                     
                     // Clear preview (show original)
                     if (this.previewUrl) {
@@ -2561,6 +2644,15 @@ const { createApp } = Vue;
                         this.previewUrl = null;
                     }
                     this.previewPerformance = 0;
+                    
+                    // Exit crop mode if active
+                    if (this.cropMode) {
+                        this.cropMode = false;
+                        if (this.cropper) {
+                            this.cropper.destroy();
+                            this.cropper = null;
+                        }
+                    }
                     
                     // Reload histogram for original image
                     this.loadHistogram(this.lightboxPhoto.path);
@@ -2581,6 +2673,154 @@ const { createApp } = Vue;
                     // Update histogram ONLY when slider is released (less frequent)
                     this.loadHistogram(this.lightboxPhoto.path);
                     console.log('🔄 Histogram updated (slider released)');
+                },
+                
+                // ========================================
+                // CROPPING METHODS
+                // ========================================
+                
+                toggleCropMode() {
+                    this.cropMode = !this.cropMode;
+                    
+                    if (this.cropMode) {
+                        // Entering crop mode - initialize cropper
+                        this.$nextTick(() => {
+                            this.initCropper();
+                        });
+                    } else {
+                        // Exiting crop mode - apply crop and destroy cropper
+                        this.applyCrop();
+                        if (this.cropper) {
+                            this.cropper.destroy();
+                            this.cropper = null;
+                        }
+                    }
+                },
+                
+                initCropper() {
+                    const image = document.getElementById('crop-image');
+                    if (!image) {
+                        console.error('❌ Crop image not found');
+                        return;
+                    }
+                    
+                    // Destroy existing cropper if any
+                    if (this.cropper) {
+                        this.cropper.destroy();
+                    }
+                    
+                    // Initialize Cropper.js
+                    this.cropper = new Cropper(image, {
+                        viewMode: 1,  // Restrict crop box to canvas
+                        dragMode: 'move',
+                        aspectRatio: this.cropAspectRatio,  // Use selected aspect ratio
+                        autoCropArea: this.currentEdits.crop ? 0.8 : 1,  // Initial crop area
+                        restore: false,
+                        guides: true,
+                        center: true,
+                        highlight: true,
+                        cropBoxMovable: true,
+                        cropBoxResizable: true,
+                        toggleDragModeOnDblclick: false,
+                        ready: () => {
+                            console.log('✂️ Cropper ready');
+                            
+                            // Apply rotation and flip
+                            if (this.cropRotation !== 0) {
+                                this.cropper.rotateTo(this.cropRotation);
+                            }
+                            if (this.cropFlipH) {
+                                this.cropper.scaleX(-1);
+                            }
+                            if (this.cropFlipV) {
+                                this.cropper.scaleY(-1);
+                            }
+                            
+                            // Set existing crop if any
+                            if (this.currentEdits.crop) {
+                                const cropData = this.currentEdits.crop;
+                                this.cropper.setData({
+                                    x: cropData.x,
+                                    y: cropData.y,
+                                    width: cropData.width,
+                                    height: cropData.height
+                                });
+                            }
+                        }
+                    });
+                },
+                
+                setCropAspectRatio() {
+                    if (this.cropper) {
+                        this.cropper.setAspectRatio(this.cropAspectRatio);
+                        console.log('📐 Aspect ratio set:', this.cropAspectRatio);
+                    }
+                },
+                
+                rotateCrop(degrees) {
+                    if (!this.cropper) return;
+                    
+                    // Rotate by specified degrees
+                    this.cropper.rotate(degrees);
+                    this.cropRotation = (this.cropRotation + degrees) % 360;
+                    
+                    console.log('🔄 Rotated:', this.cropRotation, '°');
+                },
+                
+                flipCrop(direction) {
+                    if (!this.cropper) return;
+                    
+                    if (direction === 'horizontal') {
+                        this.cropFlipH = !this.cropFlipH;
+                        this.cropper.scaleX(this.cropFlipH ? -1 : 1);
+                        console.log('↔️ Flip H:', this.cropFlipH);
+                    } else if (direction === 'vertical') {
+                        this.cropFlipV = !this.cropFlipV;
+                        this.cropper.scaleY(this.cropFlipV ? -1 : 1);
+                        console.log('↕️ Flip V:', this.cropFlipV);
+                    }
+                },
+                
+                clearCrop() {
+                    if (confirm('Clear crop? This will remove the crop area but keep other edits.')) {
+                        this.currentEdits.crop = null;
+                        this.cropRotation = 0;
+                        this.cropFlipH = false;
+                        this.cropFlipV = false;
+                        this.editsChanged = true;
+                        
+                        // Regenerate preview without crop
+                        this.generateServerPreview();
+                        this.loadHistogram(this.lightboxPhoto.path);
+                        
+                        console.log('✂️❌ Crop cleared');
+                    }
+                },
+                
+                applyCrop() {
+                    if (!this.cropper) return;
+                    
+                    // Get crop coordinates
+                    const cropData = this.cropper.getData(true);  // true = rounded integers
+                    
+                    // Save crop coordinates + transformations
+                    this.currentEdits.crop = {
+                        x: Math.round(cropData.x),
+                        y: Math.round(cropData.y),
+                        width: Math.round(cropData.width),
+                        height: Math.round(cropData.height),
+                        rotate: this.cropRotation,
+                        flipH: this.cropFlipH,
+                        flipV: this.cropFlipV
+                    };
+                    
+                    this.editsChanged = true;
+                    
+                    console.log('✂️ Crop applied:', this.currentEdits.crop);
+                    
+                    // Regenerate preview with crop
+                    this.generateServerPreview();
+                    this.loadHistogram(this.lightboxPhoto.path);
                 },
                 
                 async loadHistogram(photoPath) {
@@ -3272,6 +3512,9 @@ const { createApp } = Vue;
             },
             
             async mounted() {
+                // Load export settings from localStorage
+                this.loadExportSettings();
+                
                 // Load workspace and project data (no media yet - requires project selection)
                 await Promise.all([
                     this.loadWorkspaces(),
@@ -3280,7 +3523,7 @@ const { createApp } = Vue;
                     this.loadMediaFolders(),      // Load media manager folders
                     this.loadWorkspaceFolders()    // Load workspace folders
                 ]);
-                
+
                 // Note: Photos/media are loaded when a project is activated
                 // Bursts are loaded automatically after media is loaded
                 

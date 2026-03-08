@@ -456,7 +456,40 @@ def invalidate_scan_cache():
     with _scan_cache['lock']:
         _scan_cache['data'] = None
         _scan_cache['timestamp'] = None
+        _scan_cache['project_cache'] = {}  # Also invalidate project cache!
         logger.info("♻️ Cache invalidated")
+
+
+def update_database_metadata(photo_path: Path, field: str, value):
+    """
+    Update metadata in SQLite database immediately (for persistence).
+    Critical for PROJECT mode where data comes from database!
+    """
+    try:
+        db_path = Path(__file__).parent / 'db' / 'workspace_media.db'
+        if not db_path.exists():
+            logger.warning(f"Database not found, skipping DB update for {field}")
+            return
+        
+        import sqlite3
+        conn = sqlite3.connect(str(db_path))
+        cursor = conn.cursor()
+        
+        # Update the specific field
+        photo_path_str = str(photo_path)
+        cursor.execute(f"UPDATE media SET {field} = ? WHERE path = ?", (value, photo_path_str))
+        conn.commit()
+        
+        rows_affected = cursor.rowcount
+        conn.close()
+        
+        if rows_affected > 0:
+            logger.info(f"✅ Database updated: {photo_path.name} {field}={value}")
+        else:
+            logger.warning(f"⚠️ No database row found for {photo_path.name}")
+    
+    except Exception as e:
+        logger.error(f"Error updating database for {photo_path}: {e}")
 
 
 @app.post('/api/photos/<path:photo_id>/rate')
@@ -487,6 +520,9 @@ def rate_photo(photo_id):
             psm = ProjectSidecarManager(project_dir)
             psm.set_rating(photo_path, rating)
             logger.info(f"Set project rating for {photo_path.name} in project {project_id}: {rating}")
+            
+            # Also update SQLite database (for persistence in PROJECT mode)
+            update_database_metadata(photo_path, 'rating', rating)
         else:
             # Save to GLOBAL sidecar (legacy/fallback)
             set_metadata(photo_path, {
@@ -495,9 +531,11 @@ def rate_photo(photo_id):
             })
             logger.info(f"Set global rating for {photo_path.name}: {rating}")
         
-        # Invalidate cache (metadata changed)
-        # Note: We don't invalidate for every rating change to keep cache benefits
-        # The cache will auto-expire after 60 seconds anyway
+        # Update SQLite database immediately (CRITICAL for PROJECT mode!)
+        update_database_metadata(photo_path, 'rating', rating)
+        
+        # Invalidate cache (metadata changed) - IMPORTANT for persistence!
+        invalidate_scan_cache()
         
         return jsonify({
             'success': True,
@@ -538,10 +576,19 @@ def set_photo_color(photo_id):
             psm = ProjectSidecarManager(project_dir)
             psm.set_color(photo_path, color)
             logger.info(f"Set project color for {photo_path.name} in project {project_id}: {color}")
+            
+            # Also update SQLite database (for persistence in PROJECT mode)
+            update_database_metadata(photo_path, 'color', color)
         else:
             # Save to GLOBAL sidecar
             set_color_label(photo_path, color)
             logger.info(f"Set global color for {photo_path.name}: {color}")
+        
+        # Update SQLite database immediately (CRITICAL for PROJECT mode!)
+        update_database_metadata(photo_path, 'color', color)
+        
+        # Invalidate cache (metadata changed) - IMPORTANT for persistence!
+        invalidate_scan_cache()
         
         return jsonify({
             'success': True,
@@ -742,10 +789,17 @@ def export_gallery_api():
         title = data.get('title', 'Photo Gallery')
         output_name = data.get('output_name', 'gallery')
         template = data.get('template', 'photoswipe')
+        profile = data.get('profile', 'web')  # ðŸŽ¯ Export profile
+        generate_webp = data.get('generate_webp', False)  # ðŸš€ WebP generation
+        quick_update = data.get('quick_update', False)  # âš¡ Quick update (HTML only)
         music_files = data.get('music_files', [])
+        music_autoplay = data.get('music_autoplay', False)  # ðŸŽµ Autoplay toggle (default: OFF)
+        music_ducking_volume = data.get('music_ducking_volume', 30)  # ðŸŽšï¸ Ducking volume (0-100%)
         slideshow_enabled = data.get('slideshow_enabled', True)
         slideshow_duration = data.get('slideshow_duration', 5)
         smart_tv_mode = data.get('smart_tv_mode', False)
+        splash_title = data.get('splash_title')  # ðŸŽ¬ Custom splash title (optional)
+        splash_subtitle = data.get('splash_subtitle')  # ðŸŽ¬ Custom splash subtitle (optional)
         
         if not photo_ids:
             return jsonify({'error': 'No photos selected'}), 400
@@ -767,13 +821,18 @@ def export_gallery_api():
                     output_dir=output_dir,
                     title=title,
                     template=template,
-                    max_image_size=2000,
-                    thumbnail_size=400,
+                    profile=profile,  # ðŸŽ¯ Use profile instead of max_image_size
+                    generate_webp=generate_webp,  # ðŸš€ WebP generation
+                    quick_update=quick_update,  # âš¡ Quick update flag
                     include_metadata=True,
                     music_files=music_paths,
+                    music_autoplay=music_autoplay,  # ðŸŽµ Pass autoplay flag
+                    music_ducking_volume=music_ducking_volume,  # ðŸŽšï¸ Ducking volume
                     slideshow_enabled=slideshow_enabled,
                     slideshow_duration=slideshow_duration,
-                    smart_tv_mode=smart_tv_mode
+                    smart_tv_mode=smart_tv_mode,
+                    splash_title=splash_title,      # ðŸŽ¬ Custom splash title
+                    splash_subtitle=splash_subtitle  # ðŸŽ¬ Custom splash subtitle
                 )
             except Exception as e:
                 result['error'] = str(e)

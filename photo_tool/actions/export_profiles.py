@@ -14,7 +14,7 @@ from ..util.logging import get_logger
 logger = get_logger("export_profiles")
 
 
-ExportTarget = Literal["smart_tv", "web", "web_optimized", "archive", "custom"]
+ExportTarget = Literal["smart_tv", "smart_tv_fullhd", "web", "web_medium", "web_compact", "web_mobile", "web_optimized", "archive", "custom"]
 
 
 @dataclass
@@ -61,16 +61,55 @@ EXPORT_PROFILES = {
     ),
     
     "web": ImageProfile(
-        name="Web Gallery",
+        name="Web Gallery (Large)",
         max_width=1920,
         max_height=1280,
         jpeg_quality=85,
-        webp_quality=None,
+        webp_quality=85,  # WebP support enabled
         progressive=True,
         optimize=True,
         thumbnail_size=400,
         thumbnail_quality=80,
         description="Standard web gallery (good balance)"
+    ),
+    
+    "web_medium": ImageProfile(
+        name="Web Gallery (Medium)",
+        max_width=1600,
+        max_height=1067,
+        jpeg_quality=83,
+        webp_quality=83,  # WebP support enabled
+        progressive=True,
+        optimize=True,
+        thumbnail_size=400,
+        thumbnail_quality=78,
+        description="Medium web gallery (good for desktop, ~400 KB/photo)"
+    ),
+    
+    "web_compact": ImageProfile(
+        name="Web Gallery (Compact)",
+        max_width=1280,
+        max_height=853,
+        jpeg_quality=80,
+        webp_quality=80,  # WebP support enabled
+        progressive=True,
+        optimize=True,
+        thumbnail_size=350,
+        thumbnail_quality=75,
+        description="Compact web gallery (balanced size/quality, ~250 KB/photo)"
+    ),
+    
+    "web_mobile": ImageProfile(
+        name="Web Gallery (Mobile-Friendly)",
+        max_width=1024,
+        max_height=683,
+        jpeg_quality=78,
+        webp_quality=78,  # WebP support enabled
+        progressive=True,
+        optimize=True,
+        thumbnail_size=300,
+        thumbnail_quality=72,
+        description="Mobile-friendly gallery (fast loading, ~150 KB/photo)"
     ),
     
     "web_optimized": ImageProfile(

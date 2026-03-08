@@ -16,8 +16,15 @@
     <!-- External CSS -->
     <link rel="stylesheet" href="/static/styles.css">
     
-    <!-- Vue 3 Production Build -->
-    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <!-- Vue 3 Production Build (with fallback CDNs) -->
+    <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js" 
+            onerror="this.onerror=null; this.src='https://unpkg.com/vue@3/dist/vue.global.prod.js'"></script>
+    
+    <!-- Cropper.js for image cropping (with fallback) -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cropperjs@1.6.1/dist/cropper.min.css" 
+          onerror="this.onerror=null; this.href='https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css'">
+    <script src="https://cdn.jsdelivr.net/npm/cropperjs@1.6.1/dist/cropper.min.js" 
+            onerror="this.onerror=null; this.src='https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js'"></script>
     
     <!-- Image Canvas Processor for Live Preview -->
     <script src="/static/image_canvas.js"></script>
@@ -1228,11 +1235,20 @@
             
             <div class="lightbox-content">
                 <div class="lightbox-main">
-                <!-- Image with server-side preview -->
-                <img :src="previewUrl || lightboxPhoto.full_image || lightboxPhoto.thumbnail" 
+                <!-- Image with server-side preview (Normal Mode) -->
+                <img v-if="!cropMode"
+                     :src="previewUrl || lightboxPhoto.full_image || lightboxPhoto.thumbnail" 
                      :alt="lightboxPhoto.name" 
                      class="lightbox-image"
                      :style="{ opacity: previewLoading ? 0.5 : 1, transition: 'opacity 0.2s' }">
+                
+                <!-- Crop Mode Container -->
+                <div v-if="cropMode" style="max-width: 95%; max-height: 85vh; margin: auto;">
+                    <img id="crop-image"
+                         :src="lightboxPhoto.full_image || lightboxPhoto.thumbnail"
+                         :alt="lightboxPhoto.name"
+                         style="max-width: 100%; display: block;">
+                </div>
                 
                 <!-- Loading overlay during preview generation -->
                 <div v-if="previewLoading" style="position: absolute; top: 20px; right: 20px; background: rgba(139, 92, 246, 0.9); color: white; padding: 8px 16px; border-radius: 20px; font-size: 0.85rem; font-weight: 600; box-shadow: 0 4px 12px rgba(0,0,0,0.5);">
@@ -1319,19 +1335,68 @@
                     
                     <!-- 🎨 EDIT PANEL (Phase 3b: Image Editing) -->
                     <div v-if="showEditPanel" style="margin-top: 30px; padding-top: 20px; border-top: 1px solid rgba(255,255,255,0.1);">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 8px;">
                             <h3 style="margin: 0; font-size: 1rem; color: #a78bfa;">🎨 Image Edits</h3>
-                            <div style="display: flex; gap: 8px;">
+                            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                                <button @click="toggleCropMode" 
+                                        :style="{padding: '4px 12px', fontSize: '0.75rem', borderRadius: '4px', border: '1px solid ' + (cropMode ? 'rgba(16, 185, 129, 0.5)' : 'rgba(99, 102, 241, 0.5)'), background: (cropMode ? 'rgba(16, 185, 129, 0.2)' : 'rgba(99, 102, 241, 0.2)'), color: (cropMode ? '#10b981' : '#6366f1'), cursor: 'pointer'}">
+                                    {{ cropMode ? '✅ Apply' : '✂️ Crop' }}
+                                </button>
+                                <button @click="clearCrop" 
+                                        v-show="!cropMode && currentEdits.crop"
+                                        style="padding: 4px 12px; font-size: 0.75rem; border-radius: 4px; border: 1px solid rgba(245, 158, 11, 0.5); background: rgba(245, 158, 11, 0.2); color: #f59e0b; cursor: pointer;">
+                                    ✂️❌ Clear Crop
+                                </button>
                                 <button @click="saveCurrentEdits" 
+                                        v-show="!cropMode"
                                         :disabled="!editsChanged || editsSaving"
                                         style="padding: 4px 12px; font-size: 0.75rem; border-radius: 4px; border: 1px solid rgba(139, 92, 246, 0.5); background: rgba(139, 92, 246, 0.2); color: #a78bfa; cursor: pointer;"
                                         :style="{ opacity: (!editsChanged || editsSaving) ? 0.5 : 1 }">
                                     {{ editsSaving ? '💾 Saving...' : '💾 Save' }}
                                 </button>
                                 <button @click="resetCurrentEdits"
+                                        v-show="!cropMode"
                                         style="padding: 4px 12px; font-size: 0.75rem; border-radius: 4px; border: 1px solid rgba(239, 68, 68, 0.5); background: rgba(239, 68, 68, 0.2); color: #ef4444; cursor: pointer;">
-                                    🔄 Reset
+                                    🔄 Reset All
                                 </button>
+                            </div>
+                        </div>
+                        
+                        <!-- Crop Controls (shown when in crop mode) -->
+                        <div v-if="cropMode" style="margin-bottom: 20px; padding: 15px; background: rgba(99, 102, 241, 0.1); border-radius: 8px; border: 1px solid rgba(99, 102, 241, 0.3);">
+                            <div style="margin-bottom: 12px;">
+                                <label style="color: #888; font-size: 0.85rem; display: block; margin-bottom: 6px;">📐 Aspect Ratio</label>
+                                <select v-model="cropAspectRatio" @change="setCropAspectRatio" 
+                                        style="width: 100%; padding: 6px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color: #fff; border-radius: 4px; font-size: 0.85rem; cursor: pointer;">
+                                    <option :value="NaN">Free</option>
+                                    <option :value="16/9">16:9 (Landscape)</option>
+                                    <option :value="9/16">9:16 (Portrait)</option>
+                                    <option :value="4/3">4:3</option>
+                                    <option :value="3/4">3:4</option>
+                                    <option :value="1">1:1 (Square)</option>
+                                    <option :value="21/9">21:9 (Ultrawide)</option>
+                                </select>
+                            </div>
+                            
+                            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                                <button @click="rotateCrop(90)" 
+                                        style="flex: 1; min-width: 80px; padding: 6px 12px; font-size: 0.75rem; border-radius: 4px; border: 1px solid rgba(99, 102, 241, 0.5); background: rgba(99, 102, 241, 0.2); color: #6366f1; cursor: pointer;">
+                                    🔄 Rotate 90°
+                                </button>
+                                <button @click="flipCrop('horizontal')" 
+                                        style="flex: 1; min-width: 80px; padding: 6px 12px; font-size: 0.75rem; border-radius: 4px; border: 1px solid rgba(99, 102, 241, 0.5); background: rgba(99, 102, 241, 0.2); color: #6366f1; cursor: pointer;">
+                                    ↔️ Flip H
+                                </button>
+                                <button @click="flipCrop('vertical')" 
+                                        style="flex: 1; min-width: 80px; padding: 6px 12px; font-size: 0.75rem; border-radius: 4px; border: 1px solid rgba(99, 102, 241, 0.5); background: rgba(99, 102, 241, 0.2); color: #6366f1; cursor: pointer;">
+                                    ↕️ Flip V
+                                </button>
+                            </div>
+                            
+                            <div v-if="cropRotation !== 0 || cropFlipH || cropFlipV" style="margin-top: 8px; font-size: 0.75rem; color: #a78bfa;">
+                                <span v-if="cropRotation !== 0">🔄 {{ cropRotation }}°</span>
+                                <span v-if="cropFlipH"> ↔️ Flipped H</span>
+                                <span v-if="cropFlipV"> ↕️ Flipped V</span>
                             </div>
                         </div>
                         
@@ -1869,7 +1934,10 @@
                                 style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 10px; border-radius: 8px; font-size: 0.95rem; outline: none; cursor: pointer;">
                             <option value="smart_tv" style="background: #1a1a1a;">📺 Smart TV (4K) - Samsung/LG</option>
                             <option value="smart_tv_fullhd" style="background: #1a1a1a;">📺 Smart TV (Full HD)</option>
-                            <option value="web" style="background: #1a1a1a;">🌐 Web Gallery - 1920×1280, Good Balance</option>
+                            <option value="web" style="background: #1a1a1a;">🌐 Web Gallery - 1920×1280 (Large)</option>
+                            <option value="web_medium" style="background: #1a1a1a;">🌐 Web Gallery - 1600×1067 (Medium)</option>
+                            <option value="web_compact" style="background: #1a1a1a;">🌐 Web Gallery - 1280×853 (Compact)</option>
+                            <option value="web_mobile" style="background: #1a1a1a;">📱 Web Gallery - 1024×683 (Mobile-Friendly)</option>
                             <option value="web_optimized" style="background: #1a1a1a;">🚀 Web Optimized - Fast loading</option>
                             <option value="archive" style="background: #1a1a1a;">💎 Archive - Max Quality</option>
                         </select>
@@ -1883,7 +1951,16 @@
                                 📺 Full HD for Smart TV (1920×1080, Q90)
                             </span>
                             <span v-else-if="exportProfile === 'web'">
-                                🌐 Standard web gallery. Good balance quality/size (650 KB/photo)
+                                🌐 Large web gallery (1920×1280, ~650 KB/photo) - Best quality
+                            </span>
+                            <span v-else-if="exportProfile === 'web_medium'">
+                                🌐 Medium web gallery (1600×1067, ~400 KB/photo) - Good for desktop
+                            </span>
+                            <span v-else-if="exportProfile === 'web_compact'">
+                                🌐 Compact web gallery (1280×853, ~250 KB/photo) - Balanced size/quality
+                            </span>
+                            <span v-else-if="exportProfile === 'web_mobile'">
+                                📱 Mobile-friendly gallery (1024×683, ~150 KB/photo) - Fast loading
                             </span>
                             <span v-else-if="exportProfile === 'web_optimized'">
                                 🚀 Highly optimized for web. Fast loading (450 KB/photo)
@@ -1895,15 +1972,30 @@
                     </div>
                     
                     <!-- WebP Option (for web profiles) -->
-                    <div v-if="exportProfile === 'web' || exportProfile === 'web_optimized'" style="margin-bottom: 15px;">
+                    <div v-if="exportProfile === 'web' || exportProfile === 'web_medium' || exportProfile === 'web_compact' || exportProfile === 'web_mobile' || exportProfile === 'web_optimized'" style="margin-bottom: 15px;">
                         <label style="display: flex; align-items: center; cursor: pointer; color: #aaa; font-size: 0.85rem;">
-                            <input type="checkbox" 
-                                   v-model="exportWebP" 
+                            <input type="checkbox"
+                                   v-model="exportWebP"
                                    style="margin-right: 8px; width: 16px; height: 16px; cursor: pointer;">
                             <span>
                                 🚀 Generate WebP (50% smaller files)
                             </span>
                         </label>
+                    </div>
+                    
+                    <!-- ⚡ Quick Update Option -->
+                    <div style="background: rgba(251, 191, 36, 0.1); padding: 12px; border-radius: 8px; border: 1px solid rgba(251, 191, 36, 0.3); margin-bottom: 15px;">
+                        <label style="display: flex; align-items: center; cursor: pointer; color: #fbbf24; font-size: 0.85rem; font-weight: 500;">
+                            <input type="checkbox"
+                                   v-model="exportQuickUpdate"
+                                   style="margin-right: 8px; width: 16px; height: 16px; cursor: pointer; accent-color: #fbbf24;">
+                            <span>
+                                ⚡ Quick Update (HTML only - skip image processing)
+                            </span>
+                        </label>
+                        <div v-if="exportQuickUpdate" style="margin-top: 8px; font-size: 0.75rem; color: #fbbf24; line-height: 1.4;">
+                            ⚠️ Only regenerates index.html using existing images. Perfect for testing HTML/CSS/JavaScript changes!
+                        </div>
                     </div>
                     
                     <!-- 🆕 Slideshow Settings -->
@@ -1934,6 +2026,37 @@
                                        style="width: 16px; height: 16px; cursor: pointer; accent-color: #8a2be2;">
                                 <span style="font-size: 0.8rem;">📺 Smart TV Mode (larger buttons)</span>
                             </label>
+                            
+                            <!-- 🎬 Splash Screen Customization -->
+                            <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(138, 43, 226, 0.3);">
+                                <div style="font-weight: 600; margin-bottom: 10px; color: #b794f6; font-size: 0.85rem;">
+                                    🎬 Splash Screen Text
+                                </div>
+                                
+                                <div style="margin-bottom: 10px;">
+                                    <label style="display: block; margin-bottom: 4px; color: #aaa; font-size: 0.75rem;">
+                                        Title (e.g., "Pasang weds Lhamu")
+                                    </label>
+                                    <input v-model="exportSplashTitle"
+                                           type="text"
+                                           placeholder="Leave empty for gallery name"
+                                           style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid rgba(138, 43, 226, 0.3); color: #fff; padding: 8px; border-radius: 6px; font-size: 0.85rem;">
+                                </div>
+                                
+                                <div>
+                                    <label style="display: block; margin-bottom: 4px; color: #aaa; font-size: 0.75rem;">
+                                        Subtitle (e.g., "December 2025")
+                                    </label>
+                                    <input v-model="exportSplashSubtitle"
+                                           type="text"
+                                           placeholder="Leave empty for photo count"
+                                           style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid rgba(138, 43, 226, 0.3); color: #fff; padding: 8px; border-radius: 6px; font-size: 0.85rem;">
+                                </div>
+                                
+                                <div style="font-size: 0.7rem; color: #888; margin-top: 8px; line-height: 1.3;">
+                                    💡 Tip: Place splash.jpg in gallery root for custom welcome photo
+                                </div>
+                            </div>
                         </div>
                     </div>
                     
@@ -1952,9 +2075,35 @@
                                   rows="2"
                                   style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.2); color: #fff; padding: 8px; border-radius: 6px; font-size: 0.85rem; font-family: monospace; resize: vertical;">
                         </textarea>
-                        
+
                         <div style="font-size: 0.7rem; color: #666; margin-top: 6px;">
                             💡 Tip: Use absolute paths like C:/Music/song.mp3
+                        </div>
+
+                        <label style="display: flex; align-items: center; gap: 8px; margin-top: 12px; cursor: pointer; font-size: 0.85rem; color: #ccc;">
+                            <input type="checkbox" v-model="exportMusicAutoplay" style="cursor: pointer; width: 16px; height: 16px;">
+                            <span>🎵 Autoplay music on load</span>
+                        </label>
+                        
+                        <!-- 🎚️ Music Ducking Slider -->
+                        <div v-if="exportMusicFiles.trim()" style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(59, 130, 246, 0.3);">
+                            <label style="display: block; margin-bottom: 8px; color: #aaa; font-size: 0.8rem;">
+                                🎚️ Music Volume During Pause
+                            </label>
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <input type="range" 
+                                       v-model.number="exportMusicDuckingVolume" 
+                                       min="0" 
+                                       max="100" 
+                                       step="5"
+                                       style="flex: 1; accent-color: #3b82f6; cursor: pointer;">
+                                <span style="min-width: 50px; font-weight: 600; font-size: 0.9rem; color: #3b82f6;">
+                                    {{ exportMusicDuckingVolume }}%
+                                </span>
+                            </div>
+                            <div style="font-size: 0.7rem; color: #888; margin-top: 6px; line-height: 1.3;">
+                                💡 0% = Silent, 30% = Subtle background, 100% = Full volume
+                            </div>
                         </div>
                     </div>
                     

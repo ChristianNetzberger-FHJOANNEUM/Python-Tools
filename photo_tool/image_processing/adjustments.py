@@ -208,7 +208,37 @@ def apply_all_edits_fast(
     """
     FAST version: Apply all edits in ONE numpy pass (10x faster!)
     Combines all operations to avoid multiple array conversions.
+    
+    Note: Crop/Rotate/Flip are applied FIRST (before other edits) to reduce processing size!
     """
+    # 0. CROP FIRST (reduce image size for faster processing!)
+    if edits.get('crop'):
+        crop = edits['crop']
+        
+        # Apply rotation first (before crop)
+        if crop.get('rotate', 0) != 0:
+            rotation = crop['rotate']
+            if rotation == 90:
+                image = image.transpose(Image.ROTATE_270)  # PIL rotates counter-clockwise
+            elif rotation == 180:
+                image = image.transpose(Image.ROTATE_180)
+            elif rotation == 270:
+                image = image.transpose(Image.ROTATE_90)
+        
+        # Apply flip
+        if crop.get('flipH', False):
+            image = image.transpose(Image.FLIP_LEFT_RIGHT)
+        if crop.get('flipV', False):
+            image = image.transpose(Image.FLIP_TOP_BOTTOM)
+        
+        # Apply crop
+        image = image.crop((
+            crop['x'],
+            crop['y'],
+            crop['x'] + crop['width'],
+            crop['y'] + crop['height']
+        ))
+    
     # Convert to numpy ONCE
     img_array = np.array(image).astype(np.float32)
     

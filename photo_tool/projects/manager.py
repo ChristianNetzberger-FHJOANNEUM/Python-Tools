@@ -31,6 +31,11 @@ class ExportSettings:
     smart_tv_mode: bool = False
     template: str = "photoswipe"
     music_files: Optional[List[str]] = None
+    music_autoplay: bool = False     # 🎵 Autoplay music on load
+    music_ducking_volume: int = 30   # 🎚️ Music volume during pause (0-100%)
+    quick_update: bool = False       # ⚡ Quick update (HTML only)
+    splash_title: Optional[str] = None      # 🎬 Custom splash screen title
+    splash_subtitle: Optional[str] = None   # 🎬 Custom splash screen subtitle
 
 
 @dataclass
