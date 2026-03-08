@@ -35,10 +35,15 @@ def export_gallery(
     profile: str = "web",
     include_metadata: bool = True,
     generate_webp: bool = False,
+    quick_update: bool = False,  # NEW: Skip image processing, only regenerate HTML
     music_files: Optional[List[str]] = None,
+    music_autoplay: bool = False,  # NEW: Auto-start music on load
+    music_ducking_volume: int = 30,  # NEW: Music volume during pause (0-100%)
     slideshow_enabled: bool = False,
     slideshow_duration: int = 5,
     smart_tv_mode: bool = False,
+    splash_title: Optional[str] = None,      # 🎬 Custom splash screen title
+    splash_subtitle: Optional[str] = None,   # 🎬 Custom splash screen subtitle
     apply_edits: bool = True,  # NEW: Apply non-destructive edits during export
     # Legacy parameters (deprecated, use profile instead)
     max_image_size: Optional[int] = None,
@@ -56,6 +61,7 @@ def export_gallery(
         include_metadata: Include ratings, colors, keywords
         generate_webp: Generate WebP versions in addition to JPEG
         music_files: Optional list of music file paths for slideshow
+        music_autoplay: Auto-start music on page load (default: False)
         slideshow_enabled: Enable slideshow mode
         slideshow_duration: Duration per photo in seconds (2-15)
         smart_tv_mode: Enable large buttons for Smart TV
@@ -68,7 +74,10 @@ def export_gallery(
     Profiles:
         - smart_tv: 4K quality for Samsung/LG TVs (3840×2160, Q92)
         - smart_tv_fullhd: Full HD for TVs (1920×1080, Q90)
-        - web: Standard web gallery (1920×1280, Q85)
+        - web: Standard web gallery (1920×1280, Q85, ~650 KB/photo)
+        - web_medium: Medium web gallery (1600×1067, Q83, ~400 KB/photo)
+        - web_compact: Compact web gallery (1280×853, Q80, ~250 KB/photo)
+        - web_mobile: Mobile-friendly gallery (1024×683, Q78, ~150 KB/photo)
         - web_optimized: Highly optimized (1600×1200, Q80, WebP)
         - archive: High quality archive (4000×4000, Q95)
     """
@@ -105,79 +114,62 @@ def export_gallery(
     
     images_dir = gallery_dir / "images"
     thumbs_dir = gallery_dir / "thumbnails"
+    music_dir = gallery_dir / "music"
     images_dir.mkdir(exist_ok=True)
     thumbs_dir.mkdir(exist_ok=True)
     
-    # Process photos
+    # Copy music files to gallery directory
+    music_file_list = []
+    if music_files:
+        music_dir.mkdir(exist_ok=True)
+        logger.info(f"Copying {len(music_files)} music files...")
+        for i, music_path in enumerate(music_files):
+            if music_path.exists():
+                # Copy with numbered filename to avoid conflicts
+                ext = music_path.suffix
+                music_filename = f"track{i+1:02d}{ext}"
+                dest_path = music_dir / music_filename
+                shutil.copy2(music_path, dest_path)
+                # Store relative path for HTML
+                music_file_list.append(f"music/{music_filename}")
+                logger.info(f"  ✓ Copied {music_path.name} → {music_filename}")
+            else:
+                logger.warning(f"  ⚠️ Music file not found: {music_path}")
+    
+    # Initialize variables (used in both quick and normal mode)
     photo_data = []
-    
-    _export_progress['step'] = 'processing'
-    
-    # Track total file sizes
     total_original_size = 0
     total_jpeg_size = 0
     total_webp_size = 0
     
-    for i, photo_path in enumerate(photo_paths):
-        _export_progress['current'] = i + 1
-        _export_progress['message'] = f'Processing {photo_path.name}...'
-        try:
-            # Generate filenames
-            img_filename = f"{i:04d}.jpg"
-            thumb_filename = f"{i:04d}.jpg"
+    # ⚡ QUICK UPDATE MODE: Skip image processing, reuse existing images
+    if quick_update:
+        logger.info("⚡ QUICK UPDATE MODE: Reusing existing images, regenerating HTML only")
+        
+        # Check if images directory exists and has images
+        if not images_dir.exists() or not list(images_dir.glob("*.jpg")):
+            logger.error("Quick update failed: No existing images found!")
+            logger.error("Run a full export first before using quick update.")
+            raise ValueError("Quick update requires existing images. Run full export first.")
+        
+        existing_images = sorted(images_dir.glob("*.jpg"))
+        
+        logger.info(f"Found {len(existing_images)} existing images")
+        
+        for i, img_path in enumerate(existing_images):
+            if i >= len(photo_paths):
+                break  # Don't exceed the number of photos selected
             
-            img_path = images_dir / img_filename
-            thumb_path = thumbs_dir / thumb_filename
+            photo_path = photo_paths[i]
+            img_filename = img_path.name
+            thumb_filename = img_filename
             
-            # Apply edits if enabled and edits exist
-            source_for_export = photo_path
-            temp_edited_path = None
-            
-            if apply_edits:
-                try:
-                    from .edits import get_edits, has_edits
-                    from ..image_processing import apply_all_edits as apply_image_edits
-                    
-                    if has_edits(photo_path):
-                        edits = get_edits(photo_path)
-                        
-                        # Apply edits to temporary file
-                        temp_edited_path = output_dir / f"temp_edited_{i:04d}.jpg"
-                        edited_img = apply_image_edits(photo_path, edits, output_format='pil')
-                        edited_img.save(temp_edited_path, quality=95)
-                        
-                        source_for_export = temp_edited_path
-                        logger.info(f"  ✨ Applied edits to {photo_path.name}")
-                except ImportError:
-                    logger.warning("Image editing module not available, exporting originals")
-                except Exception as e:
-                    logger.warning(f"Error applying edits to {photo_path.name}: {e}")
-            
-            # Optimize main image using profile
-            img_result = optimize_image(
-                source_path=source_for_export,
-                output_path=img_path,
-                profile=export_profile,
-                generate_webp=generate_webp
-            )
-            
-            # Clean up temp file if created
-            if temp_edited_path and temp_edited_path.exists():
-                temp_edited_path.unlink()
-            
-            # Generate optimized thumbnail (from already edited source if applicable)
-            thumb_result = generate_optimized_thumbnail(
-                source_path=source_for_export if apply_edits else photo_path,
-                output_path=thumb_path,
-                profile=export_profile,
-                generate_webp=generate_webp
-            )
-            
-            # Update size stats
-            total_original_size += img_result['original_size']
-            total_jpeg_size += img_result['jpeg_size']
-            if img_result['webp_size']:
-                total_webp_size += img_result['webp_size']
+            # Get image dimensions from existing file
+            try:
+                with Image.open(img_path) as img:
+                    width, height = img.size
+            except:
+                width, height = 1920, 1280  # Fallback dimensions
             
             # Get metadata if requested
             metadata = {}
@@ -188,38 +180,140 @@ def export_gallery(
             photo_entry = {
                 'src': f"images/{img_filename}",
                 'thumbnail': f"thumbnails/{thumb_filename}",
-                'width': img_result['width'],
-                'height': img_result['height'],
+                'width': width,
+                'height': height,
                 'title': photo_path.name,
                 'rating': metadata.get('rating', 0),
                 'color': metadata.get('color'),
                 'keywords': metadata.get('keywords', [])
             }
             
-            # Add WebP sources if generated
-            if img_result['webp_path']:
-                photo_entry['src_webp'] = f"images/{i:04d}.webp"
-            if thumb_result['webp_path']:
-                photo_entry['thumbnail_webp'] = f"thumbnails/{i:04d}.webp"
+            # Check for WebP versions
+            webp_img = images_dir / img_path.stem
+            webp_img = webp_img.with_suffix('.webp')
+            if webp_img.exists():
+                photo_entry['src_webp'] = f"images/{webp_img.name}"
+            
+            webp_thumb = thumbs_dir / img_path.stem
+            webp_thumb = webp_thumb.with_suffix('.webp')
+            if webp_thumb.exists():
+                photo_entry['thumbnail_webp'] = f"thumbnails/{webp_thumb.name}"
             
             photo_data.append(photo_entry)
-            
-            logger.debug(f"Processed {photo_path.name} - "
-                        f"JPEG: {img_result['jpeg_size']//1024}KB"
-                        + (f", WebP: {img_result['webp_size']//1024}KB" if img_result['webp_size'] else ""))
-            
-        except Exception as e:
-            logger.error(f"Failed to process {photo_path}: {e}")
-            continue
+        
+        logger.info(f"⚡ Quick update: Reusing {len(photo_data)} existing images")
+        
+    else:
+        # NORMAL MODE: Process all photos        
+        _export_progress['step'] = 'processing'
+    
+        for i, photo_path in enumerate(photo_paths):
+            _export_progress['current'] = i + 1
+            _export_progress['message'] = f'Processing {photo_path.name}...'
+            try:
+                # Generate filenames
+                img_filename = f"{i:04d}.jpg"
+                thumb_filename = f"{i:04d}.jpg"
+                
+                img_path = images_dir / img_filename
+                thumb_path = thumbs_dir / thumb_filename
+                
+                # Apply edits if enabled and edits exist
+                source_for_export = photo_path
+                temp_edited_path = None
+                
+                if apply_edits:
+                    try:
+                        from .edits import get_edits, has_edits
+                        from ..image_processing import apply_all_edits as apply_image_edits
+                        
+                        if has_edits(photo_path):
+                            edits = get_edits(photo_path)
+                            
+                            # Apply edits to temporary file
+                            temp_edited_path = output_dir / f"temp_edited_{i:04d}.jpg"
+                            edited_img = apply_image_edits(photo_path, edits, output_format='pil')
+                            edited_img.save(temp_edited_path, quality=95)
+                            
+                            source_for_export = temp_edited_path
+                            logger.info(f"  ✨ Applied edits to {photo_path.name}")
+                    except ImportError:
+                        logger.warning("Image editing module not available, exporting originals")
+                    except Exception as e:
+                        logger.warning(f"Error applying edits to {photo_path.name}: {e}")
+                
+                # Optimize main image using profile
+                img_result = optimize_image(
+                    source_path=source_for_export,
+                    output_path=img_path,
+                    profile=export_profile,
+                    generate_webp=generate_webp
+                )
+                
+                # Generate optimized thumbnail (from already edited source if applicable)
+                # MUST be done BEFORE cleaning up temp file!
+                thumb_result = generate_optimized_thumbnail(
+                    source_path=source_for_export,  # Use same source as main image
+                    output_path=thumb_path,
+                    profile=export_profile,
+                    generate_webp=generate_webp
+                )
+                
+                # Clean up temp file if created (AFTER both main image and thumbnail are done!)
+                if temp_edited_path and temp_edited_path.exists():
+                    temp_edited_path.unlink()
+                
+                # Update size stats
+                total_original_size += img_result['original_size']
+                total_jpeg_size += img_result['jpeg_size']
+                if img_result['webp_size']:
+                    total_webp_size += img_result['webp_size']
+                
+                # Get metadata if requested
+                metadata = {}
+                if include_metadata:
+                    metadata = get_metadata(photo_path)
+                
+                # Build photo data entry
+                photo_entry = {
+                    'src': f"images/{img_filename}",
+                    'thumbnail': f"thumbnails/{thumb_filename}",
+                    'width': img_result['width'],
+                    'height': img_result['height'],
+                    'title': photo_path.name,
+                    'rating': metadata.get('rating', 0),
+                    'color': metadata.get('color'),
+                    'keywords': metadata.get('keywords', [])
+                }
+                
+                # Add WebP sources if generated
+                if img_result['webp_path']:
+                    photo_entry['src_webp'] = f"images/{i:04d}.webp"
+                if thumb_result['webp_path']:
+                    photo_entry['thumbnail_webp'] = f"thumbnails/{i:04d}.webp"
+                
+                photo_data.append(photo_entry)
+                
+                logger.debug(f"Processed {photo_path.name} - "
+                            f"JPEG: {img_result['jpeg_size']//1024}KB"
+                            + (f", WebP: {img_result['webp_size']//1024}KB" if img_result['webp_size'] else ""))
+                
+            except Exception as e:
+                logger.error(f"Failed to process {photo_path}: {e}")
+                continue
     
     # Generate HTML
     if template == "slideshow":
         html = _generate_slideshow_html(
-            title=title, 
+            title=title,
             photo_data=photo_data,
-            music_files=music_files,
+            music_files=music_file_list,  # Use relative paths instead of absolute
+            music_autoplay=music_autoplay,
+            music_ducking_volume=music_ducking_volume,  # 🎚️ Pass ducking volume
             slideshow_duration=slideshow_duration,
-            smart_tv_mode=smart_tv_mode
+            smart_tv_mode=smart_tv_mode,
+            splash_title=splash_title,        # 🎬 Pass custom splash title
+            splash_subtitle=splash_subtitle   # 🎬 Pass custom splash subtitle
         )
     elif template == "photoswipe":
         html = _generate_photoswipe_html(title, photo_data)
@@ -248,6 +342,8 @@ def export_gallery(
     
     logger.info(f"Gallery exported successfully to {gallery_dir}")
     logger.info(f"Profile: {export_profile.name}")
+    if music_file_list:
+        logger.info(f"Music tracks: {len(music_file_list)}")
     logger.info(f"Open {index_path} in browser to view")
     
     return gallery_dir
@@ -595,11 +691,15 @@ def _generate_simple_html(title: str, photos: List[Dict[str, Any]]) -> str:
 
 
 def _generate_slideshow_html(
-    title: str, 
+    title: str,
     photo_data: List[Dict[str, Any]],
     music_files: Optional[List[str]] = None,
+    music_autoplay: bool = False,
+    music_ducking_volume: int = 30,  # 🎚️ Music volume during pause (0-100%)
     slideshow_duration: int = 5,
-    smart_tv_mode: bool = False
+    smart_tv_mode: bool = False,
+    splash_title: str = None,  # 🆕 Custom splash title
+    splash_subtitle: str = None  # 🆕 Custom splash subtitle (date)
 ) -> str:
     """Generate fullscreen slideshow template with music support (based on working GUI slideshow)"""
     
@@ -611,20 +711,30 @@ def _generate_slideshow_html(
     music_controls_html = ""
     if music_files:
         music_sources = '\n'.join([
-            f'            <source src="{Path(music).as_posix()}" type="audio/mpeg">'
+            f'            <source src="{music}" type="audio/mpeg">'
             for music in music_files
         ])
         music_html = f'''
-        <audio id="bgMusic" loop>
+        <audio id="bgMusic" loop preload="auto">
 {music_sources}
         </audio>'''
         music_controls_html = '''
-                    <button class="slideshow-btn" onclick="toggleMusic()" title="Music (M)">
+                    <button class="slideshow-btn" onclick="event.stopPropagation(); toggleMusic();" title="Music (M)">
                         <span id="musicIcon">🎵</span> Music
                     </button>'''
     
     button_padding = "16px 32px" if smart_tv_mode else "12px 24px"
     button_font = "1.2rem" if smart_tv_mode else "1rem"
+    
+    # Splash screen configuration
+    splash_bg = "splash.jpg"  # Try custom splash first
+    splash_fallback = photo_data[0]['src'] if photo_data else ''
+    
+    # Use custom titles if provided, otherwise use defaults
+    if not splash_title:
+        splash_title = title
+    if not splash_subtitle:
+        splash_subtitle = f"{len(photo_data)} photos{' • Background music' if music_files else ''}"
     
     return f'''<!DOCTYPE html>
 <html lang="en">
@@ -676,7 +786,7 @@ def _generate_slideshow_html(
         .slideshow.hide-controls .slideshow-header {{
             opacity: 0;
             transform: translateY(-100%);
-            pointer-events: none;
+            /* pointer-events: none; -- REMOVED: Allow clicks to show controls */
         }}
         
         .slideshow-title {{
@@ -734,7 +844,7 @@ def _generate_slideshow_html(
         .slideshow.hide-controls .slideshow-footer {{
             opacity: 0;
             transform: translateY(100%);
-            pointer-events: none;
+            /* pointer-events: none; -- REMOVED: Allow clicks to show controls */
         }}
         
         .slideshow-progress {{
@@ -750,6 +860,12 @@ def _generate_slideshow_html(
             background: rgba(255, 255, 255, 0.2);
             border-radius: 3px;
             overflow: hidden;
+            cursor: pointer;
+            position: relative;
+        }}
+        
+        .slideshow-progress-bar:hover {{
+            background: rgba(255, 255, 255, 0.3);
         }}
         
         .slideshow-progress-fill {{
@@ -830,10 +946,134 @@ def _generate_slideshow_html(
             height: 20px;
             cursor: pointer;
         }}
+        
+        /* 🎬 Splash Screen - 2/3 Photo + 1/3 UI Layout */
+        .splash-screen {{
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: #000;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            opacity: 1;
+            transition: opacity 0.5s ease;
+        }}
+        
+        .splash-screen.hidden {{
+            opacity: 0;
+            pointer-events: none;
+        }}
+        
+        .splash-background {{
+            position: relative;
+            flex: 2;  /* 2/3 of screen height */
+            background-size: cover;
+            background-position: center;
+            filter: brightness(0.7);
+            overflow: hidden;
+        }}
+        
+        .splash-background img {{
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }}
+        
+        .splash-content {{
+            flex: 1;  /* 1/3 of screen height */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 40px 20px;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.95) 100%);
+            gap: 30px;
+        }}
+        
+        .splash-title {{
+            font-size: 2.5rem;
+            font-weight: bold;
+            text-align: center;
+            text-shadow: 0 4px 20px rgba(0, 0, 0, 0.8);
+            line-height: 1.2;
+        }}
+        
+        .splash-subtitle {{
+            font-size: 1.4rem;
+            color: #ccc;
+            text-align: center;
+            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.8);
+            margin-top: -15px;
+        }}
+        
+        .splash-play-btn {{
+            background: linear-gradient(135deg, #8b5cf6, #ec4899);
+            border: none;
+            color: #fff;
+            width: 140px;
+            height: 140px;
+            border-radius: 50%;
+            font-size: 4rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 15px 50px rgba(139, 92, 246, 0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }}
+        
+        .splash-play-btn:hover {{
+            transform: scale(1.1);
+            box-shadow: 0 20px 70px rgba(139, 92, 246, 0.8);
+        }}
+        
+        .splash-play-btn:active {{
+            transform: scale(0.95);
+        }}
+        
+        @media (max-width: 768px) {{
+            .splash-title {{
+                font-size: 1.8rem;
+            }}
+            
+            .splash-subtitle {{
+                font-size: 1.1rem;
+            }}
+            
+            .splash-play-btn {{
+                width: 120px;
+                height: 120px;
+                font-size: 3.5rem;
+            }}
+            
+            .splash-content {{
+                padding: 30px 20px;
+                gap: 25px;
+            }}
+        }}
     </style>
 </head>
 <body>
-    <div class="slideshow" id="slideshow" onmousemove="showControlsTemporarily()" onclick="showControlsTemporarily()">
+    <!-- 🎬 Splash Screen with Custom Photo -->
+    <div class="splash-screen" id="splashScreen">
+        <div class="splash-background">
+            <img src="{splash_bg}" 
+                 onerror="this.src='{splash_fallback}'" 
+                 alt="Welcome">
+        </div>
+        <div class="splash-content">
+            <div class="splash-title">{splash_title}</div>
+            <button class="splash-play-btn" onclick="startSlideshow()" title="Start Slideshow">
+                ▶️
+            </button>
+            <div class="splash-subtitle">{splash_subtitle}</div>
+        </div>
+    </div>
+    
+    <div class="slideshow" id="slideshow" onmousemove="showControlsTemporarily()" style="display: none;">
         <div class="slideshow-header">
             <div class="slideshow-title">
                 <span>🎬</span>
@@ -843,13 +1083,13 @@ def _generate_slideshow_html(
                 </span>
             </div>
             <div style="display: flex; gap: 10px;">
-                <button class="slideshow-btn" onclick="toggleFullscreen()" id="fullscreenBtn">
+                <button class="slideshow-btn" onclick="event.stopPropagation(); toggleFullscreen();" id="fullscreenBtn">
                     ⛶ Fullscreen
                 </button>
             </div>
         </div>
         
-        <div class="slideshow-main" onclick="togglePlay()">
+        <div class="slideshow-main">
             <!-- Images will be added by JavaScript -->
         </div>
         
@@ -862,22 +1102,22 @@ def _generate_slideshow_html(
             </div>
             
             <div class="slideshow-controls">
-                <button class="slideshow-btn" onclick="prevSlide()" id="prevBtn">
+                <button class="slideshow-btn" onclick="event.stopPropagation(); prevSlide();" id="prevBtn">
                     ⏮️ Prev
                 </button>
                 
-                <button class="slideshow-btn primary" onclick="togglePlay()" id="playBtn">
+                <button class="slideshow-btn primary" onclick="event.stopPropagation(); togglePlay();" id="playBtn">
                     ⏸️ Pause
                 </button>
                 
-                <button class="slideshow-btn" onclick="nextSlide()" id="nextBtn">
+                <button class="slideshow-btn" onclick="event.stopPropagation(); nextSlide();" id="nextBtn">
                     Next ⏭️
                 </button>
                 
                 <div class="slideshow-settings">
                     <div class="slideshow-setting">
                         <span>Speed:</span>
-                        <select id="speedSelect" onchange="changeSpeed()">
+                        <select id="speedSelect" onchange="event.stopPropagation(); changeSpeed();">
                             <option value="2">2s</option>
                             <option value="3">3s</option>
                             <option value="5" selected>5s</option>
@@ -887,7 +1127,7 @@ def _generate_slideshow_html(
                     </div>
                     
                     <div class="slideshow-setting">
-                        <input type="checkbox" id="loopCheck" onchange="toggleLoop()" checked>
+                        <input type="checkbox" id="loopCheck" onchange="event.stopPropagation(); toggleLoop();" checked>
                         <label for="loopCheck">Loop</label>
                     </div>
                 </div>
@@ -909,12 +1149,17 @@ def _generate_slideshow_html(
         let slideInterval = null;
         let slideDuration = {slideshow_duration * 1000};
         
+        // 🎚️ Music ducking configuration
+        const MUSIC_DUCKING_VOLUME = {music_ducking_volume / 100.0};  // Convert 0-100% to 0.0-1.0
+        const MUSIC_FULL_VOLUME = 1.0;
+        
         const slideshow = document.getElementById('slideshow');
         const slideshowMain = document.querySelector('.slideshow-main');
         const playBtn = document.getElementById('playBtn');
         const prevBtn = document.getElementById('prevBtn');
         const nextBtn = document.getElementById('nextBtn');
         const progressBar = document.getElementById('progressBar');
+        const progressBarContainer = document.querySelector('.slideshow-progress-bar');
         const progressText = document.getElementById('progressText');
         const counter = document.getElementById('counter');
         const fullscreenBtn = document.getElementById('fullscreenBtn');
@@ -972,15 +1217,25 @@ def _generate_slideshow_html(
         function togglePlay() {{
             isPlaying = !isPlaying;
             playBtn.textContent = isPlaying ? '⏸️ Pause' : '▶️ Play';
-            
+
             if (isPlaying) {{
-                startSlideshow();
+                startAutoplay();
+                // 🎚️ Restore full music volume when playing
+                const bgMusic = document.getElementById('bgMusic');
+                if (bgMusic) {{
+                    bgMusic.volume = MUSIC_FULL_VOLUME;
+                }}
             }} else {{
                 stopSlideshow();
+                // 🎚️ Duck music volume when paused
+                const bgMusic = document.getElementById('bgMusic');
+                if (bgMusic) {{
+                    bgMusic.volume = MUSIC_DUCKING_VOLUME;
+                }}
             }}
         }}
         
-        function startSlideshow() {{
+        function startAutoplay() {{
             stopSlideshow();
             slideInterval = setInterval(() => {{
                 nextSlide();
@@ -1011,6 +1266,17 @@ def _generate_slideshow_html(
             updateDisplay();
         }}
         
+        function jumpToSlide(index) {{
+            if (index >= 0 && index < photos.length) {{
+                currentIndex = index;
+                updateDisplay();
+                // Restart slideshow if playing
+                if (isPlaying) {{
+                    startAutoplay();
+                }}
+            }}
+        }}
+        
         function toggleFullscreen() {{
             if (!document.fullscreenElement) {{
                 slideshow.requestFullscreen().then(() => {{
@@ -1031,11 +1297,28 @@ def _generate_slideshow_html(
             slideshow.classList.remove('hide-controls');
             
             clearTimeout(hideControlsTimeout);
-            hideControlsTimeout = setTimeout(() => {{
+            // Only auto-hide if slideshow is playing
+            if (isPlaying) {{
+                hideControlsTimeout = setTimeout(() => {{
+                    slideshow.classList.add('hide-controls');
+                }}, 3000);
+            }}
+        }}
+        
+        // 📱 Mobile-friendly: Toggle controls visibility on tap (without affecting playback)
+        function toggleControlsVisibility() {{
+            const isHidden = slideshow.classList.contains('hide-controls');
+            
+            if (isHidden) {{
+                // Show controls
+                showControlsTemporarily();
+            }} else {{
+                // Hide controls immediately if playing, keep visible if paused
                 if (isPlaying) {{
                     slideshow.classList.add('hide-controls');
+                    clearTimeout(hideControlsTimeout);
                 }}
-            }}, 3000);
+            }}
         }}
         
         function toggleMusic() {{
@@ -1087,22 +1370,75 @@ def _generate_slideshow_html(
             fullscreenBtn.textContent = isFullscreen ? '⛶ Exit Fullscreen' : '⛶ Fullscreen';
         }});
         
-        // Auto-start
-        if (isPlaying) {{
-            startSlideshow();
-        }}
+        // 📱 Touch event handling for mobile devices
+        slideshowMain.addEventListener('click', (e) => {{
+            toggleControlsVisibility();
+        }});
         
-        // Auto-play music
-        if (bgMusic) {{
-            bgMusic.play().catch(e => console.log('Music autoplay blocked:', e));
-        }}
+        slideshowMain.addEventListener('touchend', (e) => {{
+            e.preventDefault();  // Prevent double-firing with click
+            toggleControlsVisibility();
+        }});
         
-        // Start hiding controls after initial delay
-        setTimeout(() => {{
-            if (isPlaying) {{
-                slideshow.classList.add('hide-controls');
+        // Make progress bar clickable (jump to slide)
+        progressBarContainer.addEventListener('click', (e) => {{
+            e.stopPropagation();  // Prevent triggering toggleControlsVisibility
+            const rect = progressBarContainer.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const percent = clickX / rect.width;
+            const targetIndex = Math.floor(percent * photos.length);
+            jumpToSlide(Math.max(0, Math.min(photos.length - 1, targetIndex)));
+            showControlsTemporarily();
+        }});
+        
+        // 🎬 Splash Screen: Start slideshow on button click
+        function startSlideshowFromSplash() {{
+            // Hide splash screen
+            const splashScreen = document.getElementById('splashScreen');
+            splashScreen.classList.add('hidden');
+            
+            // Show slideshow
+            const slideshow = document.getElementById('slideshow');
+            slideshow.style.display = 'flex';
+            
+            // 🖥️ Auto-enter fullscreen (if supported)
+            if (document.documentElement.requestFullscreen) {{
+                document.documentElement.requestFullscreen().catch(err => {{
+                    console.log('Fullscreen request failed:', err);
+                }});
             }}
-        }}, 3000);
+            
+            // Start playing
+            isPlaying = true;
+            playBtn.textContent = '⏸️ Pause';
+            startAutoplay();
+            
+            // 🎵 Start music with better buffering handling
+            if (bgMusic) {{
+                // Check if music is ready
+                if (bgMusic.readyState >= 2) {{
+                    // HAVE_CURRENT_DATA or better - can play now
+                    bgMusic.play().catch(e => console.log('Music playback blocked:', e));
+                }} else {{
+                    // Wait for music to load enough data
+                    bgMusic.addEventListener('canplay', function startMusic() {{
+                        bgMusic.play().catch(e => console.log('Music playback blocked:', e));
+                        bgMusic.removeEventListener('canplay', startMusic);
+                    }}, {{ once: true }});
+                }}
+            }}
+            
+            // Hide controls after 3 seconds
+            setTimeout(() => {{
+                slideshow.classList.add('hide-controls');
+            }}, 3000);
+        }}
+        
+        // Make startSlideshow globally accessible for splash button
+        window.startSlideshow = startSlideshowFromSplash;
+        
+        // Initialize display
+        updateDisplay();
         
         // Generated: {now}
     </script>
