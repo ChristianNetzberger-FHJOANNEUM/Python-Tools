@@ -14,7 +14,7 @@ from ..util.logging import get_logger
 logger = get_logger("export_profiles")
 
 
-ExportTarget = Literal["smart_tv", "smart_tv_fullhd", "web", "web_medium", "web_compact", "web_mobile", "web_optimized", "archive", "custom"]
+ExportTarget = Literal["smart_tv_8k", "smart_tv", "smart_tv_fullhd", "web", "web_medium", "web_compact", "web_mobile", "web_optimized", "archive", "custom"]
 
 
 @dataclass
@@ -34,6 +34,19 @@ class ImageProfile:
 
 # Predefined export profiles
 EXPORT_PROFILES = {
+    "smart_tv_8k": ImageProfile(
+        name="Smart TV (8K UHD)",
+        max_width=7680,
+        max_height=4320,
+        jpeg_quality=95,
+        webp_quality=None,  # TVs don't support WebP
+        progressive=True,
+        optimize=True,
+        thumbnail_size=800,
+        thumbnail_quality=90,
+        description="Ultra high-quality for 8K Samsung Smart TV (QLED/Neo QLED) - ~5-8 MB/photo"
+    ),
+    
     "smart_tv": ImageProfile(
         name="Smart TV (4K/Full HD)",
         max_width=3840,

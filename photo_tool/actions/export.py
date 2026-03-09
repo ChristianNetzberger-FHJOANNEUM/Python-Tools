@@ -1391,6 +1391,84 @@ def _generate_slideshow_html(
             showControlsTemporarily();
         }});
         
+        // 📺 TV Remote / Keyboard Control
+        document.addEventListener('keydown', (e) => {{
+            // Prevent default browser behavior for arrow keys
+            if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Enter', ' ', 'Escape'].includes(e.key)) {{
+                e.preventDefault();
+            }}
+            
+            switch(e.key) {{
+                case 'ArrowRight':  // Next photo
+                case 'MediaTrackNext':
+                    nextSlide();
+                    showControlsTemporarily();
+                    break;
+                    
+                case 'ArrowLeft':   // Previous photo
+                case 'MediaTrackPrevious':
+                    prevSlide();
+                    showControlsTemporarily();
+                    break;
+                    
+                case 'Enter':       // Play/Pause (Samsung OK button)
+                case ' ':           // Spacebar
+                case 'MediaPlayPause':
+                    togglePlay();
+                    showControlsTemporarily();
+                    break;
+                    
+                case 'ArrowUp':     // Speed up
+                    if (slideDuration > 2000) {{
+                        slideDuration = Math.max(2000, slideDuration - 1000);
+                        document.getElementById('speedSelect').value = slideDuration / 1000;
+                        if (isPlaying) {{
+                            startAutoplay();  // Restart with new speed
+                        }}
+                        showControlsTemporarily();
+                    }}
+                    break;
+                    
+                case 'ArrowDown':   // Slow down
+                    if (slideDuration < 15000) {{
+                        slideDuration = Math.min(15000, slideDuration + 1000);
+                        document.getElementById('speedSelect').value = slideDuration / 1000;
+                        if (isPlaying) {{
+                            startAutoplay();  // Restart with new speed
+                        }}
+                        showControlsTemporarily();
+                    }}
+                    break;
+                    
+                case 'Escape':      // Exit fullscreen
+                case 'Back':        // Samsung Back button
+                    if (document.fullscreenElement) {{
+                        document.exitFullscreen();
+                    }}
+                    break;
+                    
+                case 'm':           // Toggle music
+                case 'M':
+                case 'MediaStop':
+                    if (bgMusic) {{
+                        toggleMusic();
+                        showControlsTemporarily();
+                    }}
+                    break;
+                    
+                case 'f':           // Toggle fullscreen
+                case 'F':
+                    toggleFullscreen();
+                    break;
+                    
+                case 'l':           // Toggle loop
+                case 'L':
+                    toggleLoop();
+                    showControlsTemporarily();
+                    break;
+            }}
+        }});
+        
         // 🎬 Splash Screen: Start slideshow on button click
         function startSlideshowFromSplash() {{
             // Hide splash screen
