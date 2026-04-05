@@ -169,11 +169,27 @@ web/
 ├── index.html           ← Landing Page (Einstieg)
 ├── mera-peak/           ← eine exportierte Galerie
 │   ├── index.html
+│   ├── slides.json      ← Zuordnung Export → Original + Sidecar (für Handy-Bewertung / NAS-Helfer)
 │   ├── images/
 │   └── …
 └── andere-slideshow/
     └── …
 ```
+
+### `gallery/slides.json` (Manifest)
+
+Wird bei **jedem Galerie-Export** mitgeschrieben (`…/gallery/slides.json` relativ zum gewählten Export-Ordner). Enthält pro Slide u. a.:
+
+| Feld | Bedeutung |
+|------|-----------|
+| `index` | 0-basierter Index = gleiche Reihenfolge wie in der Slideshow |
+| `export_image` | Relativpfad, z. B. `images/0000.jpg` |
+| `thumbnail` | z. B. `thumbnails/0000.jpg` |
+| `source_path` | **Absoluter Pfad zum Original** auf dem Rechner/NAS (zur Laufzeit des Exports) |
+| `metadata_sidecar` | Pfad zur Datei `.{name}.metadata.json` (Photo Tool) |
+| `rating`, `color`, `keywords` | Stand beim Export |
+
+**Hinweis:** Ein zukünftiger **Helfer-Server** auf der NAS kann so Sterne/Farben zur **richtigen Originaldatei** schreiben, sofern `source_path` bzw. Sidecar-Pfade von der NAS aus erreichbar/schreibbar sind (gleiche Freigaben wie beim Bearbeiten im Photo Tool).
 
 **Landing Page im Repository:** [`nas_landing_page/index.html`](nas_landing_page/index.html) – nach Ändern der Karten (`href`, Titel) per Dateimanager in die **Wurzel von `web`** kopieren (oder dort direkt bearbeiten).
 

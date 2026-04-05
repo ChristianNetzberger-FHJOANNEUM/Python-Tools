@@ -7,12 +7,12 @@ import json
 import shutil
 from pathlib import Path
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 from PIL import Image
 
 from ..util.logging import get_logger
-from .metadata import get_metadata
+from .metadata import get_metadata, get_metadata_file
 from .export_profiles import get_profile, optimize_image, generate_optimized_thumbnail, list_profiles
 
 logger = get_logger("export")
@@ -55,6 +55,26 @@ def _slideshow_memory_window_for_profile(profile_key: str) -> int:
     return 0
 
 
+def _slide_manifest_entry(
+    index: int,
+    photo_entry: Dict[str, Any],
+    photo_path: Path,
+) -> Dict[str, Any]:
+    """One row for gallery/slides.json — links export JPEG to original + sidecar paths."""
+    sidecar = get_metadata_file(photo_path)
+    return {
+        "index": index,
+        "export_image": photo_entry["src"],
+        "thumbnail": photo_entry["thumbnail"],
+        "source_path": str(photo_path.resolve()),
+        "source_name": photo_path.name,
+        "metadata_sidecar": str(sidecar.resolve()),
+        "rating": photo_entry.get("rating", 0),
+        "color": photo_entry.get("color"),
+        "keywords": list(photo_entry.get("keywords") or []),
+    }
+
+
 # Progress tracking for export
 _export_progress = {
     'status': 'idle',  # idle, running, complete, error
@@ -82,6 +102,8 @@ def export_gallery(
     smart_tv_mode: bool = False,
     splash_title: Optional[str] = None,      # 🎬 Custom splash screen title
     splash_subtitle: Optional[str] = None,   # 🎬 Custom splash screen subtitle
+    remote_hub_ws_base: Optional[str] = None,  # e.g. ws://nas:8090/ws — LAN remote control hub
+    remote_session_id: str = "default",
     apply_edits: bool = True,  # NEW: Apply non-destructive edits during export
     # Legacy parameters (deprecated, use profile instead)
     max_image_size: Optional[int] = None,
@@ -176,6 +198,7 @@ def export_gallery(
     
     # Initialize variables (used in both quick and normal mode)
     photo_data = []
+    slides_manifest: List[Dict[str, Any]] = []
     total_original_size = 0
     total_jpeg_size = 0
     total_webp_size = 0
@@ -238,6 +261,9 @@ def export_gallery(
                 photo_entry['thumbnail_webp'] = f"thumbnails/{webp_thumb.name}"
             
             photo_data.append(photo_entry)
+            slides_manifest.append(
+                _slide_manifest_entry(len(photo_data) - 1, photo_entry, photo_path)
+            )
         
         logger.info(f"⚡ Quick update: Reusing {len(photo_data)} existing images")
         
@@ -331,6 +357,9 @@ def export_gallery(
                     photo_entry['thumbnail_webp'] = f"thumbnails/{i:04d}.webp"
                 
                 photo_data.append(photo_entry)
+                slides_manifest.append(
+                    _slide_manifest_entry(len(photo_data) - 1, photo_entry, photo_path)
+                )
                 
                 logger.debug(f"Processed {photo_path.name} - "
                             f"JPEG: {img_result['jpeg_size']//1024}KB"
@@ -354,6 +383,8 @@ def export_gallery(
             splash_title=splash_title,        # 🎬 Pass custom splash title
             splash_subtitle=splash_subtitle,   # 🎬 Pass custom splash subtitle
             memory_window_radius=mem_win,
+            remote_hub_ws_base=remote_hub_ws_base,
+            remote_session_id=remote_session_id,
         )
     elif template == "photoswipe":
         html = _generate_photoswipe_html(title, photo_data)
@@ -366,6 +397,23 @@ def export_gallery(
     
     index_path = gallery_dir / "index.html"
     index_path.write_text(html, encoding='utf-8')
+    
+    if slides_manifest:
+        manifest_path = gallery_dir / "slides.json"
+        manifest_body = {
+            "manifest_version": 1,
+            "title": title,
+            "exported_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "export_profile": profile,
+            "template": template,
+            "slide_count": len(slides_manifest),
+            "slides": slides_manifest,
+        }
+        manifest_path.write_text(
+            json.dumps(manifest_body, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        logger.info(f"Wrote manifest {manifest_path} ({len(slides_manifest)} slides)")
     
     _export_progress['status'] = 'complete'
     _export_progress['message'] = 'Export complete!'
@@ -741,6 +789,8 @@ def _generate_slideshow_html(
     splash_title: str = None,  # 🆕 Custom splash title
     splash_subtitle: str = None,  # 🆕 Custom splash subtitle (date)
     memory_window_radius: int = 0,  # TV: only load nearby slides; 0 = legacy (all imgs)
+    remote_hub_ws_base: Optional[str] = None,
+    remote_session_id: str = "default",
 ) -> str:
     """Generate fullscreen slideshow template with music support (based on working GUI slideshow)"""
     
@@ -776,7 +826,11 @@ def _generate_slideshow_html(
         splash_title = title
     if not splash_subtitle:
         splash_subtitle = f"{len(photo_data)} photos{' • Background music' if music_files else ''}"
-    
+
+    hub_ws = (remote_hub_ws_base or "").strip()
+    remote_hub_literal = json.dumps(hub_ws) if hub_ws else "null"
+    remote_session_literal = json.dumps((remote_session_id or "default").strip() or "default")
+
     return f'''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1189,6 +1243,70 @@ def _generate_slideshow_html(
         let hideControlsTimeout = null;
         let slideInterval = null;
         let slideDuration = {slideshow_duration * 1000};
+
+        const REMOTE_HUB_WS_BASE = {remote_hub_literal};
+        const REMOTE_SESSION_ID = {remote_session_literal};
+        let remoteWs = null;
+        let remoteReconnectTimer = null;
+
+        function remoteHubWsUrl() {{
+            if (!REMOTE_HUB_WS_BASE) return null;
+            const base = String(REMOTE_HUB_WS_BASE).replace(/\\/+$/, '');
+            const sid = encodeURIComponent(REMOTE_SESSION_ID || 'default');
+            return base + '/' + sid;
+        }}
+
+        function sendRemoteState() {{
+            if (!remoteWs || remoteWs.readyState !== WebSocket.OPEN) return;
+            try {{
+                remoteWs.send(JSON.stringify({{
+                    type: 'state',
+                    index: currentIndex,
+                    total: photos.length,
+                    playing: isPlaying
+                }}));
+            }} catch (e) {{}}
+        }}
+
+        function connectRemoteHub() {{
+            const url = remoteHubWsUrl();
+            if (!url) return;
+            if (remoteReconnectTimer) {{
+                clearTimeout(remoteReconnectTimer);
+                remoteReconnectTimer = null;
+            }}
+            try {{
+                remoteWs = new WebSocket(url);
+            }} catch (e) {{
+                remoteReconnectTimer = setTimeout(connectRemoteHub, 3000);
+                return;
+            }}
+            remoteWs.onopen = function () {{
+                try {{
+                    remoteWs.send(JSON.stringify({{ type: 'hello', role: 'tv' }}));
+                }} catch (err) {{}}
+                sendRemoteState();
+            }};
+            remoteWs.onmessage = function (ev) {{
+                try {{
+                    const msg = JSON.parse(ev.data);
+                    if (msg.type !== 'cmd') return;
+                    if (msg.from === 'tv') return;
+                    const act = msg.action;
+                    if (act === 'next') {{ nextSlide(); showControlsTemporarily(); }}
+                    else if (act === 'prev') {{ prevSlide(); showControlsTemporarily(); }}
+                    else if (act === 'toggle') {{ togglePlay(); showControlsTemporarily(); }}
+                    else if (act === 'goto' && msg.index != null) {{
+                        const idx = parseInt(msg.index, 10);
+                        if (!isNaN(idx)) {{ jumpToSlide(idx); showControlsTemporarily(); }}
+                    }}
+                }} catch (e) {{}}
+            }};
+            remoteWs.onclose = function () {{
+                remoteWs = null;
+                remoteReconnectTimer = setTimeout(connectRemoteHub, 3000);
+            }};
+        }}
         
         // 🎚️ Music ducking configuration
         const MUSIC_DUCKING_VOLUME = {music_ducking_volume / 100.0};  // Convert 0-100% to 0.0-1.0
@@ -1272,6 +1390,7 @@ def _generate_slideshow_html(
             
             prevBtn.disabled = currentIndex === 0 && !isLooping;
             nextBtn.disabled = currentIndex === photos.length - 1 && !isLooping;
+            sendRemoteState();
         }}
         
         function nextSlide() {{
@@ -1311,6 +1430,7 @@ def _generate_slideshow_html(
                     bgMusic.volume = MUSIC_DUCKING_VOLUME;
                 }}
             }}
+            sendRemoteState();
         }}
         
         function startAutoplay() {{
@@ -1592,6 +1712,7 @@ def _generate_slideshow_html(
             setTimeout(() => {{
                 slideshow.classList.add('hide-controls');
             }}, 3000);
+            sendRemoteState();
         }}
         
         // Make startSlideshow globally accessible for splash button
@@ -1599,6 +1720,7 @@ def _generate_slideshow_html(
         
         // Initialize display
         updateDisplay();
+        connectRemoteHub();
         
         // Generated: {now}
     </script>

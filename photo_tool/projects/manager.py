@@ -36,6 +36,8 @@ class ExportSettings:
     quick_update: bool = False       # ⚡ Quick update (HTML only)
     splash_title: Optional[str] = None      # 🎬 Custom splash screen title
     splash_subtitle: Optional[str] = None   # 🎬 Custom splash screen subtitle
+    remote_hub_ws_base: Optional[str] = None
+    remote_session_id: str = "default"
 
 
 @dataclass

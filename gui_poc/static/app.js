@@ -65,6 +65,8 @@ const { createApp } = Vue;
                     exportSmartTVMode: false,          // ðŸ†• Smart TV mode
                     exportSplashTitle: '',             // ðŸŽ¬ Splash screen title
                     exportSplashSubtitle: '',          // ðŸŽ¬ Splash screen subtitle
+                    exportRemoteHubWsBase: '',         // ðŸ“¡ Slideshow remote hub (ws://host:8090/ws)
+                    exportRemoteSessionId: 'default',
                     exportMusicFiles: '',              // ðŸ†• Music file paths (newline separated)
                     exportMusicAutoplay: false,        // ðŸŽµ Autoplay music on load (default: OFF)
                     exportMusicDuckingVolume: 30,      // ðŸŽšï¸ Music volume during pause (0-100%)
@@ -429,6 +431,8 @@ const { createApp } = Vue;
                             this.exportSmartTVMode = settings.smartTVMode || false;
                             this.exportSplashTitle = settings.splashTitle || '';
                             this.exportSplashSubtitle = settings.splashSubtitle || '';
+                            this.exportRemoteHubWsBase = settings.remoteHubWsBase || '';
+                            this.exportRemoteSessionId = settings.remoteSessionId || 'default';
                             this.exportMusicFiles = settings.musicFiles || '';
                             this.exportMusicAutoplay = settings.musicAutoplay || false;
                             this.exportMusicDuckingVolume = settings.musicDuckingVolume !== undefined ? settings.musicDuckingVolume : 30;
@@ -450,6 +454,8 @@ const { createApp } = Vue;
                         smartTVMode: this.exportSmartTVMode,
                         splashTitle: this.exportSplashTitle,
                         splashSubtitle: this.exportSplashSubtitle,
+                        remoteHubWsBase: this.exportRemoteHubWsBase,
+                        remoteSessionId: this.exportRemoteSessionId,
                         musicFiles: this.exportMusicFiles,
                         musicAutoplay: this.exportMusicAutoplay,
                         musicDuckingVolume: this.exportMusicDuckingVolume
@@ -1631,7 +1637,9 @@ const { createApp } = Vue;
                             music_autoplay: this.exportMusicAutoplay,  // ðŸŽµ Autoplay toggle
                             music_ducking_volume: this.exportMusicDuckingVolume,  // ðŸŽšï¸ Ducking volume
                             splash_title: this.exportSplashTitle || null,      // ðŸŽ¬ Custom splash title
-                            splash_subtitle: this.exportSplashSubtitle || null // ðŸŽ¬ Custom splash subtitle
+                            splash_subtitle: this.exportSplashSubtitle || null, // ðŸŽ¬ Custom splash subtitle
+                            remote_hub_ws_base: this.exportRemoteHubWsBase.trim() || null,
+                            remote_session_id: (this.exportRemoteSessionId || 'default').trim() || 'default'
                         };
                         
                         const res = await fetch('/api/projects', {
@@ -2394,6 +2402,8 @@ const { createApp } = Vue;
                                 smart_tv_mode: this.exportSmartTVMode,
                                 splash_title: this.exportSplashTitle || undefined,      // ðŸŽ¬ Custom splash title
                                 splash_subtitle: this.exportSplashSubtitle || undefined, // ðŸŽ¬ Custom splash subtitle
+                                remote_hub_ws_base: this.exportRemoteHubWsBase.trim() || undefined,
+                                remote_session_id: (this.exportRemoteSessionId || 'default').trim() || 'default',
                                 music_files: musicFiles.length > 0 ? musicFiles : undefined,
                                 music_autoplay: this.exportMusicAutoplay,  // ðŸŽµ Autoplay toggle
                                 music_ducking_volume: this.exportMusicDuckingVolume  // ðŸŽšï¸ Ducking volume (0-100%)

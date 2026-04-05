@@ -800,6 +800,12 @@ def export_gallery_api():
         smart_tv_mode = data.get('smart_tv_mode', False)
         splash_title = data.get('splash_title')  # ðŸŽ¬ Custom splash title (optional)
         splash_subtitle = data.get('splash_subtitle')  # ðŸŽ¬ Custom splash subtitle (optional)
+        remote_hub_ws_base = data.get('remote_hub_ws_base')
+        if isinstance(remote_hub_ws_base, str):
+            remote_hub_ws_base = remote_hub_ws_base.strip() or None
+        remote_session_id = data.get('remote_session_id', 'default')
+        if isinstance(remote_session_id, str):
+            remote_session_id = remote_session_id.strip() or 'default'
         
         if not photo_ids:
             return jsonify({'error': 'No photos selected'}), 400
@@ -832,7 +838,9 @@ def export_gallery_api():
                     slideshow_duration=slideshow_duration,
                     smart_tv_mode=smart_tv_mode,
                     splash_title=splash_title,      # ðŸŽ¬ Custom splash title
-                    splash_subtitle=splash_subtitle  # ðŸŽ¬ Custom splash subtitle
+                    splash_subtitle=splash_subtitle,  # ðŸŽ¬ Custom splash subtitle
+                    remote_hub_ws_base=remote_hub_ws_base,
+                    remote_session_id=remote_session_id,
                 )
             except Exception as e:
                 result['error'] = str(e)

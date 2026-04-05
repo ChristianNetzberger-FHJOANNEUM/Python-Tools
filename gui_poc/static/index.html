@@ -2058,6 +2058,24 @@
                                     💡 Tip: Place splash.jpg in gallery root for custom welcome photo
                                 </div>
                             </div>
+
+                            <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(138, 43, 226, 0.3);">
+                                <div style="font-weight: 600; margin-bottom: 10px; color: #b794f6; font-size: 0.85rem;">
+                                    📱 LAN remote (optional)
+                                </div>
+                                <p style="font-size: 0.75rem; color: #888; margin-bottom: 10px; line-height: 1.35;">
+                                    WebSocket base URL of the Slideshow Hub (same value as in <code>remote.html</code>), e.g. <code style="color:#ccc;">ws://192.168.1.50:8090/ws</code>. Leave empty to disable.
+                                </p>
+                                <input v-model="exportRemoteHubWsBase"
+                                       type="text"
+                                       placeholder="ws://nas:8090/ws"
+                                       style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid rgba(138, 43, 226, 0.3); color: #fff; padding: 8px; border-radius: 6px; font-size: 0.85rem; margin-bottom: 10px; font-family: monospace;">
+                                <label style="display: block; margin-bottom: 4px; color: #aaa; font-size: 0.75rem;">Session ID (must match phone / tablet remote)</label>
+                                <input v-model="exportRemoteSessionId"
+                                       type="text"
+                                       placeholder="default"
+                                       style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid rgba(138, 43, 226, 0.3); color: #fff; padding: 8px; border-radius: 6px; font-size: 0.85rem;">
+                            </div>
                         </div>
                     </div>
                     

@@ -1,0 +1,28 @@
+# Slideshow Remote Hub on UGreen NAS (or any Docker host).
+#
+# Option A — Build on the NAS (copy this whole repo to the NAS, e.g. /volume1/docker/Python-tools):
+#   docker compose -f compose.slideshow-hub.yml up -d --build
+#
+# Option B — No build on NAS: on any PC with Docker, build + save, then "Importieren" on UGreen:
+#   docker build -f slideshow_hub/Dockerfile -t slideshow-hub:local .
+#   docker save slideshow-hub:local -o slideshow-hub.tar
+#   # copy slideshow-hub.tar to NAS → Docker UI → Importieren → run image with port 8090
+#
+# After start:
+#   http://<NAS-IP>:8090/health
+#   http://<NAS-IP>:8090/remote
+# WebSocket base for TV + phone: ws://<NAS-IP>:8090/ws  (session appended by clients)
+
+services:
+  slideshow-hub:
+    build:
+      context: .
+      dockerfile: slideshow_hub/Dockerfile
+    image: slideshow-hub:local
+    container_name: slideshow-remote-hub
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    # Uncomment so /api/rate can write sidecars next to originals (paths in slides.json must match inside container):
+    # volumes:
+    #   - /volume1/photos:/photos:rw

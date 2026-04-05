@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Slideshow Remote</title>
+  <style>
+    :root { --bg: #111; --card: #222; --accent: #7c3aed; --text: #eee; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 16px;
+      max-width: 480px;
+      margin-inline: auto;
+    }
+    h1 { font-size: 1.2rem; margin: 0 0 12px; }
+    label { display: block; font-size: 0.85rem; opacity: 0.85; margin-top: 10px; }
+    input { width: 100%; padding: 10px; margin-top: 4px; border-radius: 8px; border: 1px solid #444; background: #1a1a1a; color: #fff; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+    button {
+      flex: 1;
+      min-width: 100px;
+      padding: 14px;
+      border: none;
+      border-radius: 10px;
+      background: var(--card);
+      color: #fff;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+    button.primary { background: var(--accent); }
+    button:active { opacity: 0.85; }
+    .status { margin-top: 14px; padding: 12px; background: #1a1a1a; border-radius: 8px; font-size: 0.9rem; }
+    .stars { display: flex; gap: 6px; margin-top: 8px; }
+    .stars button { flex: 0 0 auto; min-width: 44px; font-size: 1.2rem; padding: 10px; }
+    .colors { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+    .colors button { flex: 0 0 44px; height: 44px; border-radius: 50%; border: 2px solid #555; }
+    .colors button[data-c="red"] { background: #e11; }
+    .colors button[data-c="yellow"] { background: #ec1; }
+    .colors button[data-c="green"] { background: #2b4; }
+    .colors button[data-c="blue"] { background: #25e; }
+    .colors button[data-c="purple"] { background: #a4e; }
+    .colors button[data-c="clear"] { background: #444; flex: 1 1 100%; border-radius: 8px; }
+    .hint { font-size: 0.8rem; opacity: 0.7; margin-top: 16px; line-height: 1.4; }
+  </style>
+</head>
+<body>
+  <h1>Slideshow Remote</h1>
+
+  <label>Hub (diese Seite)</label>
+  <input id="hubWs" type="text" placeholder="ws://192.168.0.100:8090/ws" autocomplete="off" />
+
+  <label>Sitzung (identisch zur Slideshow)</label>
+  <input id="session" type="text" value="default" autocomplete="off" />
+
+  <label>Galerie-Basis-URL (Ordner mit index.html + slides.json)</label>
+  <input id="galleryBase" type="text" placeholder="http://192.168.0.100:8080/mera-peak/" autocomplete="off" />
+
+  <div class="row">
+    <button type="button" class="primary" id="btnConnect">Verbinden</button>
+    <button type="button" id="btnDisconnect">Trennen</button>
+  </div>
+
+  <div class="row">
+    <button type="button" id="btnPrev">◀ Zurück</button>
+    <button type="button" id="btnToggle">⏯</button>
+    <button type="button" id="btnNext">Weiter ▶</button>
+  </div>
+
+  <div class="status" id="status">Nicht verbunden.</div>
+
+  <h2 style="font-size:1rem;margin:20px 0 8px">Bewertung (aktuelles Bild)</h2>
+  <div class="stars" id="stars"></div>
+  <div class="colors" id="colors"></div>
+
+  <p class="hint">
+    TV-Slideshow mit aktiviertem Remote-Hub muss dieselbe Sitzung und dieselbe Hub-URL nutzen.
+    Bewertungen schreiben nur, wenn der Hub die Pfade aus <code>slides.json</code> lesen kann (z.&nbsp;B. Hub auf NAS mit gemounteten Originalen).
+  </p>
+
+  <script>
+    let ws = null;
+    let currentIndex = 0;
+    let totalSlides = 0;
+
+    function defaultHubWs() {
+      const p = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return p + '//' + location.host + '/ws';
+    }
+
+    document.getElementById('hubWs').value = defaultHubWs();
+
+    function slidesJsonUrl() {
+      let b = document.getElementById('galleryBase').value.trim().replace(/\/+$/, '');
+      if (!b) return '';
+      return b + '/slides.json';
+    }
+
+    function setStatus(t) {
+      document.getElementById('status').textContent = t;
+    }
+
+    function sendCmd(action, extra) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify(Object.assign({ type: 'cmd', action: action, from: 'remote' }, extra || {})));
+    }
+
+    document.getElementById('btnConnect').onclick = function () {
+      const base = document.getElementById('hubWs').value.trim().replace(/\/+$/, '');
+      const session = document.getElementById('session').value.trim() || 'default';
+      if (!base) { setStatus('Hub-URL fehlt'); return; }
+      const url = base + '/' + encodeURIComponent(session);
+      if (ws) { try { ws.close(); } catch (e) {} }
+      ws = new WebSocket(url);
+      ws.onopen = function () {
+        setStatus('Verbunden: ' + url);
+        ws.send(JSON.stringify({ type: 'hello', role: 'remote' }));
+      };
+      ws.onclose = function () { setStatus('Verbindung getrennt.'); };
+      ws.onerror = function () { setStatus('WebSocket-Fehler.'); };
+      ws.onmessage = function (ev) {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === 'state') {
+            currentIndex = msg.index;
+            totalSlides = msg.total || totalSlides;
+            setStatus('Folie ' + (currentIndex + 1) + ' / ' + totalSlides + (msg.playing ? ' ▶' : ' ⏸'));
+          }
+          if (msg.type === 'rated' && msg.ok) {
+            setStatus('Gespeichert: Folie ' + ((msg.slide_index != null ? msg.slide_index : currentIndex) + 1));
+          }
+        } catch (e) {}
+      };
+    };
+
+    document.getElementById('btnDisconnect').onclick = function () {
+      if (ws) { ws.close(); ws = null; }
+      setStatus('Getrennt.');
+    };
+
+    document.getElementById('btnPrev').onclick = function () { sendCmd('prev'); };
+    document.getElementById('btnNext').onclick = function () { sendCmd('next'); };
+    document.getElementById('btnToggle').onclick = function () { sendCmd('toggle'); };
+
+    const starsEl = document.getElementById('stars');
+    for (let s = 1; s <= 5; s++) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = '★'.repeat(s);
+      b.onclick = function () { rate(s, null); };
+      starsEl.appendChild(b);
+    }
+
+    const colEl = document.getElementById('colors');
+    ['red', 'yellow', 'green', 'blue', 'purple'].forEach(function (c) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.dataset.c = c;
+      b.title = c;
+      b.onclick = function () { rate(null, c); };
+      colEl.appendChild(b);
+    });
+    const clearB = document.createElement('button');
+    clearB.type = 'button';
+    clearB.dataset.c = 'clear';
+    clearB.textContent = 'Farbe löschen';
+    clearB.onclick = function () { rate(null, 'none'); };
+    colEl.appendChild(clearB);
+
+    function rate(rating, color) {
+      const url = slidesJsonUrl();
+      if (!url) { setStatus('Galerie-URL setzen (slides.json).'); return; }
+      const body = { slides_json_url: url, slide_index: currentIndex };
+      if (rating != null) body.rating = rating;
+      if (color != null) body.color = color;
+      fetch(location.origin + '/api/rate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (x) {
+          if (!x.ok) throw new Error(x.j.detail || JSON.stringify(x.j));
+          setStatus('Bewertung: Folie ' + (currentIndex + 1) + ' ✓');
+        })
+        .catch(function (e) { setStatus('Fehler: ' + e.message); });
+    }
+  </script>
+</body>
+</html>
