@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Slideshows</title>
+  <style>
+    :root {
+      --bg0: #0f1419;
+      --bg1: #1a2332;
+      --card: #243044;
+      --text: #e8eef4;
+      --muted: #8b9cb3;
+      --accent: #3d8bfd;
+      --accent-dim: #2a5fbf;
+      --focus: #f5a623;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(160deg, var(--bg0) 0%, var(--bg1) 45%, #111820 100%);
+      color: var(--text);
+      padding: clamp(1rem, 3vw, 2.5rem);
+    }
+    header {
+      text-align: center;
+      margin-bottom: clamp(1.5rem, 4vw, 2.75rem);
+    }
+    h1 {
+      font-size: clamp(1.75rem, 4vw, 2.5rem);
+      font-weight: 650;
+      letter-spacing: -0.02em;
+      margin: 0 0 0.35rem;
+    }
+    .sub {
+      color: var(--muted);
+      font-size: clamp(0.9rem, 2vw, 1.05rem);
+      max-width: 36rem;
+      margin: 0 auto;
+      line-height: 1.45;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+      gap: clamp(1rem, 2.5vw, 1.35rem);
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    a.card {
+      display: block;
+      text-decoration: none;
+      color: inherit;
+      background: var(--card);
+      border-radius: 14px;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.06);
+      box-shadow: 0 12px 32px rgba(0,0,0,0.35);
+      transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s;
+      outline: none;
+    }
+    a.card:hover,
+    a.card:focus-visible {
+      transform: translateY(-4px);
+      border-color: var(--accent);
+      box-shadow: 0 18px 40px rgba(0,0,0,0.45), 0 0 0 2px var(--focus);
+    }
+    .thumb {
+      aspect-ratio: 16 / 9;
+      background: linear-gradient(135deg, var(--accent-dim) 0%, #1e3a5f 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 2.5rem;
+      object-fit: cover;
+      width: 100%;
+    }
+    .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .body {
+      padding: 1.1rem 1.2rem 1.25rem;
+    }
+    .body h2 {
+      margin: 0 0 0.4rem;
+      font-size: 1.2rem;
+    }
+    .meta {
+      color: var(--muted);
+      font-size: 0.88rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.65rem 1rem;
+    }
+    footer {
+      text-align: center;
+      margin-top: 2.5rem;
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Slideshows</h1>
+    <p class="sub">Auf dem Fernbedienungs-Cursor: Karten ansteuern, OK öffnen. Jede Karte verlinkt eine exportierte Galerie (Unterordner mit <code>index.html</code>).</p>
+  </header>
+
+  <!--
+    NEUE SLIDESHOW: Dupliziere einen <a class="card">-Block.
+    href = Ordnername relativ zu dieser index.html, z.B. "mera-peak/" 
+    Lege auf der NAS unter web/ ab: web/mera-peak/index.html + images/
+  -->
+  <main class="grid" id="grid">
+    <a class="card" href="mera-peak/">
+      <div class="thumb" aria-hidden="true">🏔</div>
+      <div class="body">
+        <h2>Nepal 2024 · Mera Peak</h2>
+        <div class="meta">
+          <span>Lokal · HTML-Slideshow</span>
+        </div>
+      </div>
+    </a>
+
+    <!-- Beispiel mit Vorschaubild aus der Galerie (optional):
+    <a class="card" href="andere-tour/">
+      <div class="thumb"><img src="andere-tour/images/0000.jpg" alt="" loading="lazy" /></div>
+      ...
+    </a>
+    -->
+  </main>
+
+  <footer>
+    nginx auf uGreen · Share <strong>web</strong> · Port 8080
+  </footer>
+
+  <script>
+    /* Einfache Tastatur-Navigation (TV / PC) */
+    (function () {
+      const cards = () => Array.from(document.querySelectorAll('a.card'));
+      document.addEventListener('keydown', function (e) {
+        const list = cards();
+        if (list.length === 0) return;
+        const i = list.indexOf(document.activeElement);
+        let next = i;
+        if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+          e.preventDefault();
+          next = Math.min(i < 0 ? 0 : i + 1, list.length - 1);
+          list[next].focus();
+        } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          next = Math.max((i < 0 ? 1 : i) - 1, 0);
+          list[next].focus();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

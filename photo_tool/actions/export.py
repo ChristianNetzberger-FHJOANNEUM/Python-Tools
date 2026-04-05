@@ -17,6 +17,44 @@ from .export_profiles import get_profile, optimize_image, generate_optimized_thu
 
 logger = get_logger("export")
 
+
+def _audio_mime_type(relative_path: str) -> str:
+    """Best MIME type for <source type> from export-relative audio path."""
+    name = relative_path.lower().split("?", 1)[0]
+    if name.endswith(".mp3"):
+        return "audio/mpeg"
+    if name.endswith((".m4a", ".aac")):
+        return "audio/mp4"
+    if name.endswith(".mp4"):
+        return "audio/mp4"
+    if name.endswith(".ogg"):
+        return "audio/ogg"
+    if name.endswith(".flac"):
+        return "audio/flac"
+    if name.endswith(".wav"):
+        return "audio/wav"
+    return "audio/mpeg"
+
+
+# Slideshow: only load nearby slides as <img src> (saves TV/browser RAM). All predefined Smart-TV export profiles.
+_SMART_TV_PROFILES_8K = frozenset({"smart_tv_8k"})
+_SMART_TV_PROFILES_4K_FHD = frozenset({"smart_tv", "smart_tv_fullhd"})
+
+
+def _slideshow_memory_window_for_profile(profile_key: str) -> int:
+    """Neighbour radius for slide image src (0 = load all slides at once, web-style only).
+
+    - smart_tv_8k: ±1 (3 images max; schärfstes Limit wegen Pixeldecode).
+    - smart_tv (4K), smart_tv_fullhd: ±2 (5 images max).
+    - Alle anderen Profile: 0 (bisheriges Verhalten, z. B. Web mit vielen parallelen Loads).
+    """
+    if profile_key in _SMART_TV_PROFILES_8K:
+        return 1
+    if profile_key in _SMART_TV_PROFILES_4K_FHD:
+        return 2
+    return 0
+
+
 # Progress tracking for export
 _export_progress = {
     'status': 'idle',  # idle, running, complete, error
@@ -304,6 +342,7 @@ def export_gallery(
     
     # Generate HTML
     if template == "slideshow":
+        mem_win = _slideshow_memory_window_for_profile(profile)
         html = _generate_slideshow_html(
             title=title,
             photo_data=photo_data,
@@ -313,7 +352,8 @@ def export_gallery(
             slideshow_duration=slideshow_duration,
             smart_tv_mode=smart_tv_mode,
             splash_title=splash_title,        # 🎬 Pass custom splash title
-            splash_subtitle=splash_subtitle   # 🎬 Pass custom splash subtitle
+            splash_subtitle=splash_subtitle,   # 🎬 Pass custom splash subtitle
+            memory_window_radius=mem_win,
         )
     elif template == "photoswipe":
         html = _generate_photoswipe_html(title, photo_data)
@@ -699,7 +739,8 @@ def _generate_slideshow_html(
     slideshow_duration: int = 5,
     smart_tv_mode: bool = False,
     splash_title: str = None,  # 🆕 Custom splash title
-    splash_subtitle: str = None  # 🆕 Custom splash subtitle (date)
+    splash_subtitle: str = None,  # 🆕 Custom splash subtitle (date)
+    memory_window_radius: int = 0,  # TV: only load nearby slides; 0 = legacy (all imgs)
 ) -> str:
     """Generate fullscreen slideshow template with music support (based on working GUI slideshow)"""
     
@@ -710,10 +751,10 @@ def _generate_slideshow_html(
     music_html = ""
     music_controls_html = ""
     if music_files:
-        music_sources = '\n'.join([
-            f'            <source src="{music}" type="audio/mpeg">'
+        music_sources = '\n'.join(
+            f'            <source src="{music}" type="{_audio_mime_type(music)}">'
             for music in music_files
-        ])
+        )
         music_html = f'''
         <audio id="bgMusic" loop preload="auto">
 {music_sources}
@@ -1166,16 +1207,52 @@ def _generate_slideshow_html(
         const speedSelect = document.getElementById('speedSelect');
         const bgMusic = document.getElementById('bgMusic');
         
-        // Preload and create all image containers
+        /** 0 = legacy (all slides keep <img src>); >0 = only load neighbors to save 4K/8K GPU RAM */
+        const MEMORY_WINDOW_RADIUS = {memory_window_radius};
+        
+        function slideImageUrl(i) {{
+            const p = photos[i];
+            if (!p) return '';
+            return p.src_webp || p.src;
+        }}
+        
+        function absMediaUrl(rel) {{
+            try {{ return new URL(rel, window.location.href).href; }} catch (e) {{ return rel; }}
+        }}
+        
+        function releaseOffWindowImages() {{
+            if (MEMORY_WINDOW_RADIUS <= 0) return;
+            const keep = new Set();
+            for (let d = -MEMORY_WINDOW_RADIUS; d <= MEMORY_WINDOW_RADIUS; d++) {{
+                const i = currentIndex + d;
+                if (i >= 0 && i < photos.length) keep.add(i);
+            }}
+            imageContainers.forEach((container, i) => {{
+                const img = container.querySelector('img');
+                if (!img) return;
+                if (keep.has(i)) {{
+                    const url = slideImageUrl(i);
+                    const want = absMediaUrl(url);
+                    if (!img.getAttribute('src') || img.src !== want) {{
+                        img.src = url;
+                    }}
+                }} else {{
+                    img.removeAttribute('src');
+                }}
+            }});
+        }}
+        
+        // Create slide containers; TV/high-res exports defer src until releaseOffWindowImages()
         photos.forEach((photo, i) => {{
             const container = document.createElement('div');
             container.className = 'slideshow-image-container' + (i === 0 ? ' active' : '');
             
             const img = document.createElement('img');
-            img.src = photo.src;
             img.alt = photo.title || `Photo ${{i + 1}}`;
             img.className = 'slideshow-image';
-            
+            if (MEMORY_WINDOW_RADIUS <= 0) {{
+                img.src = slideImageUrl(i);
+            }}
             container.appendChild(img);
             slideshowMain.appendChild(container);
         }});
@@ -1183,6 +1260,7 @@ def _generate_slideshow_html(
         const imageContainers = document.querySelectorAll('.slideshow-image-container');
         
         function updateDisplay() {{
+            releaseOffWindowImages();
             imageContainers.forEach((container, i) => {{
                 container.classList.toggle('active', i === currentIndex);
             }});
@@ -1257,7 +1335,7 @@ def _generate_slideshow_html(
         function changeSpeed() {{
             slideDuration = parseInt(speedSelect.value) * 1000;
             if (isPlaying) {{
-                startSlideshow();
+                startAutoplay();
             }}
         }}
         
@@ -1491,17 +1569,21 @@ def _generate_slideshow_html(
             playBtn.textContent = '⏸️ Pause';
             startAutoplay();
             
-            // 🎵 Start music with better buffering handling
+            // 🎵 Start music (user gesture from splash unlocks autoplay policy)
             if (bgMusic) {{
-                // Check if music is ready
+                bgMusic.volume = MUSIC_FULL_VOLUME;
+                try {{ bgMusic.load(); }} catch (e) {{}}
+                const tryPlay = () => bgMusic.play().catch(e => console.log('Music playback blocked:', e));
                 if (bgMusic.readyState >= 2) {{
-                    // HAVE_CURRENT_DATA or better - can play now
-                    bgMusic.play().catch(e => console.log('Music playback blocked:', e));
+                    tryPlay();
                 }} else {{
-                    // Wait for music to load enough data
                     bgMusic.addEventListener('canplay', function startMusic() {{
-                        bgMusic.play().catch(e => console.log('Music playback blocked:', e));
+                        tryPlay();
                         bgMusic.removeEventListener('canplay', startMusic);
+                    }}, {{ once: true }});
+                    bgMusic.addEventListener('canplaythrough', function startMusicFull() {{
+                        tryPlay();
+                        bgMusic.removeEventListener('canplaythrough', startMusicFull);
                     }}, {{ once: true }});
                 }}
             }}
