@@ -410,6 +410,40 @@
                 </div>
             </div>
             
+            <div v-if="currentProjectId && photos.length > 0" style="display: flex; align-items: center; gap: 12px; margin-bottom: 14px; padding: 10px 14px; background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.28); border-radius: 8px; flex-wrap: wrap;">
+                <span style="font-size: 0.88rem; color: #93c5fd; font-weight: 600;">Bewertungsebene</span>
+                <select v-model="activeRatingLayer" @change="onRatingLayerChange"
+                        style="background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.22); color: #fff; padding: 8px 12px; border-radius: 6px; font-size: 0.85rem; min-width: 200px;">
+                    <option value="global" style="background: #1e293b;">Archiv (global)</option>
+                    <option value="project" style="background: #1e293b;">Projekt</option>
+                    <option value="couch" style="background: #1e293b;">Couch / TV</option>
+                </select>
+                <span style="font-size: 0.78rem; color: #94a3b8; max-width: 36rem; line-height: 1.35;">Miniatur-Sterne, Farben und Filter folgen der Ebene. Couch: <code style="color:#cbd5e1;">couch_rating</code> / <code style="color:#cbd5e1;">couch_color</code> in den Projekt-<code style="color:#cbd5e1;">.sidecars</code>.</span>
+                <div style="flex-basis: 100%; height: 0;"></div>
+                <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding-top: 4px; border-top: 1px solid rgba(59,130,246,0.25); margin-top: 6px; width: 100%;">
+                    <button type="button" @click="promoteCouchToProject" :disabled="promoteCouchBusy"
+                            style="background: rgba(251, 191, 36, 0.2); border: 1px solid rgba(251, 191, 36, 0.55); color: #fbbf24; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.8rem;">
+                        {{ promoteCouchBusy ? '⏳ …' : '📲 Couch → Projekt übernehmen' }}
+                    </button>
+                    <label style="display: flex; align-items: center; gap: 6px; font-size: 0.76rem; color: #cbd5e1; cursor: pointer;">
+                        <input type="checkbox" v-model="promoteCouchRatings" style="accent-color: #fbbf24;">
+                        <span style="color:#94a3b8;">Sterne</span>
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 6px; font-size: 0.76rem; color: #cbd5e1; cursor: pointer;">
+                        <input type="checkbox" v-model="promoteCouchAlsoColors" style="accent-color: #fbbf24;">
+                        <span style="color:#94a3b8;">Farben</span>
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 6px; font-size: 0.76rem; color: #cbd5e1; cursor: pointer;">
+                        <input type="checkbox" v-model="promoteCouchClearRatings" style="accent-color: #fbbf24;">
+                        Couch-Sterne danach löschen
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 6px; font-size: 0.76rem; color: #cbd5e1; cursor: pointer;">
+                        <input type="checkbox" v-model="promoteCouchClearColors" :disabled="!promoteCouchAlsoColors" style="accent-color: #fbbf24;">
+                        Couch-Farbe danach löschen
+                    </label>
+                </div>
+            </div>
+            
             <!-- Action Bar -->
             <div v-if="currentProjectId && photos.length > 0" style="display: flex; justify-content: flex-end; margin-bottom: 15px; gap: 10px;">
                 <button @click="resetAllRatings"
@@ -1904,12 +1938,25 @@
                     
                     <div style="margin-bottom: 15px;">
                         <label style="display: block; margin-bottom: 6px; color: #aaa; font-size: 0.85rem;">
-                            Gallery Title
+                            Galerie-Titel <span style="opacity:0.7;">(wird gespeichert, kein Auto-Datum)</span>
                         </label>
                         <input v-model="exportTitle"
                                type="text"
-                               placeholder="My Photo Gallery"
+                               placeholder="z. B. Nepal Mera Peak 2024"
                                style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 10px; border-radius: 8px; font-size: 0.95rem; outline: none;">
+                    </div>
+                    
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 6px; color: #aaa; font-size: 0.85rem;">
+                            Export-Zielordner (optional)
+                        </label>
+                        <input v-model="exportBasePath"
+                               type="text"
+                               placeholder="Leer = Workspace/exports — z. B. \\NAS\share\galleries oder Z:\slideshow-out"
+                               style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 10px; border-radius: 8px; font-size: 0.9rem; outline: none; font-family: monospace;">
+                        <div style="font-size: 0.72rem; color: #888; margin-top: 6px; line-height: 1.35;">
+                            Unter diesem Ordner wird <code style="color:#ccc;">&lt;slug&gt;/</code> als Web-Root angelegt (<code style="color:#ccc;">index.html</code>, <code style="color:#ccc;">slides.json</code>, <code style="color:#ccc;">images/</code>, …).
+                        </div>
                     </div>
                     
                     <div style="margin-bottom: 15px;">
@@ -2074,7 +2121,15 @@
                                 <input v-model="exportRemoteSessionId"
                                        type="text"
                                        placeholder="default"
-                                       style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid rgba(138, 43, 226, 0.3); color: #fff; padding: 8px; border-radius: 6px; font-size: 0.85rem;">
+                                       style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid rgba(138, 43, 226, 0.3); color: #fff; padding: 8px; border-radius: 6px; font-size: 0.85rem; margin-bottom: 10px;">
+                                <label style="display: block; margin-bottom: 4px; color: #aaa; font-size: 0.75rem;">Öffentliche Galerie-URL (http/https, nur nötig bei <code style="color:#ccc">file:///</code> / Laufwerk)</label>
+                                <input v-model="exportGalleryPublicHttpBase"
+                                       type="text"
+                                       placeholder="http://192.168.0.100:8080/share/exports/photo-gallery-merapeak/"
+                                       style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid rgba(138, 43, 226, 0.3); color: #fff; padding: 8px; border-radius: 6px; font-size: 0.85rem; font-family: monospace;">
+                                <p style="font-size: 0.7rem; color: #888; margin-top: 6px; line-height: 1.35;">
+                                    Wenn die Slideshow vom PC/TV als lokale Datei geöffnet wird, braucht der Hub trotzdem die NAS-Webadresse zum Ordner mit <code>index.html</code> / <code>slides.json</code> (kein <code>file://</code>).
+                                </p>
                             </div>
                         </div>
                     </div>
@@ -2123,6 +2178,35 @@
                             <div style="font-size: 0.7rem; color: #888; margin-top: 6px; line-height: 1.3;">
                                 💡 0% = Silent, 30% = Subtle background, 100% = Full volume
                             </div>
+                        </div>
+                    </div>
+                    
+                    <div style="background: rgba(251, 191, 36, 0.08); padding: 12px; border-radius: 8px; border: 1px solid rgba(251, 191, 36, 0.35); margin-bottom: 15px;">
+                        <div style="font-weight: 600; margin-bottom: 8px; color: #fbbf24; font-size: 0.85rem;">📲 Couch → Photo Tool</div>
+                        <p style="font-size: 0.75rem; color: #888; margin-bottom: 8px; line-height: 1.35;">
+                            Web-Root des Exports <strong>oder</strong> voller Pfad zur <code style="color:#ccc;">slides.json</code>. <strong>Projekt im Header wählen</strong> — sonst landet der Import nur im Archiv und die Ebenen Archiv / Projekt / Couch zeigen dieselben Sterne. Mit Projekt: <strong>couch_rating</strong> / <strong>couch_color</strong> in den Projekt-<code style="color:#ccc;">.sidecars</code>.
+                        </p>
+                        <input v-model="couchImportSlidesPath"
+                               type="text"
+                               placeholder="N:\\…\\photo-gallery-merapeak  oder …\\slides.json"
+                               style="width: 100%; background: rgba(0,0,0,0.3); border: 1px solid rgba(251, 191, 36, 0.35); color: #fff; padding: 8px; border-radius: 6px; font-size: 0.82rem; font-family: monospace;">
+                        <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; align-items: center;">
+                            <button type="button" @click="couchImportPreview" :disabled="couchImportBusy"
+                                    style="background: rgba(251, 191, 36, 0.25); border: 1px solid rgba(251, 191, 36, 0.6); color: #fbbf24; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.82rem;">
+                                Vorschau
+                            </button>
+                            <button type="button" @click="couchImportApply" :disabled="couchImportBusy"
+                                    style="background: rgba(74, 222, 128, 0.2); border: 1px solid rgba(74, 222, 128, 0.55); color: #86efac; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.82rem;">
+                                Übernehmen
+                            </button>
+                            <label style="display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: #ccc; cursor: pointer;">
+                                <input type="checkbox" v-model="couchImportOverwrite" style="width: 16px; height: 16px; cursor: pointer; accent-color: #fbbf24;">
+                                <span>Konflikte überschreiben</span>
+                            </label>
+                        </div>
+                        <div v-if="couchImportPreview && couchImportPreview.stats" style="margin-top: 10px; font-size: 0.78rem; color: #cbd5e1; line-height: 1.45;">
+                            Einträge: {{ couchImportPreview.stats.entries }}, fehlende Dateien: {{ couchImportPreview.stats.missing_files }}, Konflikte: {{ couchImportPreview.stats.conflicts }}
+                            <span v-if="couchImportPreview.truncated"> (Vorschau der Zeilenliste gekürzt)</span>
                         </div>
                     </div>
                     

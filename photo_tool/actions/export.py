@@ -17,6 +17,22 @@ from .export_profiles import get_profile, optimize_image, generate_optimized_thu
 
 logger = get_logger("export")
 
+# Bundled QR library (davidshimjs/qrcodejs, MIT) — same-origin load works on TVs that block CDN scripts.
+_SPLASH_QR_VENDOR = Path(__file__).resolve().parent.parent / "web_vendor" / "qrcode.min.js"
+
+
+def _ensure_splash_qr_vendor(gallery_dir: Path) -> None:
+    """Copy local QR script next to index.html so Smart-TVs need no internet/CDN."""
+    if not _SPLASH_QR_VENDOR.is_file():
+        logger.warning(
+            "Splash QR script missing (%s). Run repo setup or add web_vendor/qrcode.min.js — QR falls back to CDN.",
+            _SPLASH_QR_VENDOR,
+        )
+        return
+    dest_dir = gallery_dir / "vendor"
+    dest_dir.mkdir(exist_ok=True)
+    shutil.copy2(_SPLASH_QR_VENDOR, dest_dir / "qrcode.min.js")
+
 
 def _audio_mime_type(relative_path: str) -> str:
     """Best MIME type for <source type> from export-relative audio path."""
@@ -72,7 +88,104 @@ def _slide_manifest_entry(
         "rating": photo_entry.get("rating", 0),
         "color": photo_entry.get("color"),
         "keywords": list(photo_entry.get("keywords") or []),
+        "couch_rating": photo_entry.get("couch_rating"),
+        "couch_color": photo_entry.get("couch_color"),
     }
+
+
+_EXPORT_JPEG_SUFFIXES = frozenset({".jpg", ".jpeg"})
+
+
+def _images_dir_has_export_jpegs(images_dir: Path) -> bool:
+    """True if folder exists and has at least one .jpg/.jpeg (any case)."""
+    if not images_dir.is_dir():
+        return False
+    for p in images_dir.iterdir():
+        if p.is_file() and p.suffix.lower() in _EXPORT_JPEG_SUFFIXES:
+            return True
+    return False
+
+
+def _sorted_export_jpegs(images_dir: Path) -> List[Path]:
+    """Sorted JPEG paths in export images folder (case-insensitive extension)."""
+    if not images_dir.is_dir():
+        return []
+    jpgs = [
+        p for p in images_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in _EXPORT_JPEG_SUFFIXES
+    ]
+    return sorted(jpgs, key=lambda x: x.name.lower())
+
+
+_MEDIA_PRUNE_SUFFIXES = frozenset({".jpg", ".jpeg", ".webp", ".png"})
+
+
+def _empty_slideshow_media_dirs(images_dir: Path, thumbs_dir: Path) -> None:
+    """Remove JPEG/WebP from images + thumbnails before a full re-export (avoids stale 0000..1622 when new set is smaller)."""
+    for d in (images_dir, thumbs_dir):
+        if not d.is_dir():
+            continue
+        for p in d.iterdir():
+            if p.is_file() and p.suffix.lower() in _MEDIA_PRUNE_SUFFIXES:
+                try:
+                    p.unlink()
+                except OSError as exc:
+                    logger.warning("Could not remove %s: %s", p, exc)
+
+
+def _prune_unreferenced_gallery_media(gallery_dir: Path, photo_data: List[Dict[str, Any]]) -> None:
+    """Drop files under images/ and thumbnails/ not referenced by the current photo_data (quick-update shrink or partial sync)."""
+    if not photo_data:
+        return
+    allowed: set = set()
+    for row in photo_data:
+        for key in ("src", "src_webp", "thumbnail", "thumbnail_webp"):
+            v = row.get(key)
+            if isinstance(v, str) and "/" in v:
+                allowed.add(Path(v).name.lower())
+    for sub in ("images", "thumbnails"):
+        d = gallery_dir / sub
+        if not d.is_dir():
+            continue
+        for p in d.iterdir():
+            if not p.is_file() or p.suffix.lower() not in _MEDIA_PRUNE_SUFFIXES:
+                continue
+            if p.name.lower() in allowed:
+                continue
+            try:
+                p.unlink()
+                logger.info("Pruned unreferenced gallery file %s/%s", sub, p.name)
+            except OSError as exc:
+                logger.warning("Could not prune %s: %s", p, exc)
+
+
+def _merge_couch_from_existing_slides_json(
+    gallery_dir: Path,
+    slides_manifest: List[Dict[str, Any]],
+    photo_data: List[Dict[str, Any]],
+) -> None:
+    """Preserve couch_* from previous slides.json when re-exporting (same source_path)."""
+    manifest_path = gallery_dir / "slides.json"
+    if not manifest_path.exists() or not slides_manifest:
+        return
+    try:
+        old = json.loads(manifest_path.read_text(encoding="utf-8"))
+        old_slides = old.get("slides") or []
+        by_src = {s.get("source_path"): s for s in old_slides if s.get("source_path")}
+        for s in slides_manifest:
+            o = by_src.get(s.get("source_path"))
+            if not o:
+                continue
+            if "couch_rating" in o:
+                s["couch_rating"] = o.get("couch_rating")
+            if "couch_color" in o:
+                s["couch_color"] = o.get("couch_color")
+        for i, s in enumerate(slides_manifest):
+            if i < len(photo_data):
+                photo_data[i]["couch_rating"] = s.get("couch_rating")
+                photo_data[i]["couch_color"] = s.get("couch_color")
+    except Exception as e:
+        logger.warning("Could not merge couch fields from existing slides.json: %s", e)
 
 
 # Progress tracking for export
@@ -104,6 +217,7 @@ def export_gallery(
     splash_subtitle: Optional[str] = None,   # 🎬 Custom splash screen subtitle
     remote_hub_ws_base: Optional[str] = None,  # e.g. ws://nas:8090/ws — LAN remote control hub
     remote_session_id: str = "default",
+    gallery_public_http_base: Optional[str] = None,  # http(s) URL of gallery folder if TV opens file:///… (Hub/slides.json)
     apply_edits: bool = True,  # NEW: Apply non-destructive edits during export
     # Legacy parameters (deprecated, use profile instead)
     max_image_size: Optional[int] = None,
@@ -114,7 +228,7 @@ def export_gallery(
     
     Args:
         photo_paths: List of photo paths to include
-        output_dir: Output directory for gallery
+        output_dir: Web root for this export (index.html, slides.json, images/, …)
         title: Gallery title
         template: Template name (photoswipe, simple, slideshow)
         profile: Export profile (smart_tv, web, web_optimized, archive)
@@ -129,7 +243,7 @@ def export_gallery(
         thumbnail_size: (Deprecated) Use profile instead
         
     Returns:
-        Path to generated gallery directory
+        Path to generated gallery web root (same as output_dir when using flat layout)
         
     Profiles:
         - smart_tv: 4K quality for Samsung/LG TVs (3840×2160, Q92)
@@ -168,10 +282,35 @@ def export_gallery(
     _export_progress['step'] = 'setup'
     _export_progress['message'] = 'Creating directory structure...'
     
-    # Create directory structure
-    gallery_dir = output_dir / "gallery"
-    gallery_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    # Scratch dir for edit pipeline (removed after export); never mixed with web assets
+    temp_dir = output_dir / "_export_tmp"
+    legacy_gallery_root = output_dir / "gallery"
     
+    # Web root: flat under output_dir. Quick-update still accepts pre-change exports in output_dir/gallery/
+    if quick_update:
+        flat_images = output_dir / "images"
+        legacy_images = legacy_gallery_root / "images"
+        has_flat = _images_dir_has_export_jpegs(flat_images)
+        has_legacy = _images_dir_has_export_jpegs(legacy_images)
+        if has_flat:
+            gallery_dir = output_dir
+        elif has_legacy:
+            gallery_dir = legacy_gallery_root
+            logger.info("⚡ Quick update: using legacy layout %s", gallery_dir)
+        else:
+            logger.error(
+                "Quick update: no JPEGs in %s or %s (output_dir=%s)",
+                flat_images,
+                legacy_images,
+                output_dir.resolve(),
+            )
+            logger.error("Run a full export first, or disable Quick update, or fix export target path.")
+            raise ValueError("Quick update requires existing images. Run full export first.")
+    else:
+        gallery_dir = output_dir
+    
+    gallery_dir.mkdir(parents=True, exist_ok=True)
     images_dir = gallery_dir / "images"
     thumbs_dir = gallery_dir / "thumbnails"
     music_dir = gallery_dir / "music"
@@ -203,238 +342,234 @@ def export_gallery(
     total_jpeg_size = 0
     total_webp_size = 0
     
-    # ⚡ QUICK UPDATE MODE: Skip image processing, reuse existing images
-    if quick_update:
-        logger.info("⚡ QUICK UPDATE MODE: Reusing existing images, regenerating HTML only")
-        
-        # Check if images directory exists and has images
-        if not images_dir.exists() or not list(images_dir.glob("*.jpg")):
-            logger.error("Quick update failed: No existing images found!")
-            logger.error("Run a full export first before using quick update.")
-            raise ValueError("Quick update requires existing images. Run full export first.")
-        
-        existing_images = sorted(images_dir.glob("*.jpg"))
-        
-        logger.info(f"Found {len(existing_images)} existing images")
-        
-        for i, img_path in enumerate(existing_images):
-            if i >= len(photo_paths):
-                break  # Don't exceed the number of photos selected
-            
-            photo_path = photo_paths[i]
-            img_filename = img_path.name
-            thumb_filename = img_filename
-            
-            # Get image dimensions from existing file
-            try:
-                with Image.open(img_path) as img:
-                    width, height = img.size
-            except:
-                width, height = 1920, 1280  # Fallback dimensions
-            
-            # Get metadata if requested
-            metadata = {}
-            if include_metadata:
-                metadata = get_metadata(photo_path)
-            
-            # Build photo data entry
-            photo_entry = {
-                'src': f"images/{img_filename}",
-                'thumbnail': f"thumbnails/{thumb_filename}",
-                'width': width,
-                'height': height,
-                'title': photo_path.name,
-                'rating': metadata.get('rating', 0),
-                'color': metadata.get('color'),
-                'keywords': metadata.get('keywords', [])
-            }
-            
-            # Check for WebP versions
-            webp_img = images_dir / img_path.stem
-            webp_img = webp_img.with_suffix('.webp')
-            if webp_img.exists():
-                photo_entry['src_webp'] = f"images/{webp_img.name}"
-            
-            webp_thumb = thumbs_dir / img_path.stem
-            webp_thumb = webp_thumb.with_suffix('.webp')
-            if webp_thumb.exists():
-                photo_entry['thumbnail_webp'] = f"thumbnails/{webp_thumb.name}"
-            
-            photo_data.append(photo_entry)
-            slides_manifest.append(
-                _slide_manifest_entry(len(photo_data) - 1, photo_entry, photo_path)
-            )
-        
-        logger.info(f"⚡ Quick update: Reusing {len(photo_data)} existing images")
-        
-    else:
-        # NORMAL MODE: Process all photos        
-        _export_progress['step'] = 'processing'
+    index_path = gallery_dir / "index.html"
     
-        for i, photo_path in enumerate(photo_paths):
-            _export_progress['current'] = i + 1
-            _export_progress['message'] = f'Processing {photo_path.name}...'
-            try:
-                # Generate filenames
-                img_filename = f"{i:04d}.jpg"
-                thumb_filename = f"{i:04d}.jpg"
+    try:
+        if quick_update:
+            logger.info("⚡ QUICK UPDATE MODE: Reusing existing images, regenerating HTML only")
+            _export_progress['step'] = 'processing'
+            existing_images = _sorted_export_jpegs(images_dir)
+            logger.info(f"Found {len(existing_images)} existing images")
+            for i, img_path in enumerate(existing_images):
+                if i >= len(photo_paths):
+                    break
                 
-                img_path = images_dir / img_filename
-                thumb_path = thumbs_dir / thumb_filename
+                photo_path = photo_paths[i]
+                _export_progress['current'] = i + 1
+                _export_progress['message'] = f'Quick update: {photo_path.name}…'
+                img_filename = img_path.name
+                thumb_filename = img_filename
                 
-                # Apply edits if enabled and edits exist
-                source_for_export = photo_path
-                temp_edited_path = None
+                try:
+                    with Image.open(img_path) as img:
+                        width, height = img.size
+                except Exception:
+                    width, height = 1920, 1280
                 
-                if apply_edits:
-                    try:
-                        from .edits import get_edits, has_edits
-                        from ..image_processing import apply_all_edits as apply_image_edits
-                        
-                        if has_edits(photo_path):
-                            edits = get_edits(photo_path)
-                            
-                            # Apply edits to temporary file
-                            temp_edited_path = output_dir / f"temp_edited_{i:04d}.jpg"
-                            edited_img = apply_image_edits(photo_path, edits, output_format='pil')
-                            edited_img.save(temp_edited_path, quality=95)
-                            
-                            source_for_export = temp_edited_path
-                            logger.info(f"  ✨ Applied edits to {photo_path.name}")
-                    except ImportError:
-                        logger.warning("Image editing module not available, exporting originals")
-                    except Exception as e:
-                        logger.warning(f"Error applying edits to {photo_path.name}: {e}")
-                
-                # Optimize main image using profile
-                img_result = optimize_image(
-                    source_path=source_for_export,
-                    output_path=img_path,
-                    profile=export_profile,
-                    generate_webp=generate_webp
-                )
-                
-                # Generate optimized thumbnail (from already edited source if applicable)
-                # MUST be done BEFORE cleaning up temp file!
-                thumb_result = generate_optimized_thumbnail(
-                    source_path=source_for_export,  # Use same source as main image
-                    output_path=thumb_path,
-                    profile=export_profile,
-                    generate_webp=generate_webp
-                )
-                
-                # Clean up temp file if created (AFTER both main image and thumbnail are done!)
-                if temp_edited_path and temp_edited_path.exists():
-                    temp_edited_path.unlink()
-                
-                # Update size stats
-                total_original_size += img_result['original_size']
-                total_jpeg_size += img_result['jpeg_size']
-                if img_result['webp_size']:
-                    total_webp_size += img_result['webp_size']
-                
-                # Get metadata if requested
                 metadata = {}
                 if include_metadata:
                     metadata = get_metadata(photo_path)
                 
-                # Build photo data entry
                 photo_entry = {
                     'src': f"images/{img_filename}",
                     'thumbnail': f"thumbnails/{thumb_filename}",
-                    'width': img_result['width'],
-                    'height': img_result['height'],
+                    'width': width,
+                    'height': height,
                     'title': photo_path.name,
                     'rating': metadata.get('rating', 0),
                     'color': metadata.get('color'),
-                    'keywords': metadata.get('keywords', [])
+                    'keywords': metadata.get('keywords', []),
+                    'couch_rating': None,
+                    'couch_color': None,
                 }
                 
-                # Add WebP sources if generated
-                if img_result['webp_path']:
-                    photo_entry['src_webp'] = f"images/{i:04d}.webp"
-                if thumb_result['webp_path']:
-                    photo_entry['thumbnail_webp'] = f"thumbnails/{i:04d}.webp"
+                webp_img = images_dir / img_path.stem
+                webp_img = webp_img.with_suffix('.webp')
+                if webp_img.exists():
+                    photo_entry['src_webp'] = f"images/{webp_img.name}"
+                
+                webp_thumb = thumbs_dir / img_path.stem
+                webp_thumb = webp_thumb.with_suffix('.webp')
+                if webp_thumb.exists():
+                    photo_entry['thumbnail_webp'] = f"thumbnails/{webp_thumb.name}"
                 
                 photo_data.append(photo_entry)
                 slides_manifest.append(
                     _slide_manifest_entry(len(photo_data) - 1, photo_entry, photo_path)
                 )
-                
-                logger.debug(f"Processed {photo_path.name} - "
-                            f"JPEG: {img_result['jpeg_size']//1024}KB"
-                            + (f", WebP: {img_result['webp_size']//1024}KB" if img_result['webp_size'] else ""))
-                
-            except Exception as e:
-                logger.error(f"Failed to process {photo_path}: {e}")
-                continue
+            
+            logger.info(f"⚡ Quick update: Reusing {len(photo_data)} existing images")
+        
+        else:
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            _empty_slideshow_media_dirs(images_dir, thumbs_dir)
+            
+            _export_progress['step'] = 'processing'
+            for i, photo_path in enumerate(photo_paths):
+                _export_progress['current'] = i + 1
+                _export_progress['message'] = f'Processing {photo_path.name}...'
+                try:
+                    img_filename = f"{i:04d}.jpg"
+                    thumb_filename = f"{i:04d}.jpg"
+                    
+                    img_path = images_dir / img_filename
+                    thumb_path = thumbs_dir / thumb_filename
+                    
+                    source_for_export = photo_path
+                    temp_edited_path = None
+                    
+                    if apply_edits:
+                        try:
+                            from .edits import get_edits, has_edits
+                            from ..image_processing import apply_all_edits as apply_image_edits
+                            
+                            if has_edits(photo_path):
+                                edits = get_edits(photo_path)
+                                temp_edited_path = temp_dir / f"temp_edited_{i:04d}.jpg"
+                                edited_img = apply_image_edits(photo_path, edits, output_format='pil')
+                                edited_img.save(temp_edited_path, quality=95)
+                                source_for_export = temp_edited_path
+                                logger.info(f"  ✨ Applied edits to {photo_path.name}")
+                        except ImportError:
+                            logger.warning("Image editing module not available, exporting originals")
+                        except Exception as e:
+                            logger.warning(f"Error applying edits to {photo_path.name}: {e}")
+                    
+                    img_result = optimize_image(
+                        source_path=source_for_export,
+                        output_path=img_path,
+                        profile=export_profile,
+                        generate_webp=generate_webp
+                    )
+                    
+                    thumb_result = generate_optimized_thumbnail(
+                        source_path=source_for_export,
+                        output_path=thumb_path,
+                        profile=export_profile,
+                        generate_webp=generate_webp
+                    )
+                    
+                    if temp_edited_path and temp_edited_path.exists():
+                        temp_edited_path.unlink()
+                    
+                    total_original_size += img_result['original_size']
+                    total_jpeg_size += img_result['jpeg_size']
+                    if img_result['webp_size']:
+                        total_webp_size += img_result['webp_size']
+                    
+                    metadata = {}
+                    if include_metadata:
+                        metadata = get_metadata(photo_path)
+                    
+                    photo_entry = {
+                        'src': f"images/{img_filename}",
+                        'thumbnail': f"thumbnails/{thumb_filename}",
+                        'width': img_result['width'],
+                        'height': img_result['height'],
+                        'title': photo_path.name,
+                        'rating': metadata.get('rating', 0),
+                        'color': metadata.get('color'),
+                        'keywords': metadata.get('keywords', []),
+                        'couch_rating': None,
+                        'couch_color': None,
+                    }
+                    
+                    if img_result['webp_path']:
+                        photo_entry['src_webp'] = f"images/{i:04d}.webp"
+                    if thumb_result['webp_path']:
+                        photo_entry['thumbnail_webp'] = f"thumbnails/{i:04d}.webp"
+                    
+                    photo_data.append(photo_entry)
+                    slides_manifest.append(
+                        _slide_manifest_entry(len(photo_data) - 1, photo_entry, photo_path)
+                    )
+                    
+                    logger.debug(
+                        f"Processed {photo_path.name} - "
+                        f"JPEG: {img_result['jpeg_size']//1024}KB"
+                        + (f", WebP: {img_result['webp_size']//1024}KB" if img_result['webp_size'] else "")
+                    )
+                    
+                except Exception as e:
+                    logger.error(f"Failed to process {photo_path}: {e}")
+                    continue
+        
+        if photo_data:
+            _prune_unreferenced_gallery_media(gallery_dir, photo_data)
+        
+        if slides_manifest:
+            _merge_couch_from_existing_slides_json(gallery_dir, slides_manifest, photo_data)
+        
+        if template == "slideshow":
+            _ensure_splash_qr_vendor(gallery_dir)
+            mem_win = _slideshow_memory_window_for_profile(profile)
+            html = _generate_slideshow_html(
+                title=title,
+                photo_data=photo_data,
+                music_files=music_file_list,
+                music_autoplay=music_autoplay,
+                music_ducking_volume=music_ducking_volume,
+                slideshow_duration=slideshow_duration,
+                smart_tv_mode=smart_tv_mode,
+                splash_title=splash_title,
+                splash_subtitle=splash_subtitle,
+                memory_window_radius=mem_win,
+                remote_hub_ws_base=remote_hub_ws_base,
+                remote_session_id=remote_session_id,
+                gallery_public_http_base=gallery_public_http_base,
+            )
+        elif template == "photoswipe":
+            html = _generate_photoswipe_html(title, photo_data)
+        else:
+            html = _generate_simple_html(title, photo_data)
+        
+        _export_progress['step'] = 'finalizing'
+        _export_progress['message'] = 'Generating HTML...'
+        
+        index_path.write_text(html, encoding='utf-8')
+        
+        if slides_manifest:
+            manifest_path = gallery_dir / "slides.json"
+            manifest_body = {
+                "manifest_version": 1,
+                "title": title,
+                "exported_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "export_profile": profile,
+                "template": template,
+                "slide_count": len(slides_manifest),
+                "slides": slides_manifest,
+            }
+            manifest_path.write_text(
+                json.dumps(manifest_body, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            logger.info(f"Wrote manifest {manifest_path} ({len(slides_manifest)} slides)")
+        
+        _export_progress['status'] = 'complete'
+        _export_progress['message'] = 'Export complete!'
+        
+        if total_original_size > 0:
+            jpeg_ratio = (1 - total_jpeg_size / total_original_size) * 100
+            logger.info(f"Compression stats:")
+            logger.info(f"  Original: {total_original_size / 1024 / 1024:.1f} MB")
+            logger.info(f"  JPEG: {total_jpeg_size / 1024 / 1024:.1f} MB ({jpeg_ratio:.1f}% reduction)")
+            if total_webp_size > 0:
+                webp_ratio = (1 - total_webp_size / total_original_size) * 100
+                logger.info(f"  WebP: {total_webp_size / 1024 / 1024:.1f} MB ({webp_ratio:.1f}% reduction)")
+        
+        logger.info(f"Gallery exported successfully to {gallery_dir}")
+        logger.info(f"Profile: {export_profile.name}")
+        if music_file_list:
+            logger.info(f"Music tracks: {len(music_file_list)}")
+        logger.info(f"Open {index_path} in browser to view")
+        
+        return gallery_dir
     
-    # Generate HTML
-    if template == "slideshow":
-        mem_win = _slideshow_memory_window_for_profile(profile)
-        html = _generate_slideshow_html(
-            title=title,
-            photo_data=photo_data,
-            music_files=music_file_list,  # Use relative paths instead of absolute
-            music_autoplay=music_autoplay,
-            music_ducking_volume=music_ducking_volume,  # 🎚️ Pass ducking volume
-            slideshow_duration=slideshow_duration,
-            smart_tv_mode=smart_tv_mode,
-            splash_title=splash_title,        # 🎬 Pass custom splash title
-            splash_subtitle=splash_subtitle,   # 🎬 Pass custom splash subtitle
-            memory_window_radius=mem_win,
-            remote_hub_ws_base=remote_hub_ws_base,
-            remote_session_id=remote_session_id,
-        )
-    elif template == "photoswipe":
-        html = _generate_photoswipe_html(title, photo_data)
-    else:
-        html = _generate_simple_html(title, photo_data)
-    
-    # Write HTML file
-    _export_progress['step'] = 'finalizing'
-    _export_progress['message'] = 'Generating HTML...'
-    
-    index_path = gallery_dir / "index.html"
-    index_path.write_text(html, encoding='utf-8')
-    
-    if slides_manifest:
-        manifest_path = gallery_dir / "slides.json"
-        manifest_body = {
-            "manifest_version": 1,
-            "title": title,
-            "exported_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "export_profile": profile,
-            "template": template,
-            "slide_count": len(slides_manifest),
-            "slides": slides_manifest,
-        }
-        manifest_path.write_text(
-            json.dumps(manifest_body, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-        logger.info(f"Wrote manifest {manifest_path} ({len(slides_manifest)} slides)")
-    
-    _export_progress['status'] = 'complete'
-    _export_progress['message'] = 'Export complete!'
-    
-    # Log compression statistics
-    if total_original_size > 0:
-        jpeg_ratio = (1 - total_jpeg_size / total_original_size) * 100
-        logger.info(f"Compression stats:")
-        logger.info(f"  Original: {total_original_size / 1024 / 1024:.1f} MB")
-        logger.info(f"  JPEG: {total_jpeg_size / 1024 / 1024:.1f} MB ({jpeg_ratio:.1f}% reduction)")
-        if total_webp_size > 0:
-            webp_ratio = (1 - total_webp_size / total_original_size) * 100
-            logger.info(f"  WebP: {total_webp_size / 1024 / 1024:.1f} MB ({webp_ratio:.1f}% reduction)")
-    
-    logger.info(f"Gallery exported successfully to {gallery_dir}")
-    logger.info(f"Profile: {export_profile.name}")
-    if music_file_list:
-        logger.info(f"Music tracks: {len(music_file_list)}")
-    logger.info(f"Open {index_path} in browser to view")
-    
-    return gallery_dir
+    finally:
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def _generate_photoswipe_html(title: str, photos: List[Dict[str, Any]]) -> str:
@@ -791,6 +926,7 @@ def _generate_slideshow_html(
     memory_window_radius: int = 0,  # TV: only load nearby slides; 0 = legacy (all imgs)
     remote_hub_ws_base: Optional[str] = None,
     remote_session_id: str = "default",
+    gallery_public_http_base: Optional[str] = None,
 ) -> str:
     """Generate fullscreen slideshow template with music support (based on working GUI slideshow)"""
     
@@ -830,12 +966,24 @@ def _generate_slideshow_html(
     hub_ws = (remote_hub_ws_base or "").strip()
     remote_hub_literal = json.dumps(hub_ws) if hub_ws else "null"
     remote_session_literal = json.dumps((remote_session_id or "default").strip() or "default")
+    pub_http = (gallery_public_http_base or "").strip()
+    gallery_public_literal = json.dumps(pub_http) if pub_http else "null"
+    hub_disabled_banner = ""
+    if not hub_ws:
+        hub_disabled_banner = """
+    <div class=\"hub-disabled-banner\" role=\"status\">
+        <strong>LAN-Remote aus:</strong> Slideshow im Photo Tool erneut exportieren und dabei die
+        <strong>WebSocket-Adresse des Hubs</strong> eintragen (z.&nbsp;B. <code style=\"color:#fda\">ws://NAS-IP:8090/ws</code>),
+        dieselbe <strong>Sitzung</strong> wie auf dem Handy. Ohne diese URL: kein Handy-Steuerung, keine Galerie-URL, keine Bewertung-Sync.
+    </div>"""
 
     return f'''<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, must-revalidate, max-age=0" />
+    <meta http-equiv="Pragma" content="no-cache" />
     <title>{title}</title>
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
@@ -1013,6 +1161,44 @@ def _generate_slideshow_html(
             background: linear-gradient(135deg, #7c3aed, #db2777);
         }}
         
+        /* Couch / Tool rating readout (independent of .hide-controls) */
+        .slideshow-rating-hud {{
+            position: absolute;
+            bottom: 110px;
+            right: 24px;
+            z-index: 200;
+            min-width: 132px;
+            max-width: min(90vw, 300px);
+            background: rgba(0, 0, 0, 0.74);
+            backdrop-filter: blur(10px);
+            padding: 12px 16px;
+            border-radius: 12px;
+            font-size: 1rem;
+            line-height: 1.35;
+            color: #fff;
+            pointer-events: none;
+            box-shadow: 0 4px 28px rgba(0, 0, 0, 0.5);
+            transition: opacity 0.22s ease, transform 0.22s ease;
+        }}
+        .slideshow-rating-hud.slideshow-rating-hud--off {{
+            opacity: 0;
+            transform: translateY(10px);
+            visibility: hidden;
+        }}
+        .slideshow-rating-hud .rh-stars {{
+            color: #fbbf24;
+            letter-spacing: 1px;
+        }}
+        .slideshow-rating-hud .rh-color {{
+            display: inline-block;
+            width: 15px;
+            height: 15px;
+            border-radius: 50%;
+            margin-left: 12px;
+            vertical-align: middle;
+            border: 2px solid rgba(255, 255, 255, 0.45);
+        }}
+        
         .slideshow-settings {{
             display: flex;
             align-items: center;
@@ -1083,9 +1269,19 @@ def _generate_slideshow_html(
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            padding: 40px 20px;
+            padding: 16px 20px 20px;
             background: linear-gradient(to bottom, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.95) 100%);
-            gap: 30px;
+            gap: clamp(14px, 2.5vh, 24px);
+        }}
+
+        .splash-start-row {{
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            justify-content: center;
+            gap: clamp(18px, 4vw, 40px);
+            flex-wrap: wrap;
+            flex-shrink: 0;
         }}
         
         .splash-title {{
@@ -1101,7 +1297,7 @@ def _generate_slideshow_html(
             color: #ccc;
             text-align: center;
             text-shadow: 0 2px 10px rgba(0, 0, 0, 0.8);
-            margin-top: -15px;
+            margin-top: 0;
         }}
         
         .splash-play-btn {{
@@ -1128,6 +1324,49 @@ def _generate_slideshow_html(
         .splash-play-btn:active {{
             transform: scale(0.95);
         }}
+
+        .splash-qr-wrap {{
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            flex-shrink: 0;
+            max-width: min(200px, 38vw);
+        }}
+
+        .splash-qr-mount {{
+            min-width: 160px;
+            min-height: 160px;
+            max-width: min(220px, 42vw);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }}
+
+        .splash-qr-mount img,
+        .splash-qr-mount canvas {{
+            display: block;
+            border-radius: 10px;
+            background: #fff;
+            padding: 4px;
+        }}
+
+        .splash-qr-hint {{
+            font-size: 0.68rem;
+            color: #888;
+            text-align: center;
+            max-width: 200px;
+            line-height: 1.25;
+        }}
+
+        .splash-qr-link {{
+            font-size: 0.72rem;
+            color: #c4b5fd;
+            word-break: break-all;
+            max-width: 200px;
+            text-align: center;
+        }}
         
         @media (max-width: 768px) {{
             .splash-title {{
@@ -1149,9 +1388,65 @@ def _generate_slideshow_html(
                 gap: 25px;
             }}
         }}
+
+        /* LAN-Remote-Hub Status (nur wenn Export Hub-URL gesetzt hat) */
+        .remote-hub-led-wrap {{
+            position: fixed;
+            bottom: 16px;
+            right: 16px;
+            z-index: 10000;
+            display: none;
+            align-items: center;
+            gap: 8px;
+            background: rgba(0, 0, 0, 0.55);
+            padding: 8px 12px;
+            border-radius: 10px;
+            font-size: 0.8rem;
+            color: #ddd;
+            pointer-events: none;
+        }}
+        .remote-hub-led-wrap .led {{
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }}
+        .led-muted {{ background: #555; }}
+        .led-wait {{ background: #f90; box-shadow: 0 0 8px #f90; animation: remoteLedPulse 1.2s ease-in-out infinite; }}
+        .led-ok {{ background: #3c3; box-shadow: 0 0 8px #3c3; }}
+        .led-err {{ background: #c33; box-shadow: 0 0 6px #c33; }}
+        @keyframes remoteLedPulse {{
+            0%, 100% {{ opacity: 1; }}
+            50% {{ opacity: 0.45; }}
+        }}
+        .remote-hub-led-text {{ max-width: 200px; line-height: 1.25; }}
+        .hub-disabled-banner {{
+            position: fixed;
+            top: 12px;
+            left: 12px;
+            right: 12px;
+            z-index: 10001;
+            background: rgba(120, 30, 30, 0.92);
+            color: #fff;
+            padding: 12px 14px;
+            border-radius: 10px;
+            font-size: 0.88rem;
+            line-height: 1.45;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        }}
+        .hub-disabled-banner code {{ font-size: 0.85rem; }}
     </style>
 </head>
 <body>
+{hub_disabled_banner}
+    <div id="fileGalleryHttpHint" class="hub-disabled-banner" style="display:none;background:rgba(100,65,20,0.93);border:1px solid rgba(255,200,120,0.35);">
+        <strong>file:// / lokaler Pfad:</strong> Beim Export im Photo-Tool die <strong>öffentliche http(s)-URL dieser Galerie</strong> eintragen (NAS, Ordner mit <code>index.html</code>), sonst kann das Handy <code>slides.json</code> nicht per Hub laden.
+    </div>
+    <div id="remoteHubLedWrap" class="remote-hub-led-wrap" aria-live="polite">
+        <span class="remote-hub-led-label">LAN-Remote</span>
+        <span id="remoteHubLed" class="led led-muted" title="Hub-Verbindung"></span>
+        <span id="remoteHubLedText" class="remote-hub-led-text"></span>
+    </div>
     <!-- 🎬 Splash Screen with Custom Photo -->
     <div class="splash-screen" id="splashScreen">
         <div class="splash-background">
@@ -1161,9 +1456,16 @@ def _generate_slideshow_html(
         </div>
         <div class="splash-content">
             <div class="splash-title">{splash_title}</div>
-            <button class="splash-play-btn" onclick="startSlideshow()" title="Start Slideshow">
-                ▶️
-            </button>
+            <div class="splash-start-row">
+                <button class="splash-play-btn" onclick="startSlideshow()" title="Start Slideshow">
+                    ▶️
+                </button>
+                <div id="splashQrWrap" class="splash-qr-wrap">
+                    <div id="splashQrMount" class="splash-qr-mount" aria-label="QR Fernbedienung"></div>
+                    <a id="splashQrFallbackLink" class="splash-qr-link" href="#" target="_blank" rel="noopener"></a>
+                    <div class="splash-qr-hint">QR scannen oder Link (WLAN)</div>
+                </div>
+            </div>
             <div class="splash-subtitle">{splash_subtitle}</div>
         </div>
     </div>
@@ -1187,6 +1489,8 @@ def _generate_slideshow_html(
         <div class="slideshow-main">
             <!-- Images will be added by JavaScript -->
         </div>
+        
+        <div id="ratingHud" class="slideshow-rating-hud slideshow-rating-hud--off" aria-live="polite"></div>
         
         <div class="slideshow-footer">
             <div class="slideshow-progress">
@@ -1236,6 +1540,21 @@ def _generate_slideshow_html(
     
     <script>
         const photos = {photos_json};
+
+        function effectiveRating(photo) {{
+            if (!photo) return 0;
+            const cr = photo.couch_rating;
+            if (cr !== undefined && cr !== null) return Math.max(0, Math.min(5, Number(cr)));
+            return Math.max(0, Math.min(5, Number(photo.rating || 0)));
+        }}
+
+        function effectiveColor(photo) {{
+            if (!photo) return null;
+            const cc = photo.couch_color;
+            if (cc !== undefined && cc !== null && cc !== '') return cc;
+            return photo.color != null ? photo.color : null;
+        }}
+
         let currentIndex = 0;
         let isPlaying = true;
         let isLooping = true;
@@ -1244,16 +1563,290 @@ def _generate_slideshow_html(
         let slideInterval = null;
         let slideDuration = {slideshow_duration * 1000};
 
+        const MIN_COUCH_STARS_AUTOPLAY = (function () {{
+            try {{
+                const raw = new URLSearchParams(location.search).get('min_couch_stars');
+                if (raw == null || raw === '') return 0;
+                const n = parseInt(raw, 10);
+                if (isNaN(n)) return 0;
+                return Math.max(0, Math.min(5, n));
+            }} catch (e) {{ return 0; }}
+        }})();
+
+        function slideEligibleForAutoplay(i) {{
+            if (MIN_COUCH_STARS_AUTOPLAY <= 0) return true;
+            const p = photos[i];
+            if (!p) return false;
+            return effectiveRating(p) >= MIN_COUCH_STARS_AUTOPLAY;
+        }}
+
+        function nextSlideFilteredForAutoplay() {{
+            if (MIN_COUCH_STARS_AUTOPLAY <= 0) {{
+                nextSlide();
+                return;
+            }}
+            for (let k = currentIndex + 1; k < photos.length; k++) {{
+                if (slideEligibleForAutoplay(k)) {{
+                    currentIndex = k;
+                    updateDisplay();
+                    return;
+                }}
+            }}
+            if (isLooping) {{
+                for (let k = 0; k < currentIndex; k++) {{
+                    if (slideEligibleForAutoplay(k)) {{
+                        currentIndex = k;
+                        updateDisplay();
+                        return;
+                    }}
+                }}
+            }}
+            nextSlide();
+        }}
+
+        const RATING_HUD_LS_KEY = 'photoSlideshowRatingHudVisible';
+        const COLOR_LABEL_HEX = {{ "red": "#e11", "yellow": "#f5c518", "green": "#22bb44", "blue": "#2563eb", "purple": "#a855f7" }};
+        let ratingHudVisible = localStorage.getItem(RATING_HUD_LS_KEY) === '1';
+
+        function setRatingHudVisible(on) {{
+            ratingHudVisible = !!on;
+            localStorage.setItem(RATING_HUD_LS_KEY, ratingHudVisible ? '1' : '0');
+            applyRatingHudVisibility();
+        }}
+
+        function applyRatingHudVisibility() {{
+            const hud = document.getElementById('ratingHud');
+            if (!hud) return;
+            hud.classList.toggle('slideshow-rating-hud--off', !ratingHudVisible);
+            if (ratingHudVisible) syncRatingHudContent();
+        }}
+
+        function syncRatingHudContent() {{
+            const hud = document.getElementById('ratingHud');
+            if (!hud || !ratingHudVisible) return;
+            const p = photos[currentIndex];
+            if (!p) {{ hud.innerHTML = ''; return; }}
+            const r = effectiveRating(p);
+            const c = effectiveColor(p);
+            let html = '';
+            if (r > 0) {{
+                html += '<span class="rh-stars">' + '★'.repeat(r) + '☆'.repeat(5 - r) + '</span>';
+            }} else {{
+                html += '<span class="rh-stars" style="opacity:0.5">—</span>';
+            }}
+            if (c && COLOR_LABEL_HEX[c]) {{
+                html += '<span class="rh-color" style="background:' + COLOR_LABEL_HEX[c] + '" title="' + c + '"></span>';
+            }}
+            hud.innerHTML = html;
+        }}
+
         const REMOTE_HUB_WS_BASE = {remote_hub_literal};
         const REMOTE_SESSION_ID = {remote_session_literal};
+        const GALLERY_PUBLIC_HTTP_BASE = {gallery_public_literal};
+        const TV_INSTANCE_ID = (typeof crypto !== 'undefined' && crypto.randomUUID)
+            ? crypto.randomUUID()
+            : ('tv-' + String(Date.now()) + '-' + String(Math.random()).slice(2, 10));
+        let TV_STATE_SEQ = 0;
         let remoteWs = null;
         let remoteReconnectTimer = null;
+        const REMOTE_HUB_DEBUG = typeof URLSearchParams !== 'undefined' &&
+            new URLSearchParams(location.search).get('remoteDebug') === '1';
+
+        function remoteHubLog() {{
+            if (REMOTE_HUB_DEBUG && typeof console !== 'undefined' && console.log) {{
+                console.log.apply(console, ['[remote-hub]'].concat([].slice.call(arguments)));
+            }}
+        }}
+
+        function showBlindTapFeedback(quadrant) {{
+            const map = {{ LU: [0.14, 0.22], LD: [0.14, 0.78], RU: [0.86, 0.22], RD: [0.86, 0.78] }};
+            const pos = map[quadrant];
+            if (!pos) return;
+            let el = document.getElementById('blindTapFlash');
+            if (!el) {{
+                el = document.createElement('div');
+                el.id = 'blindTapFlash';
+                el.setAttribute('aria-hidden', 'true');
+                document.body.appendChild(el);
+            }}
+            const vmin = Math.min(window.innerWidth, window.innerHeight);
+            const d = Math.round(vmin * 0.15);
+            el.style.cssText = 'pointer-events:none;position:fixed;z-index:9998;border-radius:50%;'
+                + 'left:' + Math.round(pos[0] * window.innerWidth - d / 2) + 'px;'
+                + 'top:' + Math.round(pos[1] * window.innerHeight - d / 2) + 'px;'
+                + 'width:' + d + 'px;height:' + d + 'px;'
+                + 'background:radial-gradient(circle,rgba(124,58,237,0.9) 0%,rgba(34,187,68,0.55) 40%,transparent 72%);'
+                + 'opacity:1;transform:scale(1);transition:none;box-shadow:0 0 24px rgba(124,58,237,0.4);';
+            requestAnimationFrame(function () {{
+                el.style.transition = 'opacity 0.5s ease-out, transform 0.5s ease-out';
+                el.style.opacity = '0';
+                el.style.transform = 'scale(1.4)';
+            }});
+            setTimeout(function () {{
+                el.style.transition = 'none';
+                el.style.opacity = '0';
+                el.style.transform = 'scale(1)';
+            }}, 520);
+        }}
+
+        function syncRemoteHubLedWrap() {{
+            const wrap = document.getElementById('remoteHubLedWrap');
+            if (!wrap) return;
+            wrap.style.display = REMOTE_HUB_WS_BASE ? 'flex' : 'none';
+        }}
+
+        function setRemoteHubLed(kind, text) {{
+            const led = document.getElementById('remoteHubLed');
+            const el = document.getElementById('remoteHubLedText');
+            if (!led) return;
+            const cls = ({{ connecting: 'led-wait', open: 'led-ok', closed: 'led-muted', error: 'led-err' }})[kind] || 'led-muted';
+            led.className = 'led ' + cls;
+            if (el != null && text != null) el.textContent = text;
+        }}
 
         function remoteHubWsUrl() {{
             if (!REMOTE_HUB_WS_BASE) return null;
             const base = String(REMOTE_HUB_WS_BASE).replace(/\\/+$/, '');
             const sid = encodeURIComponent(REMOTE_SESSION_ID || 'default');
             return base + '/' + sid;
+        }}
+
+        function getGalleryBaseUrl() {{
+            try {{
+                const u = new URL(window.location.href);
+                const fileOrOpaque = u.protocol === 'file:' || !u.origin || u.origin === 'null';
+                if (fileOrOpaque) {{
+                    if (GALLERY_PUBLIC_HTTP_BASE) {{
+                        return String(GALLERY_PUBLIC_HTTP_BASE).trim().replace(/\\/+$/, '') + '/';
+                    }}
+                    return '';
+                }}
+                let p = u.pathname || '/';
+                if (p.endsWith('/index.html')) {{
+                    p = p.slice(0, -10);
+                }}
+                if (!p.endsWith('/')) {{
+                    const i = p.lastIndexOf('/');
+                    p = i >= 0 ? p.slice(0, i + 1) : '/';
+                }}
+                if (!p.endsWith('/')) p += '/';
+                return u.origin + p;
+            }} catch (e) {{
+                return '';
+            }}
+        }}
+
+        function hubHttpOriginFromWs(wsBase) {{
+            if (!wsBase) return '';
+            try {{
+                const u = new URL(String(wsBase).trim());
+                const proto = u.protocol === 'wss:' ? 'https:' : 'http:';
+                return proto + '//' + u.host;
+            }} catch (e) {{
+                return '';
+            }}
+        }}
+
+        function buildRemoteInviteUrl() {{
+            if (!REMOTE_HUB_WS_BASE) return '';
+            const root = hubHttpOriginFromWs(REMOTE_HUB_WS_BASE);
+            if (!root) return '';
+            const g = getGalleryBaseUrl();
+            if (!g) return '';
+            const p = new URLSearchParams();
+            p.set('session', REMOTE_SESSION_ID || 'default');
+            p.set('gallery', g);
+            const hubWs = String(REMOTE_HUB_WS_BASE).trim().replace(/\\/+$/, '');
+            if (hubWs) p.set('hubWs', hubWs);
+            return root + '/remote?' + p.toString();
+        }}
+
+        function splashQrVendorScriptUrl() {{
+            try {{
+                return new URL('vendor/qrcode.min.js', window.location.href).href;
+            }} catch (e) {{
+                return 'vendor/qrcode.min.js';
+            }}
+        }}
+
+        function renderSplashRemoteQr() {{
+            const wrap = document.getElementById('splashQrWrap');
+            const mount = document.getElementById('splashQrMount');
+            const link = document.getElementById('splashQrFallbackLink');
+            if (!wrap || !mount) return;
+            const invite = buildRemoteInviteUrl();
+            if (!invite) {{
+                wrap.style.display = 'none';
+                remoteHubLog('splash QR skipped (no invite)', REMOTE_HUB_WS_BASE, getGalleryBaseUrl());
+                return;
+            }}
+            wrap.style.display = 'flex';
+            if (link) {{
+                link.href = invite;
+                link.textContent = 'Remote öffnen · Link';
+            }}
+            const hintEl = wrap.querySelector('.splash-qr-hint');
+            if (hintEl) {{
+                hintEl.textContent = 'QR scannen oder Link (WLAN)';
+            }}
+            const setQrLoadFailed = function () {{
+                mount.innerHTML = '';
+                if (link) {{
+                    link.textContent = 'Remote öffnen · Link (QR-Skript fehlt — Datei vendor/qrcode.min.js prüfen oder Link antippen)';
+                }}
+                if (hintEl) {{
+                    hintEl.textContent = 'Mit neu exportierter Galerie liegt das Skript unter gleichem Ordner wie index.html (vendor/). Sonst Link nutzen.';
+                }}
+            }};
+            const draw = function () {{
+                try {{
+                    if (typeof QRCode === 'undefined') return;
+                    mount.innerHTML = '';
+                    new QRCode(mount, {{
+                        text: invite,
+                        width: 200,
+                        height: 200,
+                        colorDark: '#1a1a2e',
+                        colorLight: '#ffffff',
+                        correctLevel: QRCode.CorrectLevel.M
+                    }});
+                    /* qrcodejs calls makeImage() → <img src="data:...">; many TV browsers show a blank image. Prefer canvas. */
+                    setTimeout(function () {{
+                        const c = mount.querySelector('canvas');
+                        const im = mount.querySelector('img');
+                        if (c) {{
+                            c.style.display = 'block';
+                            c.style.maxWidth = '100%';
+                            c.style.height = 'auto';
+                        }}
+                        if (im && c) {{
+                            im.style.display = 'none';
+                        }} else if (im && (!im.complete || im.naturalWidth === 0)) {{
+                            im.style.display = 'none';
+                        }}
+                    }}, 0);
+                }} catch (e) {{
+                    console.warn('QR', e);
+                    setQrLoadFailed();
+                }}
+            }};
+            if (typeof QRCode !== 'undefined') {{
+                draw();
+                return;
+            }}
+            const scr = document.createElement('script');
+            scr.src = splashQrVendorScriptUrl();
+            scr.async = true;
+            scr.onload = draw;
+            scr.onerror = function () {{
+                const scr2 = document.createElement('script');
+                scr2.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
+                scr2.async = true;
+                scr2.onload = draw;
+                scr2.onerror = setQrLoadFailed;
+                document.head.appendChild(scr2);
+            }};
+            document.head.appendChild(scr);
         }}
 
         function sendRemoteState() {{
@@ -1263,25 +1856,34 @@ def _generate_slideshow_html(
                     type: 'state',
                     index: currentIndex,
                     total: photos.length,
-                    playing: isPlaying
+                    playing: isPlaying,
+                    gallery_base: getGalleryBaseUrl(),
+                    tv_instance: TV_INSTANCE_ID,
+                    state_seq: ++TV_STATE_SEQ
                 }}));
             }} catch (e) {{}}
         }}
 
         function connectRemoteHub() {{
             const url = remoteHubWsUrl();
+            syncRemoteHubLedWrap();
             if (!url) return;
+            setRemoteHubLed('connecting', 'verbinde…');
             if (remoteReconnectTimer) {{
                 clearTimeout(remoteReconnectTimer);
                 remoteReconnectTimer = null;
             }}
             try {{
+                remoteHubLog('connecting', url);
                 remoteWs = new WebSocket(url);
             }} catch (e) {{
+                remoteHubLog('connect error', e);
+                setRemoteHubLed('error', 'WebSocket-Fehler');
                 remoteReconnectTimer = setTimeout(connectRemoteHub, 3000);
                 return;
             }}
             remoteWs.onopen = function () {{
+                setRemoteHubLed('open', 'Hub verbunden');
                 try {{
                     remoteWs.send(JSON.stringify({{ type: 'hello', role: 'tv' }}));
                 }} catch (err) {{}}
@@ -1290,20 +1892,58 @@ def _generate_slideshow_html(
             remoteWs.onmessage = function (ev) {{
                 try {{
                     const msg = JSON.parse(ev.data);
+                    if (msg.type === 'rated' && msg.ok && msg.slide_index != null) {{
+                        const ri = msg.slide_index;
+                        if (ri >= 0 && ri < photos.length) {{
+                            if (msg.couch_rating !== undefined) photos[ri].couch_rating = msg.couch_rating;
+                            if (msg.couch_color !== undefined) photos[ri].couch_color = msg.couch_color;
+                            if (ri === currentIndex) updateDisplay();
+                        }}
+                        return;
+                    }}
+                    if (msg.type === 'hello' && msg.role === 'remote') {{
+                        sendRemoteState();
+                        return;
+                    }}
                     if (msg.type !== 'cmd') return;
                     if (msg.from === 'tv') return;
+                    remoteHubLog('cmd', msg.action, msg);
                     const act = msg.action;
-                    if (act === 'next') {{ nextSlide(); showControlsTemporarily(); }}
-                    else if (act === 'prev') {{ prevSlide(); showControlsTemporarily(); }}
-                    else if (act === 'toggle') {{ togglePlay(); showControlsTemporarily(); }}
+                    if (act === 'next') {{ pauseAutoplayForManualNavigation(); nextSlide(); }}
+                    else if (act === 'prev') {{ pauseAutoplayForManualNavigation(); prevSlide(); }}
+                    else if (act === 'toggle') {{ togglePlay(); }}
                     else if (act === 'goto' && msg.index != null) {{
                         const idx = parseInt(msg.index, 10);
-                        if (!isNaN(idx)) {{ jumpToSlide(idx); showControlsTemporarily(); }}
+                        if (!isNaN(idx) && idx >= 0 && idx < photos.length) {{
+                            pauseAutoplayForManualNavigation();
+                            currentIndex = idx;
+                            updateDisplay();
+                        }}
+                    }}
+                    else if (act === 'hide_chrome' || act === 'hide_controls') {{
+                        clearTimeout(hideControlsTimeout);
+                        slideshow.classList.add('hide-controls');
+                    }}
+                    else if (act === 'show_chrome' || act === 'show_controls') {{
+                        showControlsTemporarily();
+                    }}
+                    else if (act === 'toggle_chrome' || act === 'toggle_controls') {{
+                        toggleControlsVisibility();
+                    }}
+                    else if (act === 'toggle_rating_hud') {{ setRatingHudVisible(!ratingHudVisible); }}
+                    else if (act === 'show_rating_hud') {{ setRatingHudVisible(true); }}
+                    else if (act === 'hide_rating_hud') {{ setRatingHudVisible(false); }}
+                    else if (act === 'blind_tap' && msg.quadrant) {{
+                        showBlindTapFeedback(String(msg.quadrant).toUpperCase());
                     }}
                 }} catch (e) {{}}
             }};
+            remoteWs.onerror = function () {{
+                setRemoteHubLed('error', 'Hub nicht erreichbar');
+            }};
             remoteWs.onclose = function () {{
                 remoteWs = null;
+                setRemoteHubLed('closed', 'getrennt, neu …');
                 remoteReconnectTimer = setTimeout(connectRemoteHub, 3000);
             }};
         }}
@@ -1391,6 +2031,7 @@ def _generate_slideshow_html(
             prevBtn.disabled = currentIndex === 0 && !isLooping;
             nextBtn.disabled = currentIndex === photos.length - 1 && !isLooping;
             sendRemoteState();
+            syncRatingHudContent();
         }}
         
         function nextSlide() {{
@@ -1436,7 +2077,7 @@ def _generate_slideshow_html(
         function startAutoplay() {{
             stopSlideshow();
             slideInterval = setInterval(() => {{
-                nextSlide();
+                nextSlideFilteredForAutoplay();
                 if (!isLooping && currentIndex === photos.length - 1) {{
                     stopSlideshow();
                     isPlaying = false;
@@ -1450,6 +2091,15 @@ def _generate_slideshow_html(
                 clearInterval(slideInterval);
                 slideInterval = null;
             }}
+        }}
+
+        /** Remote next/prev/goto while autoplay was on otherwise advances in the background and state desyncs from what you see. */
+        function pauseAutoplayForManualNavigation() {{
+            stopSlideshow();
+            isPlaying = false;
+            playBtn.textContent = '▶️ Play';
+            const bm = document.getElementById('bgMusic');
+            if (bm) bm.volume = MUSIC_DUCKING_VOLUME;
         }}
         
         function changeSpeed() {{
@@ -1720,6 +2370,17 @@ def _generate_slideshow_html(
         
         // Initialize display
         updateDisplay();
+        applyRatingHudVisibility();
+        renderSplashRemoteQr();
+        (function showFileGalleryHttpHint() {{
+            try {{
+                const u = new URL(window.location.href);
+                const need = u.protocol === 'file:' || !u.origin || u.origin === 'null';
+                const h = document.getElementById('fileGalleryHttpHint');
+                if (h && need && REMOTE_HUB_WS_BASE && !GALLERY_PUBLIC_HTTP_BASE) h.style.display = 'block';
+            }} catch (e) {{}}
+        }})();
+        syncRemoteHubLedWrap();
         connectRemoteHub();
         
         // Generated: {now}

@@ -23,6 +23,8 @@ services:
     restart: unless-stopped
     ports:
       - "8090:8090"
+    # environment:
+    #   SLIDESHUB_GALLERY_PATH_MAP: '{"http://192.168.0.100:8080":"/volume1/web"}'
     # Uncomment so /api/rate can write sidecars next to originals (paths in slides.json must match inside container):
     # volumes:
     #   - /volume1/photos:/photos:rw

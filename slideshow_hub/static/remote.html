@@ -45,6 +45,54 @@
     .colors button[data-c="purple"] { background: #a4e; }
     .colors button[data-c="clear"] { background: #444; flex: 1 1 100%; border-radius: 8px; }
     .hint { font-size: 0.8rem; opacity: 0.7; margin-top: 16px; line-height: 1.4; }
+    .conn-row {
+      display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+      margin-top: 12px; padding: 10px 12px; background: #1a1a1a; border-radius: 8px; font-size: 0.85rem;
+    }
+    .conn-item { display: flex; align-items: center; gap: 8px; }
+    .led {
+      width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
+      background: #444;
+      transition: background 0.2s, box-shadow 0.2s;
+    }
+    .led.on { background: #2b4; box-shadow: 0 0 8px #2b4; }
+    .led.warn { background: #fa0; box-shadow: 0 0 8px #fa0; }
+    .led.err { background: #c22; box-shadow: 0 0 6px #c22; }
+    .led.off { background: #444; }
+    #blindRatingOverlay {
+      position: fixed; inset: 0; z-index: 100000;
+      background: #070708; display: none; flex-direction: column;
+      touch-action: none; font-family: system-ui, sans-serif;
+    }
+    #blindRatingOverlay.open { display: flex; }
+    .br-main { flex: 1; display: flex; min-height: 0; }
+    .br-strip {
+      width: 28%; display: flex; flex-direction: column; min-width: 0;
+    }
+    .br-mid { flex: 1; min-width: 0; }
+    .br-zone {
+      flex: 1; background: #14141c; border: 1px solid #2a2a38;
+      display: flex; align-items: center; justify-content: center;
+      color: #666; font-size: 0.75rem; user-select: none;
+    }
+    .br-zone:active, .br-zone.br-pressed { background: #222230; }
+    .br-footer {
+      flex-shrink: 0; padding: 10px;
+      padding-bottom: max(12px, env(safe-area-inset-bottom));
+      display: flex; justify-content: center; align-items: center; gap: 12px;
+      background: #0a0a10; border-top: 1px solid #222;
+    }
+    #brExit {
+      padding: 12px 28px; border: none; border-radius: 10px;
+      background: #444; color: #fff; font-size: 1rem; cursor: pointer;
+    }
+    #brFsOptional {
+      padding: 10px 18px; border: 1px solid #555; border-radius: 10px;
+      background: transparent; color: #aaa; font-size: 0.85rem; cursor: pointer;
+    }
+    .filter-row { margin-top: 10px; align-items: flex-end; }
+    .filter-row label { font-size: 0.8rem; opacity: 0.9; margin-top: 0; }
+    .filter-row select { margin-top: 4px; padding: 8px; }
   </style>
 </head>
 <body>
@@ -56,18 +104,61 @@
   <label>Sitzung (identisch zur Slideshow)</label>
   <input id="session" type="text" value="default" autocomplete="off" />
 
-  <label>Galerie-Basis-URL (Ordner mit index.html + slides.json)</label>
-  <input id="galleryBase" type="text" placeholder="http://192.168.0.100:8080/mera-peak/" autocomplete="off" />
+  <label>Galerie-Basis-URL <span style="opacity:0.75">(optional — Hub nutzt sonst die zuletzt vom TV gemeldete URL gleicher Sitzung)</span></label>
+  <input id="galleryBase" type="text" placeholder="leer lassen, wenn TV Slideshow mit Hub verbunden hat" autocomplete="off" />
+  <div class="row" style="margin-top: 8px;">
+    <button type="button" id="btnGalleryFromTv" title="URL ins Feld kopieren (Anzeige/Manual-Fallback)">URL vom TV ins Feld</button>
+    <button type="button" id="btnResetTvSource" title="Wenn die Foliennummer springt: zweiter Slideshow-Tab oder alte TV-Verbindung — Quelle neu sperren">Folien-Anzeige neu fangen</button>
+  </div>
 
   <div class="row">
     <button type="button" class="primary" id="btnConnect">Verbinden</button>
     <button type="button" id="btnDisconnect">Trennen</button>
   </div>
 
+  <div class="conn-row" id="connRow" title="Grün Hub = mit Server verbunden. Grün TV = Slideshow meldet Folie (state). Gelb TV = Hub ok, aber keine TV-Meldung (falsche Sitzung, alte index.html, oder TV offline).">
+    <div class="conn-item"><span class="led off" id="ledHub"></span> Hub</div>
+    <div class="conn-item"><span class="led off" id="ledTv"></span> TV / Slideshow</div>
+  </div>
+
   <div class="row">
     <button type="button" id="btnPrev">◀ Zurück</button>
     <button type="button" id="btnToggle">⏯</button>
     <button type="button" id="btnNext">Weiter ▶</button>
+  </div>
+
+  <h2 style="font-size:0.95rem;margin:18px 0 6px">TV-Leiste (Kopf/Fuß)</h2>
+  <div class="row">
+    <button type="button" id="btnChromeHide" title="Blendet Steuerleiste auf dem TV aus (Remote springt nicht mehr ein)">Leiste aus</button>
+    <button type="button" id="btnChromeShow">Leiste an</button>
+    <button type="button" id="btnChromeToggle">Leiste ⏏</button>
+  </div>
+  <div class="row">
+    <button type="button" class="primary" id="btnHudToggle" title="Sterne/Farbe unten rechts auf dem TV (wird pro Galerie-URL gespeichert)">Bewertung auf TV</button>
+  </div>
+
+  <h2 style="font-size:0.95rem;margin:18px 0 6px">Stern-Filter · Navigation</h2>
+  <div class="row filter-row">
+    <label style="flex:1;min-width:120px">Min. Sterne (Couch)
+      <select id="minStarsFilter">
+        <option value="0" selected>Alle (0+)</option>
+        <option value="1">≥ 1 ★</option>
+        <option value="2">≥ 2 ★</option>
+        <option value="3">≥ 3 ★</option>
+        <option value="4">≥ 4 ★</option>
+        <option value="5">5 ★</option>
+      </select>
+    </label>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:24px;cursor:pointer">
+      <input type="checkbox" id="filterNavEnabled" />
+      Nur gefilterte Folien (Vor/Zurück)
+    </label>
+  </div>
+  <div class="row">
+    <button type="button" id="btnReloadSlides">Manifest laden (slides.json)</button>
+  </div>
+  <div class="row">
+    <button type="button" class="primary" id="btnBlindRating" title="Große Rand-Touchflächen für Nutzung ohne aufs Display zu schauen">Fullscreen Rating</button>
   </div>
 
   <div class="status" id="status">Nicht verbunden.</div>
@@ -77,26 +168,141 @@
   <div class="colors" id="colors"></div>
 
   <p class="hint">
-    TV-Slideshow mit aktiviertem Remote-Hub muss dieselbe Sitzung und dieselbe Hub-URL nutzen.
-    Bewertungen schreiben nur, wenn der Hub die Pfade aus <code>slides.json</code> lesen kann (z.&nbsp;B. Hub auf NAS mit gemounteten Originalen).
+    TV-Slideshow mit aktiviertem Remote-Hub muss dieselbe Sitzung und dieselbe Hub-URL nutzen (<strong>Sitzung</strong> auch fürs Speichern der Couch-Bewertung per WebSocket an die TV-Seite).
+    Sterne/Farbe schreiben <strong>couch_rating</strong> / <strong>couch_color</strong> in die <code>slides.json</code> der Galerie auf dem NAS — der Hub benötigt <code>SLIDESHUB_GALLERY_PATH_MAP</code> (Mapping HTTP-Origin → Ordnerpfad auf dem Host).
+    Nach <strong>neu exportierter</strong> Slideshow (<code>index.html</code>): Vor/Zurück blendet die TV-Leiste nicht mehr automatisch ein; „Bewertung auf TV“ schaltet die Anzeige (wird im Browser gespeichert).
+    <strong>Galerie-URL (optional):</strong> Der Hub merkt sich pro Sitzung die zuletzt vom TV gemeldete Basis-URL (<code>state.gallery_base</code>). Bewerten geht dann mit <strong>leerem Feld</strong>, sobald die Slideshow auf dem TV mit demselben Hub + Sitzung verbunden ist. Manuelles Feld = Fallback oder andere Galerie.
+    <strong>Foliennummer springt?</strong> Nur <em>eine</em> Slideshow pro Sitzung öffnen (kein zweiter Tab / kein zweites Gerät mit derselben Session). Sonst „<strong>Folien-Anzeige neu fangen</strong>“ oder neu verbinden.
   </p>
+  <p class="hint" style="margin-top:12px;font-size:0.78rem;">
+    <strong>Couch ↔ Photo Tool:</strong> Bewertungen landen in <code>slides.json</code> der <em>Export-Galerie</em>. Ins Photo Tool kommen sie nur über das Export-Modal „Couch → Photo Tool“: <strong>Vorschau</strong> mit Pfad zur <code>slides.json</code> (oder Galeriewurzel), dann <strong>Übernehmen</strong> — nicht automatisch beim Medien-Reload.
+    Zuordnung über <code>source_path</code> je Folie (absolute Pfade vom Rechner, auf dem exportiert wurde); der PC mit dem Photo Tool muss dieselben Dateien unter diesen Pfaden sehen (Laufwerk <code>N:\\</code> o. ä.).
+  </p>
+
+  <div id="blindRatingOverlay" aria-hidden="true">
+    <div class="br-main">
+      <div class="br-strip br-left">
+        <div class="br-zone" data-q="LU" title="Sterne +1">★ +<br/>oben</div>
+        <div class="br-zone" data-q="LD" title="Sterne −1">★ −<br/>unten</div>
+      </div>
+      <div class="br-mid"></div>
+      <div class="br-strip br-right">
+        <div class="br-zone" data-q="RU" title="Weiter">▶<br/>oben</div>
+        <div class="br-zone" data-q="RD" title="Zurück">◀<br/>unten</div>
+      </div>
+    </div>
+    <div class="br-footer">
+      <button type="button" id="brFsOptional" title="Echter Browser-Vollbild (nach Nutzer-Geste)">Vollbild</button>
+      <button type="button" id="brExit">Beenden</button>
+    </div>
+  </div>
 
   <script>
     let ws = null;
     let currentIndex = 0;
     let totalSlides = 0;
+    let lastTvStateAt = 0;
+    let lastGalleryBaseFromTv = '';
+    let expectTvGalleryFill = false;
+    /** Nur state von einer TV-Tab-Instanz; sonst springt die Folienzeile bei zwei Tabs. */
+    let lockedTvInstance = null;
+    let lastAppliedStateSeq = -1;
+    var GALLERY_BASE_LS = 'slideshowRemoteGalleryBase';
+    let slidesCache = null;
+    let eligibleIndices = [];
+
+    function ensureHttpGalleryUrl(s) {
+      var u = String(s || '').trim();
+      if (!u) return '';
+      if (/^https?:\/\//i.test(u)) return u;
+      if (/^\/\//.test(u)) return 'http:' + u;
+      if (/^(file|data|blob):/i.test(u)) return u;
+      if (!/^[a-z][a-z0-9+.-]*:/i.test(u))
+        return 'http://' + u.replace(/^\/+/, '');
+      return u;
+    }
+
+    function normalizeGalleryBase(s) {
+      if (!s || !String(s).trim()) return '';
+      var u = ensureHttpGalleryUrl(String(s).trim());
+      return u.replace(/\/+$/, '') + '/';
+    }
+
+    function applyGalleryBaseInput(s) {
+      var el = document.getElementById('galleryBase');
+      if (!el) return;
+      var n = normalizeGalleryBase(s);
+      if (!n) return;
+      el.value = n;
+      try { localStorage.setItem(GALLERY_BASE_LS, n); } catch (e) {}
+    }
+
+    function applyRemoteQueryParams() {
+      try {
+        var q = new URLSearchParams(location.search);
+        var g = q.get('gallery');
+        var s = q.get('session');
+        var hub = q.get('hubWs');
+        if (g) applyGalleryBaseInput(g);
+        if (s) {
+          var sel = document.getElementById('session');
+          if (sel) sel.value = String(s).trim() || 'default';
+        }
+        if (hub) {
+          var hel = document.getElementById('hubWs');
+          if (hel) hel.value = String(hub).trim();
+        }
+      } catch (e) {}
+    }
+
+    applyRemoteQueryParams();
+
+    (function initGalleryBaseFromStorage() {
+      try {
+        var gel = document.getElementById('galleryBase');
+        if (gel && gel.value.trim()) return;
+        var saved = localStorage.getItem(GALLERY_BASE_LS);
+        if (saved && gel) gel.value = saved;
+      } catch (e) {}
+    })();
+
+    function refreshConnLeds() {
+      var hubOn = ws && ws.readyState === WebSocket.OPEN;
+      var hubConnecting = ws && ws.readyState === WebSocket.CONNECTING;
+      var hubEl = document.getElementById('ledHub');
+      if (hubEl) hubEl.className = 'led ' + (hubOn ? 'on' : hubConnecting ? 'warn' : 'off');
+      var tvEl = document.getElementById('ledTv');
+      if (!tvEl) return;
+      if (!hubOn) {
+        tvEl.className = 'led off';
+        return;
+      }
+      var age = lastTvStateAt ? (Date.now() - lastTvStateAt) : 999999;
+      if (lastTvStateAt && age < 5000) tvEl.className = 'led on';
+      else tvEl.className = 'led warn';
+    }
+
+    setInterval(refreshConnLeds, 800);
 
     function defaultHubWs() {
       const p = location.protocol === 'https:' ? 'wss:' : 'ws:';
       return p + '//' + location.host + '/ws';
     }
 
-    document.getElementById('hubWs').value = defaultHubWs();
+    (function initHubWsDefault() {
+      var hel = document.getElementById('hubWs');
+      if (hel && !hel.value.trim()) hel.value = defaultHubWs();
+    })();
 
     function slidesJsonUrl() {
       let b = document.getElementById('galleryBase').value.trim().replace(/\/+$/, '');
       if (!b) return '';
+      b = ensureHttpGalleryUrl(b).replace(/\/+$/, '');
       return b + '/slides.json';
+    }
+
+    function sessionIdForApi() {
+      return document.getElementById('session').value.trim() || 'default';
     }
 
     function setStatus(t) {
@@ -117,6 +323,9 @@
       ws = new WebSocket(url);
       ws.onopen = function () {
         setStatus('Verbunden: ' + url);
+        expectTvGalleryFill = true;
+        lockedTvInstance = null;
+        lastAppliedStateSeq = -1;
         ws.send(JSON.stringify({ type: 'hello', role: 'remote' }));
       };
       ws.onclose = function () { setStatus('Verbindung getrennt.'); };
@@ -125,9 +334,35 @@
         try {
           const msg = JSON.parse(ev.data);
           if (msg.type === 'state') {
+            if (msg.tv_instance && lockedTvInstance != null && msg.tv_instance !== lockedTvInstance) {
+              return;
+            }
+            if (msg.tv_instance && lockedTvInstance == null) {
+              lockedTvInstance = msg.tv_instance;
+            }
+            if (typeof msg.state_seq === 'number') {
+              if (msg.state_seq <= lastAppliedStateSeq) {
+                return;
+              }
+              lastAppliedStateSeq = msg.state_seq;
+            }
+            lastTvStateAt = Date.now();
             currentIndex = msg.index;
             totalSlides = msg.total || totalSlides;
-            setStatus('Folie ' + (currentIndex + 1) + ' / ' + totalSlides + (msg.playing ? ' ▶' : ' ⏸'));
+            var line = 'Folie ' + (currentIndex + 1) + ' / ' + totalSlides + (msg.playing ? ' ▶' : ' ⏸');
+            if (msg.gallery_base) {
+              lastGalleryBaseFromTv = msg.gallery_base;
+              var gbEl = document.getElementById('galleryBase');
+              if (gbEl && (!gbEl.value.trim() || expectTvGalleryFill)) {
+                applyGalleryBaseInput(msg.gallery_base);
+                line += ' · Galerie-URL vom TV';
+              }
+              expectTvGalleryFill = false;
+            } else if (expectTvGalleryFill) {
+              line += ' · Keine gallery_base – Slideshow auf NAS neu exportieren (Photo Tool)';
+              expectTvGalleryFill = false;
+            }
+            setStatus(line);
           }
           if (msg.type === 'rated' && msg.ok) {
             setStatus('Gespeichert: Folie ' + ((msg.slide_index != null ? msg.slide_index : currentIndex) + 1));
@@ -138,12 +373,38 @@
 
     document.getElementById('btnDisconnect').onclick = function () {
       if (ws) { ws.close(); ws = null; }
+      lastTvStateAt = 0;
       setStatus('Getrennt.');
     };
 
     document.getElementById('btnPrev').onclick = function () { sendCmd('prev'); };
     document.getElementById('btnNext').onclick = function () { sendCmd('next'); };
     document.getElementById('btnToggle').onclick = function () { sendCmd('toggle'); };
+
+    document.getElementById('btnChromeHide').onclick = function () { sendCmd('hide_chrome'); };
+    document.getElementById('btnChromeShow').onclick = function () { sendCmd('show_chrome'); };
+    document.getElementById('btnChromeToggle').onclick = function () { sendCmd('toggle_chrome'); };
+    document.getElementById('btnHudToggle').onclick = function () { sendCmd('toggle_rating_hud'); };
+
+    document.getElementById('btnResetTvSource').onclick = function () {
+      lockedTvInstance = null;
+      lastAppliedStateSeq = -1;
+      setStatus('TV-Quelle zurückgesetzt — nächste Folien-Meldung bestimmt die Anzeige neu.');
+    };
+
+    document.getElementById('btnGalleryFromTv').onclick = function () {
+      if (!lastGalleryBaseFromTv) {
+        setStatus('Noch keine TV-URL (Slideshow neu exportieren mit Hub, TV verbinden warten).');
+        return;
+      }
+      applyGalleryBaseInput(lastGalleryBaseFromTv);
+      setStatus('Galerie-URL gesetzt: ' + normalizeGalleryBase(lastGalleryBaseFromTv));
+    };
+
+    document.getElementById('galleryBase').addEventListener('change', function () {
+      var v = this.value.trim();
+      if (v) try { localStorage.setItem(GALLERY_BASE_LS, normalizeGalleryBase(v)); } catch (e) {}
+    });
 
     const starsEl = document.getElementById('stars');
     for (let s = 1; s <= 5; s++) {
@@ -172,8 +433,11 @@
 
     function rate(rating, color) {
       const url = slidesJsonUrl();
-      if (!url) { setStatus('Galerie-URL setzen (slides.json).'); return; }
-      const body = { slides_json_url: url, slide_index: currentIndex };
+      const body = {
+        slide_index: currentIndex,
+        session_id: sessionIdForApi()
+      };
+      if (url) body.slides_json_url = url;
       if (rating != null) body.rating = rating;
       if (color != null) body.color = color;
       fetch(location.origin + '/api/rate', {
@@ -183,7 +447,11 @@
       })
         .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
         .then(function (x) {
-          if (!x.ok) throw new Error(x.j.detail || JSON.stringify(x.j));
+          if (!x.ok) {
+            var d = x.j.detail;
+            if (Array.isArray(d)) d = d.map(function (e) { return e.msg || e; }).join('; ');
+            throw new Error(d || JSON.stringify(x.j));
+          }
           setStatus('Bewertung: Folie ' + (currentIndex + 1) + ' ✓');
         })
         .catch(function (e) { setStatus('Fehler: ' + e.message); });

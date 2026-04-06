@@ -9,6 +9,14 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 from ..util.logging import get_logger
+from ..actions.rating import get_rating
+from .rating_layers import (
+    normalize_rating_layer,
+    RATING_LAYER_GLOBAL,
+    RATING_LAYER_PROJECT,
+    RATING_LAYER_COUCH,
+    DEFAULT_RATING_LAYER,
+)
 
 logger = get_logger("project_sidecar")
 
@@ -51,61 +59,153 @@ class ProjectSidecarManager:
             logger.error(f"Failed to load project sidecar {sidecar_path}: {e}")
             return None
     
-    def merge_metadata(self, global_meta: Dict[str, Any], photo_path: Path) -> Dict[str, Any]:
+    def merge_metadata(
+        self,
+        global_meta: Dict[str, Any],
+        photo_path: Path,
+        *,
+        active_rating_layer: str = DEFAULT_RATING_LAYER,
+    ) -> Dict[str, Any]:
         """
-        Merge global and project-specific metadata
-        Project metadata takes precedence, but keywords are merged
-        
-        Args:
-            global_meta: Metadata from global sidecar
-            photo_path: Path to the photo
-        
-        Returns:
-            Merged metadata dict
+        Merge global and project-specific metadata (color/keywords unchanged).
+        ``rating`` follows ``active_rating_layer``: global | project | couch.
+
+        Couch ratings live in the project sidecar as ``couch_rating`` (0–5).
+        Fallback chain for couch layer: couch → project → global archive rating.
         """
+        layer = normalize_rating_layer(active_rating_layer)
         result = global_meta.copy()
+        gr_file = get_rating(photo_path)
+        base_global = int(gr_file) if gr_file is not None else int(global_meta.get('rating') or 0)
+
         project_meta = self.get_project_metadata(photo_path)
-        
-        if not project_meta:
-            # No project override - return global metadata
-            result['_has_project_override'] = False
-            return result
-        
-        # Apply project overrides
-        result['_has_project_override'] = True
-        
-        # Rating override
-        if 'rating' in project_meta:
-            result['rating'] = project_meta['rating']
-            result['_rating_source'] = 'project'
-        else:
+        has_pm = bool(project_meta)
+
+        proj_set = has_pm and 'rating' in project_meta
+        proj_r = int(project_meta['rating']) if proj_set else None
+
+        couch_set = (
+            has_pm
+            and 'couch_rating' in project_meta
+            and project_meta['couch_rating'] is not None
+        )
+        couch_r = int(project_meta['couch_rating']) if couch_set else None
+
+        result['_rating_global'] = base_global
+        result['_rating_project'] = proj_r
+        result['_rating_couch'] = couch_r
+        result['_active_rating_layer'] = layer
+
+        if layer == RATING_LAYER_GLOBAL:
+            result['rating'] = base_global
             result['_rating_source'] = 'global'
-        
-        # Color override
-        if 'color' in project_meta:
-            result['color'] = project_meta['color']
-            result['_color_source'] = 'project'
-        else:
+        elif layer == RATING_LAYER_PROJECT:
+            if proj_set:
+                result['rating'] = proj_r
+                result['_rating_source'] = 'project'
+            else:
+                result['rating'] = base_global
+                result['_rating_source'] = 'global'
+        else:  # couch
+            if couch_set:
+                result['rating'] = couch_r
+                result['_rating_source'] = 'couch'
+            elif proj_set:
+                result['rating'] = proj_r
+                result['_rating_source'] = 'project'
+            else:
+                result['rating'] = base_global
+                result['_rating_source'] = 'global'
+
+        base_g_color = global_meta.get('color')
+
+        if not has_pm:
+            result['_has_project_override'] = False
+            result['color'] = base_g_color
             result['_color_source'] = 'global'
-        
+            result['_color_global'] = base_g_color
+            result['_color_project'] = None
+            result['_color_couch'] = None
+            return result
+
+        result['_has_project_override'] = True
+
+        proj_color_set = 'color' in project_meta and project_meta.get('color') not in (None, '')
+        couch_color_val = project_meta.get('couch_color')
+        couch_color_set = (
+            'couch_color' in project_meta
+            and couch_color_val not in (None, '')
+        )
+
+        result['_color_global'] = base_g_color
+        result['_color_project'] = project_meta.get('color') if proj_color_set else None
+        result['_color_couch'] = couch_color_val if couch_color_set else None
+
+        if layer == RATING_LAYER_GLOBAL:
+            result['color'] = base_g_color
+            result['_color_source'] = 'global'
+        elif layer == RATING_LAYER_PROJECT:
+            if proj_color_set:
+                result['color'] = project_meta['color']
+                result['_color_source'] = 'project'
+            else:
+                result['color'] = base_g_color
+                result['_color_source'] = 'global'
+        else:  # couch
+            if couch_color_set:
+                result['color'] = couch_color_val
+                result['_color_source'] = 'couch'
+            elif proj_color_set:
+                result['color'] = project_meta['color']
+                result['_color_source'] = 'project'
+            else:
+                result['color'] = base_g_color
+                result['_color_source'] = 'global'
+
         # Keywords merge (combine global + project)
         global_keywords = set(global_meta.get('keywords', []))
         project_keywords = set(project_meta.get('keywords', []))
         result['keywords'] = sorted(list(global_keywords | project_keywords))
         result['_project_keywords'] = sorted(list(project_keywords))
-        
-        # Store project metadata timestamp
+
         result['_project_updated'] = project_meta.get('updated')
-        
+
         return result
     
     def set_rating(self, photo_path: Path, rating: int):
         """Set project-specific rating"""
         self._set_field(photo_path, 'rating', rating)
+
+    def set_couch_rating(self, photo_path: Path, rating: int):
+        """Set couch/TV review rating (project sidecar only, 0–5)."""
+        if not 0 <= rating <= 5:
+            raise ValueError('Couch rating must be between 0 and 5')
+        self._set_field(photo_path, 'couch_rating', rating)
     
     def set_color(self, photo_path: Path, color: Optional[str]):
         """Set project-specific color"""
         self._set_field(photo_path, 'color', color)
+
+    def set_couch_color(self, photo_path: Path, color: Optional[str]):
+        """Couch / TV color label (project sidecar only). None clears the field."""
+        valid = {'red', 'yellow', 'green', 'blue', 'purple', None}
+        if color not in valid:
+            raise ValueError(f"Couch color must be one of {sorted(x for x in valid if x)} or null")
+        if color is None:
+            sidecar_path = self._get_sidecar_path(photo_path)
+            if not sidecar_path.exists():
+                return
+            try:
+                with open(sidecar_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except Exception:
+                return
+            data.pop('couch_color', None)
+            data['updated'] = datetime.now().isoformat()
+            with open(sidecar_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            return
+        self._set_field(photo_path, 'couch_color', color)
     
     def add_keyword(self, photo_path: Path, keyword: str):
         """Add project-specific keyword"""
@@ -183,6 +283,53 @@ class ProjectSidecarManager:
             set_keywords(photo_path, merged)
         
         logger.info(f"Applied project metadata to global for {photo_path.name}")
+
+    def promote_couch_to_project(
+        self,
+        *,
+        promote_ratings: bool = True,
+        promote_colors: bool = False,
+        clear_couch_ratings: bool = False,
+        clear_couch_colors: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Copy couch_rating → rating and/or couch_color → color in each project sidecar.
+        """
+        promoted_ratings = 0
+        promoted_colors = 0
+        if not self.sidecar_dir.is_dir():
+            return {'promoted_ratings': 0, 'promoted_colors': 0}
+        for sidecar_path in sorted(self.sidecar_dir.glob("*.json")):
+            try:
+                with open(sidecar_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except Exception:
+                continue
+            changed = False
+            if promote_ratings:
+                cr = data.get('couch_rating')
+                if cr is not None and isinstance(cr, (int, float)) and 0 <= int(cr) <= 5:
+                    data['rating'] = int(cr)
+                    promoted_ratings += 1
+                    changed = True
+                    if clear_couch_ratings:
+                        data.pop('couch_rating', None)
+            if promote_colors:
+                cc = data.get('couch_color')
+                if cc not in (None, ''):
+                    data['color'] = cc
+                    promoted_colors += 1
+                    changed = True
+                    if clear_couch_colors:
+                        data.pop('couch_color', None)
+            if changed:
+                data['updated'] = datetime.now().isoformat()
+                with open(sidecar_path, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, indent=2, ensure_ascii=False)
+        return {
+            'promoted_ratings': promoted_ratings,
+            'promoted_colors': promoted_colors,
+        }
     
     def list_overrides(self) -> List[str]:
         """List all photos with project overrides"""
@@ -200,6 +347,8 @@ class ProjectSidecarManager:
         overrides = self.list_overrides()
         
         rating_overrides = 0
+        couch_rating_overrides = 0
+        couch_color_overrides = 0
         color_overrides = 0
         keyword_overrides = 0
         
@@ -210,6 +359,10 @@ class ProjectSidecarManager:
                     data = json.load(f)
                     if 'rating' in data:
                         rating_overrides += 1
+                    if 'couch_rating' in data and data.get('couch_rating') is not None:
+                        couch_rating_overrides += 1
+                    if 'couch_color' in data and data.get('couch_color') not in (None, ''):
+                        couch_color_overrides += 1
                     if 'color' in data:
                         color_overrides += 1
                     if 'keywords' in data:
@@ -220,6 +373,8 @@ class ProjectSidecarManager:
         return {
             'total_overrides': len(overrides),
             'rating_overrides': rating_overrides,
+            'couch_rating_overrides': couch_rating_overrides,
+            'couch_color_overrides': couch_color_overrides,
             'color_overrides': color_overrides,
             'keyword_overrides': keyword_overrides
         }

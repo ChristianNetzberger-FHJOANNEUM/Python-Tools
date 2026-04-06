@@ -38,6 +38,10 @@ class ExportSettings:
     splash_subtitle: Optional[str] = None   # 🎬 Custom splash screen subtitle
     remote_hub_ws_base: Optional[str] = None
     remote_session_id: str = "default"
+    # If the slideshow is opened as file:///…, Hub still needs http(s) to slides.json — same folder as this export on the NAS
+    gallery_public_http_base: Optional[str] = None
+    # Parent folder for <output_name>/ (web root: index.html, slides.json, images/; empty = workspace/exports)
+    export_base_path: Optional[str] = None
 
 
 @dataclass

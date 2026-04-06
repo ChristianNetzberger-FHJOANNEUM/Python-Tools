@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from photo_tool.io import scan_multiple_directories, filter_by_type, get_capture_time
 from photo_tool.config import load_config, save_config
 from photo_tool.workspace import Workspace
-from photo_tool.actions.rating import get_rating, get_rating_with_comment
+from photo_tool.actions.rating import get_rating, get_rating_with_comment, set_rating
 from photo_tool.actions.metadata import (
     get_metadata, 
     set_color_label, 
@@ -30,6 +30,12 @@ from photo_tool.actions.metadata import (
 )
 from photo_tool.actions.export import export_gallery, _export_progress
 from photo_tool.projects import ProjectManager, ProjectSidecarManager
+from photo_tool.projects.rating_layers import (
+    normalize_rating_layer,
+    RATING_LAYER_GLOBAL,
+    RATING_LAYER_PROJECT,
+    RATING_LAYER_COUCH,
+)
 from photo_tool.workspace.manager import (
     WorkspaceManager, 
     get_workspace_folders,
@@ -492,6 +498,30 @@ def update_database_metadata(photo_path: Path, field: str, value):
         logger.error(f"Error updating database for {photo_path}: {e}")
 
 
+def _apply_rating_layer_to_photo_item(item: dict, photo_path: Path, psm: ProjectSidecarManager, rating_layer: str) -> None:
+    """Merge project/global/couch ratings for one media row (SQLite fast path)."""
+    layer = normalize_rating_layer(rating_layer)
+    global_meta = get_metadata(photo_path)
+    merged = psm.merge_metadata(global_meta, photo_path, active_rating_layer=layer)
+    item['rating'] = merged.get('rating', 0)
+    if merged.get('color') is not None:
+        item['color'] = merged.get('color')
+    item['keywords'] = merged.get('keywords', item.get('keywords', []))
+    item['has_project_override'] = merged.get('_has_project_override', False)
+    item['rating_source'] = merged.get('_rating_source', 'global')
+    item['active_rating_layer'] = layer
+    item['rating_breakdown'] = {
+        'global': merged.get('_rating_global'),
+        'project': merged.get('_rating_project'),
+        'couch': merged.get('_rating_couch'),
+    }
+    item['color_breakdown'] = {
+        'global': merged.get('_color_global'),
+        'project': merged.get('_color_project'),
+        'couch': merged.get('_color_couch'),
+    }
+
+
 @app.post('/api/photos/<path:photo_id>/rate')
 def rate_photo(photo_id):
     """
@@ -512,16 +542,36 @@ def rate_photo(photo_id):
         
         # Check if project context
         project_id = request.args.get('project_id')
+        rating_layer = normalize_rating_layer(request.args.get('rating_layer', RATING_LAYER_PROJECT))
         
         if project_id:
-            # Save to PROJECT sidecar
             pm = get_project_manager()
             project_dir = pm.projects_dir / project_id
             psm = ProjectSidecarManager(project_dir)
-            psm.set_rating(photo_path, rating)
-            logger.info(f"Set project rating for {photo_path.name} in project {project_id}: {rating}")
-            
-            # Also update SQLite database (for persistence in PROJECT mode)
+            if rating_layer == RATING_LAYER_GLOBAL:
+                set_rating(photo_path, rating)
+                if comment:
+                    set_metadata(photo_path, {'comment': comment})
+                target = 'global'
+                logger.info(
+                    "Set global (archive) rating for %s while in project %s: %s",
+                    photo_path.name,
+                    project_id,
+                    rating,
+                )
+            elif rating_layer == RATING_LAYER_COUCH:
+                psm.set_couch_rating(photo_path, rating)
+                target = 'project'
+                logger.info(
+                    "Set couch rating for %s in project %s: %s",
+                    photo_path.name,
+                    project_id,
+                    rating,
+                )
+            else:
+                psm.set_rating(photo_path, rating)
+                target = 'project'
+                logger.info(f"Set project rating for {photo_path.name} in project {project_id}: {rating}")
             update_database_metadata(photo_path, 'rating', rating)
         else:
             # Save to GLOBAL sidecar (legacy/fallback)
@@ -529,10 +579,11 @@ def rate_photo(photo_id):
                 'rating': rating,
                 'comment': comment if comment else None
             })
+            target = 'global'
             logger.info(f"Set global rating for {photo_path.name}: {rating}")
         
-        # Update SQLite database immediately (CRITICAL for PROJECT mode!)
-        update_database_metadata(photo_path, 'rating', rating)
+        if not project_id:
+            update_database_metadata(photo_path, 'rating', rating)
         
         # Invalidate cache (metadata changed) - IMPORTANT for persistence!
         invalidate_scan_cache()
@@ -541,7 +592,8 @@ def rate_photo(photo_id):
             'success': True,
             'rating': rating,
             'comment': comment,
-            'target': 'project' if project_id else 'global'
+            'target': target,
+            'rating_layer': rating_layer if project_id else RATING_LAYER_GLOBAL,
         })
     
     except Exception as e:
@@ -555,7 +607,7 @@ def set_photo_color(photo_id):
     """
     Set color label for a photo
     Body: { "color": "red" | "yellow" | "green" | "blue" | "purple" | null }
-    Query Params: { "project_id": "optional-project-id" }
+    Query Params: { "project_id": "optional-project-id", "rating_layer": "global"|"project"|"couch" }
     """
     try:
         from flask import request
@@ -568,32 +620,48 @@ def set_photo_color(photo_id):
         
         # Check if project context
         project_id = request.args.get('project_id')
+        rating_layer = normalize_rating_layer(request.args.get('rating_layer', RATING_LAYER_PROJECT))
         
         if project_id:
-            # Save to PROJECT sidecar
             pm = get_project_manager()
             project_dir = pm.projects_dir / project_id
             psm = ProjectSidecarManager(project_dir)
-            psm.set_color(photo_path, color)
-            logger.info(f"Set project color for {photo_path.name} in project {project_id}: {color}")
-            
-            # Also update SQLite database (for persistence in PROJECT mode)
+            if rating_layer == RATING_LAYER_GLOBAL:
+                set_color_label(photo_path, color)
+                target = 'global'
+                logger.info(
+                    "Set global (archive) color for %s in project context %s: %s",
+                    photo_path.name,
+                    project_id,
+                    color,
+                )
+            elif rating_layer == RATING_LAYER_COUCH:
+                psm.set_couch_color(photo_path, color)
+                target = 'project'
+                logger.info(
+                    "Set couch color for %s in project %s: %s",
+                    photo_path.name,
+                    project_id,
+                    color,
+                )
+            else:
+                psm.set_color(photo_path, color)
+                target = 'project'
+                logger.info(f"Set project color for {photo_path.name} in project {project_id}: {color}")
             update_database_metadata(photo_path, 'color', color)
         else:
-            # Save to GLOBAL sidecar
             set_color_label(photo_path, color)
+            target = 'global'
             logger.info(f"Set global color for {photo_path.name}: {color}")
+            update_database_metadata(photo_path, 'color', color)
         
-        # Update SQLite database immediately (CRITICAL for PROJECT mode!)
-        update_database_metadata(photo_path, 'color', color)
-        
-        # Invalidate cache (metadata changed) - IMPORTANT for persistence!
         invalidate_scan_cache()
         
         return jsonify({
             'success': True,
             'color': color,
-            'target': 'project' if project_id else 'global'
+            'target': target,
+            'rating_layer': rating_layer if project_id else RATING_LAYER_GLOBAL,
         })
     
     except Exception as e:
@@ -765,12 +833,91 @@ def get_all_keywords_api():
         return jsonify({'error': str(e)}), 500
 
 
+_VALID_IMPORT_LABEL_COLORS = frozenset({'red', 'yellow', 'green', 'blue', 'purple'})
+
+
+def _parse_import_couch_rating(val):
+    if val is None:
+        return None
+    try:
+        r = int(val)
+        return r if 0 <= r <= 5 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_import_couch_color(val):
+    if val is None or val == '':
+        return None
+    s = str(val).strip().lower()
+    if s in _VALID_IMPORT_LABEL_COLORS:
+        return s
+    return '__invalid__'
+
+
+def _scan_couch_ratings_manifest(slides_path: Path):
+    """Build plan for importing couch_rating / couch_color from slides.json."""
+    manifest = json.loads(slides_path.read_text(encoding='utf-8'))
+    slides = manifest.get('slides') or []
+    rows = []
+    for slide in slides:
+        src = slide.get('source_path')
+        if not src:
+            continue
+        couch_r_raw = slide.get('couch_rating')
+        couch_c_raw = slide.get('couch_color')
+        if couch_r_raw is None and couch_c_raw is None:
+            continue
+        p = Path(src)
+        nr = _parse_import_couch_rating(couch_r_raw)
+        pc = _parse_import_couch_color(couch_c_raw)
+        apply_rating = nr is not None
+        apply_color = pc not in (None, '__invalid__')
+        invalid_color = pc == '__invalid__'
+        row = {
+            'source_path': src,
+            'source_name': slide.get('source_name') or p.name,
+            'apply_rating': apply_rating,
+            'apply_color': apply_color,
+            'normalized_rating': nr,
+            'parsed_color': pc if apply_color else None,
+            'invalid_color': invalid_color,
+            'missing_file': not p.is_file(),
+        }
+        if row['missing_file']:
+            rows.append(row)
+            continue
+        cur_r = get_rating(p)
+        cur_r_i = int(cur_r) if cur_r is not None else 0
+        cur_c = get_color_label(p)
+        row['current_rating'] = cur_r_i
+        row['current_color'] = cur_c
+        conf_r = apply_rating and cur_r_i > 0 and nr != cur_r_i
+        conf_c = False
+        if apply_color and cur_c:
+            conf_c = pc != str(cur_c).lower()
+        row['conflict_rating'] = conf_r
+        row['conflict_color'] = conf_c
+        rows.append(row)
+    conflicts = sum(
+        1 for r in rows
+        if not r.get('missing_file') and (r.get('conflict_rating') or r.get('conflict_color'))
+    )
+    missing = sum(1 for r in rows if r.get('missing_file'))
+    return rows, {
+        'entries': len(rows),
+        'conflicts': conflicts,
+        'missing_files': missing,
+    }
+
+
 @app.post('/api/export/gallery')
 def export_gallery_api():
     """
     Export filtered photos as web gallery
     Body: {
         "photo_ids": ["path1", "path2"],
+        "export_base_path": "\\\\nas\\share\\exports" or "D:/gallery-out",  // optional; creates <output_name>/ with index.html, slides.json, images/
         "title": "Gallery Title",
         "output_name": "gallery-name",
         "template": "photoswipe" or "simple",
@@ -806,17 +953,39 @@ def export_gallery_api():
         remote_session_id = data.get('remote_session_id', 'default')
         if isinstance(remote_session_id, str):
             remote_session_id = remote_session_id.strip() or 'default'
+        gallery_public_http_base = data.get('gallery_public_http_base')
+        if isinstance(gallery_public_http_base, str):
+            gallery_public_http_base = gallery_public_http_base.strip() or None
         
         if not photo_ids:
             return jsonify({'error': 'No photos selected'}), 400
+
+        # Synchron vor Thread-Start, damit SSE /api/export/progress nicht sofort auf
+        # idle oder altem "complete" beendet — sonst bleibt die UI bei 0/n stehen.
+        _export_progress['status'] = 'running'
+        _export_progress['current'] = 0
+        _export_progress['total'] = len(photo_ids)
+        _export_progress['step'] = 'queued'
+        _export_progress['message'] = 'Export wird vorbereitet…'
         
         # Convert IDs to Path objects
         photo_paths = [Path(photo_id) for photo_id in photo_ids]
         music_paths = [Path(mf) for mf in music_files if Path(mf).exists()] if music_files else None
         
-        # Export gallery in background thread
-        workspace_path = Path("C:/PhotoTool_Test")
-        output_dir = workspace_path / "exports" / output_name
+        export_base_raw = data.get('export_base_path')
+        if isinstance(export_base_raw, str) and export_base_raw.strip():
+            base_path = Path(export_base_raw.strip())
+        else:
+            base_path = get_current_workspace() / 'exports'
+        try:
+            base_path = base_path.expanduser()
+        except Exception:
+            pass
+        if not base_path.is_absolute():
+            base_path = (get_current_workspace() / base_path).resolve()
+        base_path.mkdir(parents=True, exist_ok=True)
+        output_dir = base_path / output_name
+        output_dir.mkdir(parents=True, exist_ok=True)
         
         result = {'gallery_dir': None, 'error': None}
         
@@ -841,9 +1010,12 @@ def export_gallery_api():
                     splash_subtitle=splash_subtitle,  # ðŸŽ¬ Custom splash subtitle
                     remote_hub_ws_base=remote_hub_ws_base,
                     remote_session_id=remote_session_id,
+                    gallery_public_http_base=gallery_public_http_base,
                 )
             except Exception as e:
                 result['error'] = str(e)
+                _export_progress['status'] = 'error'
+                _export_progress['message'] = str(e)
         
         # Start export in thread
         thread = threading.Thread(target=do_export)
@@ -869,25 +1041,161 @@ def export_gallery_api():
         return jsonify({'error': str(e)}), 500
 
 
+def _resolve_slides_json_path(raw: str):
+    """Accept direct path to slides.json or folder that contains it (e.g. NAS gallery root)."""
+    path = Path(raw.strip())
+    if path.is_file():
+        return path
+    if path.is_dir():
+        candidate = path / "slides.json"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+@app.post('/api/import/couch-ratings')
+def import_couch_ratings_api():
+    """Apply couch_rating / couch_color from gallery slides.json to Photo Tool sidecars."""
+    from flask import request
+
+    data = request.get_json() or {}
+    slides_json = (data.get('slides_json_path') or '').strip()
+    action = (data.get('action') or 'preview').strip().lower()
+    overwrite = bool(data.get('overwrite_conflicts', False))
+    project_id_imp = (data.get('project_id') or '').strip() or None
+    psm_couch = None
+    if project_id_imp:
+        pm_imp = get_project_manager()
+        pdir = pm_imp.projects_dir / project_id_imp
+        if not pdir.is_dir():
+            return jsonify({'error': f'Project not found: {project_id_imp}'}), 404
+        psm_couch = ProjectSidecarManager(pdir)
+
+    if not slides_json:
+        return jsonify({'error': 'slides_json_path is required'}), 400
+    path = _resolve_slides_json_path(slides_json)
+    if path is None:
+        return jsonify({
+            'error': (
+                f'No slides.json at path and not found as {Path(slides_json) / "slides.json"} '
+                f'(use full file path or folder containing slides.json)'
+            )
+        }), 404
+
+    try:
+        rows, stats = _scan_couch_ratings_manifest(path)
+    except json.JSONDecodeError as e:
+        return jsonify({'error': f'Invalid JSON: {e}'}), 400
+    except Exception as e:
+        logger.exception('couch import scan failed')
+        return jsonify({'error': str(e)}), 500
+
+    max_rows = 200
+    preview_rows = rows[:max_rows]
+
+    if action == 'preview':
+        return jsonify({
+            'success': True,
+            'action': 'preview',
+            'stats': stats,
+            'rows': preview_rows,
+            'truncated': len(rows) > max_rows,
+        })
+
+    if action != 'apply':
+        return jsonify({'error': 'action must be "preview" or "apply"'}), 400
+
+    if stats['conflicts'] > 0 and not overwrite:
+        return jsonify({
+            'error': 'Conflicts require overwrite_conflicts: true (or align ratings in Photo Tool first)',
+            'stats': stats,
+            'rows': preview_rows,
+            'truncated': len(rows) > max_rows,
+        }), 409
+
+    applied = 0
+    skipped = 0
+    for row in rows:
+        if row.get('missing_file'):
+            skipped += 1
+            continue
+        if not row.get('apply_rating') and not row.get('apply_color'):
+            skipped += 1
+            continue
+        if not overwrite and (row.get('conflict_rating') or row.get('conflict_color')):
+            skipped += 1
+            continue
+        p = Path(row['source_path'])
+        try:
+            if row.get('apply_rating') and row.get('normalized_rating') is not None:
+                if psm_couch:
+                    psm_couch.set_couch_rating(p, row['normalized_rating'])
+                else:
+                    set_rating(p, row['normalized_rating'])
+            if row.get('apply_color') and row.get('parsed_color'):
+                if psm_couch:
+                    psm_couch.set_couch_color(p, row['parsed_color'])
+                else:
+                    set_color_label(p, row['parsed_color'])
+            applied += 1
+        except Exception as e:
+            logger.warning('couch import failed for %s: %s', p, e)
+            skipped += 1
+
+    invalidate_scan_cache()
+
+    wrote_sidecars = project_id_imp is not None and psm_couch is not None
+    logger.info(
+        "couch import apply: applied=%s skipped=%s project_id=%s wrote_project_sidecars=%s",
+        applied,
+        skipped,
+        project_id_imp,
+        wrote_sidecars,
+    )
+
+    return jsonify({
+        'success': True,
+        'action': 'apply',
+        'stats': stats,
+        'applied': applied,
+        'skipped': skipped,
+        'project_id': project_id_imp,
+        'wrote_project_sidecars': wrote_sidecars,
+    })
+
+
 @app.get('/api/export/progress')
 def get_export_progress():
     """Get export progress (SSE)"""
     def generate():
         from photo_tool.actions.export import _export_progress
         
-        last_current = -1
+        saw_running = False
+        last_key = None
+        t_start = time.time()
         while True:
             current = _export_progress.copy()
-            
-            if current['current'] != last_current or current['status'] == 'complete':
+            if current.get('status') == 'running':
+                saw_running = True
+
+            msg = current.get('message') or ''
+            key = (current.get('status'), current.get('current'), current.get('total'), msg)
+            if key != last_key:
                 data = json.dumps(current)
                 yield f"data: {data}\n\n"
-                last_current = current['current']
-            
-            if current['status'] in ['complete', 'error', 'idle']:
+                last_key = key
+
+            st = current.get('status')
+            if st == 'error':
                 break
-            
-            time.sleep(0.3)
+            if st == 'complete' and saw_running:
+                break
+
+            # Ohne laufenden Export: Verbindung nach kurzer Zeit schließen (z. B. offene Tab-Leiche)
+            if not saw_running and st == 'idle' and (time.time() - t_start) > 3.0:
+                break
+
+            time.sleep(0.2)
     
     return Response(stream_with_context(generate()), mimetype='text/event-stream')
 
@@ -2620,6 +2928,44 @@ def update_project_quality_settings(project_id):
         return jsonify({'error': str(e)}), 500
 
 
+@app.post('/api/projects/<project_id>/promote-couch-to-project')
+def promote_couch_to_project_route(project_id):
+    """
+    Copy couch_rating → project rating and/or couch_color → project color in all .sidecars.
+    Body JSON: promote_ratings (default true), promote_colors (default false),
+    clear_couch_ratings, clear_couch_colors (optional).
+    """
+    try:
+        from flask import request
+
+        pm = get_project_manager()
+        project_dir = pm.projects_dir / project_id
+        if not project_dir.is_dir():
+            return jsonify({'error': f'Project not found: {project_id}'}), 404
+
+        data = request.get_json() or {}
+        promote_ratings = bool(data.get('promote_ratings', True))
+        promote_colors = bool(data.get('promote_colors', False))
+        clear_couch_ratings = bool(data.get('clear_couch_ratings', False))
+        clear_couch_colors = bool(data.get('clear_couch_colors', False))
+
+        if not promote_ratings and not promote_colors:
+            return jsonify({'error': 'At least one of promote_ratings or promote_colors must be true'}), 400
+
+        psm = ProjectSidecarManager(project_dir)
+        stats = psm.promote_couch_to_project(
+            promote_ratings=promote_ratings,
+            promote_colors=promote_colors,
+            clear_couch_ratings=clear_couch_ratings,
+            clear_couch_colors=clear_couch_colors,
+        )
+        invalidate_scan_cache()
+        return jsonify({'success': True, **stats})
+    except Exception as e:
+        logger.exception('promote_couch_to_project failed')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.delete('/api/projects/<project_id>')
 def delete_project(project_id):
     """Delete a project"""
@@ -2677,6 +3023,8 @@ def get_project_media(project_id):
                     'total': 0,
                     'message': 'No folders enabled in project. Enable folders in Project tab.'
                 })
+
+            rating_layer = normalize_rating_layer(request.args.get('rating_layer'))
             
             # Load workspace config for scan settings
             workspace_path = get_current_workspace()
@@ -2979,6 +3327,14 @@ def get_project_media(project_id):
                         print(f"✅ SQLite load complete: {total_count} items in {timings.get('sqlite_load_total', 0):.3f}s")
                         logger.info(f"📊 SQLite Performance: {timings}")
                         
+                        project_dir_sql = pm.projects_dir / project_id
+                        psm_sql = ProjectSidecarManager(project_dir_sql)
+                        for item in result:
+                            if item.get('type') == 'photo':
+                                _apply_rating_layer_to_photo_item(
+                                    item, Path(item['path']), psm_sql, rating_layer
+                                )
+
                         # Return in the SAME format as legacy (media array)
                         return jsonify({
                             'media': result,  # Use 'media' like legacy does!
@@ -2988,6 +3344,7 @@ def get_project_media(project_id):
                             'performance': timings,
                             'source': 'sqlite',
                             'project_id': project_id,
+                            'rating_layer': rating_layer,
                             'counts': {
                                 'photos': len([m for m in result if m['type'] == 'photo']),
                                 'videos': len([m for m in result if m['type'] == 'video']),
@@ -3135,8 +3492,10 @@ def get_project_media(project_id):
                         # 1. Global metadata
                         global_meta = get_metadata(item_path)
                         
-                        # 2. Project metadata merge
-                        merged_meta = psm.merge_metadata(global_meta, item_path)
+                        # 2. Project metadata merge (rating layer: global | project | couch)
+                        merged_meta = psm.merge_metadata(
+                            global_meta, item_path, active_rating_layer=rating_layer
+                        )
                         
                         # 3. Burst keep flag
                         burst_keep = False
@@ -3225,7 +3584,18 @@ def get_project_media(project_id):
                         'full_image': f"/images/{item.path.stem}{item.path.suffix}",
                         'has_project_override': metadata.get('_has_project_override', False),
                         'rating_source': metadata.get('_rating_source', 'global'),
-                        'color_source': metadata.get('_color_source', 'global')
+                        'color_source': metadata.get('_color_source', 'global'),
+                        'active_rating_layer': rating_layer,
+                        'rating_breakdown': {
+                            'global': metadata.get('_rating_global'),
+                            'project': metadata.get('_rating_project'),
+                            'couch': metadata.get('_rating_couch'),
+                        },
+                        'color_breakdown': {
+                            'global': metadata.get('_color_global'),
+                            'project': metadata.get('_color_project'),
+                            'couch': metadata.get('_color_couch'),
+                        },
                     })
             
             # ============================================================================
@@ -3372,6 +3742,7 @@ def get_project_media(project_id):
                 'offset': offset,
                 'limit': limit,
                 'project_id': project_id,
+                'rating_layer': rating_layer,
                 'counts': {
                     'photos': len(photos),
                     'videos': len(videos),
