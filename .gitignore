@@ -49,6 +49,10 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# Large media (avoid accidental commits / GitHub limits)
+*.mp4
+*.webm
+
 # Project specific
 *.db
 *.sqlite
