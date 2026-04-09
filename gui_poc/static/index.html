@@ -75,7 +75,7 @@
                             :disabled="!currentProjectId">
                         🎬 Media {{ currentProjectId && mediaCount > 0 ? `(${mediaCount})` : '' }}
                     </button>
-                    <button class="tab" :class="{ active: currentView === 'bursts' }" @click="currentView = 'bursts'"
+                    <button class="tab" :class="{ active: currentView === 'bursts' }" @click="switchToBursts"
                             :disabled="!currentProjectId">
                         📦 Bursts {{ currentProjectId && bursts.length > 0 ? `(${bursts.length})` : '' }}
                     </button>
@@ -297,16 +297,26 @@
             <!-- Media Configuration Panel (when project selected) -->
             <div v-if="currentProjectId && currentProject" style="margin-bottom: 30px;">
                 <!-- Header -->
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
                     <h2 style="font-size: 1.3rem; margin: 0;">
                         🎬 {{ currentProject.name }} - Media
                     </h2>
-                    <button @click="saveProjectAndLoadMedia"
-                            :disabled="savingProject"
-                            style="background: linear-gradient(135deg, #4ade80, #3b82f6); color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.95rem; transition: opacity 0.2s;"
-                            :style="{ opacity: savingProject ? 0.5 : 1 }">
-                        {{ savingProject ? '⏳ Loading...' : '📸 Load Media' }}
-                    </button>
+                    <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+                        <button type="button"
+                                @click="syncProjectFoldersFromWorkspace"
+                                :disabled="syncingWorkspaceFolders || savingProject"
+                                title="Workspace nach neuen Ordnern abgleichen (z. B. NAS-Musik)"
+                                style="background: rgba(139, 92, 246, 0.25); border: 2px solid rgba(139, 92, 246, 0.6); color: #e9d5ff; padding: 12px 20px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.95rem;"
+                                :style="{ opacity: (syncingWorkspaceFolders || savingProject) ? 0.5 : 1, cursor: (syncingWorkspaceFolders || savingProject) ? 'not-allowed' : 'pointer' }">
+                            {{ syncingWorkspaceFolders ? '⏳ …' : '🔄 Sync folders from workspace' }}
+                        </button>
+                        <button @click="saveProjectAndLoadMedia"
+                                :disabled="savingProject"
+                                style="background: linear-gradient(135deg, #4ade80, #3b82f6); color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.95rem; transition: opacity 0.2s;"
+                                :style="{ opacity: savingProject ? 0.5 : 1 }">
+                            {{ savingProject ? '⏳ Loading...' : '📸 Load Media' }}
+                        </button>
+                    </div>
                 </div>
                 
                 <!-- Folder Selection Section -->
@@ -315,7 +325,9 @@
                         📁 Media Folders
                     </h3>
                     <p style="color: #888; font-size: 0.9rem; margin-bottom: 15px;">
-                        Select which folders to include in this media view
+                        Select which folders to include in this media view.
+                        If you added paths under <strong>Workspaces</strong> after creating this project, click
+                        <strong>Sync folders from workspace</strong> above so they appear here (new folders start disabled).
                     </p>
                     
                     <div v-if="!currentProject.folders || currentProject.folders.length === 0">
@@ -357,6 +369,49 @@
                         <div style="flex: 1; text-align: center; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 6px;">
                             <div style="font-size: 1.5rem; font-weight: 600; color: #3b82f6;">{{ enabledMediaCount }}</div>
                             <div style="font-size: 0.85rem; color: #888;">Total Media</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Audio: detection = extension + workspace scan.extensions; playlist = project YAML -->
+                <div style="background: rgba(255,255,255,0.03); padding: 20px; border-radius: 10px; margin-bottom: 20px;">
+                    <h3 style="font-size: 1.1rem; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                        🎵 Audio &amp; Projekt-Playlist
+                    </h3>
+                    <p style="color: #888; font-size: 0.82rem; margin-bottom: 14px; line-height: 1.45;">
+                        Das Tool erkennt <strong>keinen</strong> speziellen „Musik-Ordner“. Es zählt nur Dateien, deren <strong>Endung</strong> in <code style="color:#a5b4fc;">scan.extensions</code> der Workspace-<code style="color:#a5b4fc;">config.yaml</code> steht
+                        und die als Audio gelten (z.&nbsp;B. <code style="color:#cbd5e1;">.mp3</code>, <code style="color:#cbd5e1;">.wav</code>, <code style="color:#cbd5e1;">.flac</code>, … im Scanner).
+                        Ordner muss im Projekt <strong>aktiviert</strong> sein, dann <strong>Load Media</strong>.
+                    </p>
+                    <div v-if="audio.length === 0" style="padding: 14px; background: rgba(0,0,0,0.25); border-radius: 8px; color: #64748b; font-size: 0.88rem;">
+                        Keine Audio-Dateien im geladenen Medien-Set. Prüfe aktivierte Ordner, Sync vom Workspace und ob die Endungen in der Workspace-Config eingetragen sind.
+                    </div>
+                    <div v-else style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px;">
+                        <div style="font-size: 0.8rem; color: #94a3b8;">Geladen: {{ audio.length }} Audio-Datei(en) — „+ Playlist“ kopiert den absoluten Pfad in die gespeicherte Projekt-Playlist.</div>
+                        <div v-for="a in audio.slice(0, 80)" :key="a.path"
+                             style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 12px; background: rgba(0,0,0,0.2); border-radius: 8px; border: 1px solid rgba(255,255,255,0.08);">
+                            <span style="flex: 1; min-width: 160px; color: #e2e8f0; font-size: 0.88rem; word-break: break-all;">{{ a.name }}</span>
+                            <audio :src="audioStreamUrlForPath(a.path)" controls preload="none" style="max-width: 220px; height: 32px; vertical-align: middle;"></audio>
+                            <button type="button"
+                                    @click="addAudioToProjectPlaylist(a)"
+                                    :disabled="playlistSaveBusy || playlistHasPath(a.path)"
+                                    style="background: rgba(74, 222, 128, 0.2); border: 1px solid rgba(74, 222, 128, 0.45); color: #4ade80; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 600; white-space: nowrap;">
+                                {{ playlistHasPath(a.path) ? '✓ In Playlist' : '+ Playlist' }}
+                            </button>
+                        </div>
+                        <div v-if="audio.length > 80" style="color: #64748b; font-size: 0.8rem;">… und {{ audio.length - 80 }} weitere (erste 80 oben).</div>
+                    </div>
+                    <div v-if="(projectAudioPlaylist.tracks || []).length > 0" style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 14px;">
+                        <h4 style="margin: 0 0 10px 0; font-size: 0.95rem; color: #c4b5fd;">Gespeicherte Playlist (Projekt)</h4>
+                        <div v-for="t in projectAudioPlaylist.tracks" :key="t.id"
+                             style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 10px; margin-bottom: 8px; background: rgba(139, 92, 246, 0.08); border-radius: 6px; font-size: 0.82rem;">
+                            <span v-if="projectAudioPlaylist.default_track_id === t.id" title="Standard-Titel" style="color: #fbbf24;">★</span>
+                            <span style="flex: 1; color: #cbd5e1; word-break: break-all;">{{ t.label || t.source_path }}</span>
+                            <audio :src="audioStreamUrlForPath(t.source_path)" controls preload="none" style="max-width: 200px; height: 30px;"></audio>
+                            <button type="button" @click="setDefaultPlaylistTrack(t.id)" :disabled="playlistSaveBusy || projectAudioPlaylist.default_track_id === t.id"
+                                    style="background: rgba(251, 191, 36, 0.15); border: 1px solid rgba(251, 191, 36, 0.4); color: #fbbf24; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 0.75rem;">Standard</button>
+                            <button type="button" @click="removePlaylistTrack(t.id)" :disabled="playlistSaveBusy"
+                                    style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 0.75rem;">Entfernen</button>
                         </div>
                     </div>
                 </div>
@@ -1193,6 +1248,14 @@
                             <span v-if="currentProject.updated !== currentProject.created">
                                 | Updated: {{ formatDate(currentProject.updated) }}
                             </span>
+                        </div>
+                        <button type="button"
+                                @click="cloneProjectFromCurrent"
+                                style="margin-top: 12px; padding: 10px 16px; border-radius: 8px; border: 1px solid rgba(139, 92, 246, 0.5); background: rgba(139, 92, 246, 0.15); color: #e9d5ff; cursor: pointer; font-size: 0.9rem;">
+                            📋 Projekt duplizieren…
+                        </button>
+                        <div style="font-size: 0.75rem; color: #777; margin-top: 6px; max-width: 520px; line-height: 1.35;">
+                            Gleiche Ordner, Medienauswahl und <strong>Export-Einstellungen</strong> (Hub, Profil, Musik, …). Ideal für zweite Ausgabe z. B. Web-Slideshow vs. Smart-TV.
                         </div>
                     </div>
                     
@@ -2131,6 +2194,32 @@
                                     Wenn die Slideshow vom PC/TV als lokale Datei geöffnet wird, braucht der Hub trotzdem die NAS-Webadresse zum Ordner mit <code>index.html</code> / <code>slides.json</code> (kein <code>file://</code>).
                                 </p>
                             </div>
+
+                            <div v-if="currentProjectId && exportTemplate === 'slideshow'"
+                                 style="margin-top: 14px; padding-top: 14px; border-top: 1px solid rgba(138, 43, 226, 0.3);">
+                                <div style="font-weight: 600; margin-bottom: 8px; color: #b794f6; font-size: 0.85rem;">
+                                    📤 Projekt → Couch (<code>slides.json</code>)
+                                </div>
+                                <p style="font-size: 0.72rem; color: #888; margin-bottom: 10px; line-height: 1.4;">
+                                    Projekt-Sterne/-Farbe (Ebene „Projekt“) als Startwerte für die TV-/Remote-Couch-Bewertung in die exportierte <code>slides.json</code> schreiben — nach dem bestehenden Merge mit einer alten Datei auf dem Zielordner.
+                                </p>
+                                <label style="display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; cursor: pointer; font-size: 0.8rem;">
+                                    <input type="radio" v-model="exportProjectToCouchMode" value="off" style="margin-top: 3px; accent-color: #8a2be2;">
+                                    <span><strong>Aus</strong> — <code>couch_*</code> nur wie bisher (Merge oder leer)</span>
+                                </label>
+                                <label style="display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; cursor: pointer; font-size: 0.8rem;">
+                                    <input type="radio" v-model="exportProjectToCouchMode" value="fill_empty" style="margin-top: 3px; accent-color: #8a2be2;">
+                                    <span><strong>Nur leere Couch-Felder füllen</strong> — bestehende TV-/Hub-<code>couch_*</code> im Ziel bleiben (empfohlen)</span>
+                                </label>
+                                <label style="display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; cursor: pointer; font-size: 0.8rem;">
+                                    <input type="radio" v-model="exportProjectToCouchMode" value="replace_all" style="margin-top: 3px; accent-color: #f59e0b;">
+                                    <span><strong>Alle Couch-Werte ersetzen</strong> — überschreibt nach Merge alle <code>couch_rating</code>/<code>couch_color</code> mit der Projekt-Sicht</span>
+                                </label>
+                                <div v-if="exportProjectToCouchMode === 'replace_all'"
+                                     style="font-size: 0.72rem; color: #fbbf24; background: rgba(245, 158, 11, 0.12); padding: 8px; border-radius: 6px; line-height: 1.35;">
+                                    ⚠️ Achtung: Bereits in <code>slides.json</code> gespeicherte Couch-Bewertungen (z. B. vom Fernseher) gehen für diesen Export verloren, soweit sie von der Projekt-Sicht abweichen.
+                                </div>
+                            </div>
                         </div>
                     </div>
                     
@@ -2517,8 +2606,8 @@
             </div>
         </div>
         
-        <!-- File Browser Modal -->
-        <div v-if="showFileBrowser" class="modal" @click.self="closeBrowser">
+        <!-- File Browser Modal (must stack above .modal-overlay e.g. Add Media Folder) -->
+        <div v-if="showFileBrowser" class="modal modal--stack-top" @click.self="closeBrowser">
             <div class="modal-content" style="max-width: 700px; max-height: 80vh; display: flex; flex-direction: column;">
                 <div class="modal-header">
                     <div class="modal-title">📁 Select Folder</div>

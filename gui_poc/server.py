@@ -3,9 +3,10 @@ Flask PoC Server for Photo Tool
 Simple web interface to browse and rate photos
 """
 
-from flask import Flask, jsonify, send_from_directory, Response, stream_with_context
+from flask import Flask, jsonify, send_from_directory, Response, stream_with_context, send_file
 from flask_cors import CORS
 from pathlib import Path
+import os
 import sys
 import json
 import time
@@ -30,6 +31,7 @@ from photo_tool.actions.metadata import (
 )
 from photo_tool.actions.export import export_gallery, _export_progress
 from photo_tool.projects import ProjectManager, ProjectSidecarManager
+from photo_tool.projects.project_sidecar import load_project_sidecar_index
 from photo_tool.projects.rating_layers import (
     normalize_rating_layer,
     RATING_LAYER_GLOBAL,
@@ -43,8 +45,41 @@ from photo_tool.workspace.manager import (
     get_enabled_folders
 )
 from photo_tool.util.logging import get_logger
+from photo_tool.audio import (
+    AUDIO_EXTENSIONS,
+    audio_roots_for_workspace,
+    match_audio_root,
+    resolve_path_under_audio_roots,
+    resolve_dir_under_audio_roots,
+    list_audio_directory,
+    normalize_playlist_from_request,
+    playlist_from_paths,
+    guess_mimetype,
+)
 
 logger = get_logger("gui_server")
+
+
+def _configure_stdio_line_buffered() -> None:
+    """Reduce batching of log lines when stdout is not a TTY (IDE terminals often block-buffer)."""
+    for stream in (sys.stdout, sys.stderr):
+        reconf = getattr(stream, "reconfigure", None)
+        if callable(reconf):
+            try:
+                reconf(line_buffering=True)
+            except Exception:
+                pass
+
+
+def _emit_console_line(msg: str) -> None:
+    """Write one line to stderr via OS fd so progress is visible immediately (not batched by Python)."""
+    try:
+        os.write(2, (msg.rstrip() + "\n").encode("utf-8", errors="replace"))
+    except Exception:
+        print(msg, file=sys.stderr, flush=True)
+
+
+_configure_stdio_line_buffered()
 
 app = Flask(__name__, static_folder='static')
 CORS(app)  # Enable CORS for development
@@ -498,28 +533,65 @@ def update_database_metadata(photo_path: Path, field: str, value):
         logger.error(f"Error updating database for {photo_path}: {e}")
 
 
+def _copy_merged_rating_to_media_item(item: dict, merged: dict, layer: str) -> None:
+    """Apply merge_metadata() result onto API media item."""
+    item["rating"] = merged.get("rating", 0)
+    if merged.get("color") is not None:
+        item["color"] = merged.get("color")
+    item["keywords"] = merged.get("keywords", item.get("keywords", []))
+    item["has_project_override"] = merged.get("_has_project_override", False)
+    item["rating_source"] = merged.get("_rating_source", "global")
+    item["active_rating_layer"] = layer
+    item["rating_breakdown"] = {
+        "global": merged.get("_rating_global"),
+        "project": merged.get("_rating_project"),
+        "couch": merged.get("_rating_couch"),
+    }
+    item["color_breakdown"] = {
+        "global": merged.get("_color_global"),
+        "project": merged.get("_color_project"),
+        "couch": merged.get("_color_couch"),
+    }
+
+
 def _apply_rating_layer_to_photo_item(item: dict, photo_path: Path, psm: ProjectSidecarManager, rating_layer: str) -> None:
-    """Merge project/global/couch ratings for one media row (SQLite fast path)."""
+    """Merge project/global/couch ratings (legacy path: reads global metadata + rating files from disk)."""
     layer = normalize_rating_layer(rating_layer)
     global_meta = get_metadata(photo_path)
     merged = psm.merge_metadata(global_meta, photo_path, active_rating_layer=layer)
-    item['rating'] = merged.get('rating', 0)
-    if merged.get('color') is not None:
-        item['color'] = merged.get('color')
-    item['keywords'] = merged.get('keywords', item.get('keywords', []))
-    item['has_project_override'] = merged.get('_has_project_override', False)
-    item['rating_source'] = merged.get('_rating_source', 'global')
-    item['active_rating_layer'] = layer
-    item['rating_breakdown'] = {
-        'global': merged.get('_rating_global'),
-        'project': merged.get('_rating_project'),
-        'couch': merged.get('_rating_couch'),
+    _copy_merged_rating_to_media_item(item, merged, layer)
+
+
+def _apply_rating_layer_to_photo_item_sqlite_batch(
+    item: dict,
+    photo_path: Path,
+    psm: ProjectSidecarManager,
+    rating_layer: str,
+    project_sidecar_by_filename: dict,
+) -> None:
+    """
+    Same outcome as _apply_rating_layer_to_photo_item but uses workspace DB fields as global meta
+    and a preloaded project sidecar index (no per-photo .rating.json / .metadata.json / sidecar stat storm).
+    """
+    layer = normalize_rating_layer(rating_layer)
+    kw = item.get("keywords", [])
+    if not isinstance(kw, list):
+        kw = []
+    global_meta = {
+        "rating": item.get("rating", 0),
+        "color": item.get("color"),
+        "keywords": kw,
+        "comment": item.get("comment"),
     }
-    item['color_breakdown'] = {
-        'global': merged.get('_color_global'),
-        'project': merged.get('_color_project'),
-        'couch': merged.get('_color_couch'),
-    }
+    pm = project_sidecar_by_filename.get(photo_path.name)
+    merged = psm.merge_metadata(
+        global_meta,
+        photo_path,
+        active_rating_layer=layer,
+        trust_sqlite_global=True,
+        project_meta=pm,
+    )
+    _copy_merged_rating_to_media_item(item, merged, layer)
 
 
 @app.post('/api/photos/<path:photo_id>/rate')
@@ -924,7 +996,9 @@ def export_gallery_api():
         "music_files": ["path/to/music1.mp3", "path/to/music2.mp3"],  // optional
         "slideshow_enabled": true,  // optional, default true
         "slideshow_duration": 5,  // optional, seconds per photo
-        "smart_tv_mode": false  // optional, optimize for TV
+        "smart_tv_mode": false,  // optional, optimize for TV
+        "project_id": "my-project-id",  // optional; required if project_to_couch_mode ≠ off
+        "project_to_couch_mode": "off" | "fill_empty" | "replace_all"  // seed slides.json couch_* from project layer (after merge)
     }
     """
     try:
@@ -956,6 +1030,24 @@ def export_gallery_api():
         gallery_public_http_base = data.get('gallery_public_http_base')
         if isinstance(gallery_public_http_base, str):
             gallery_public_http_base = gallery_public_http_base.strip() or None
+
+        project_to_couch_mode = (data.get('project_to_couch_mode') or 'off')
+        if isinstance(project_to_couch_mode, str):
+            project_to_couch_mode = project_to_couch_mode.strip().lower()
+        else:
+            project_to_couch_mode = 'off'
+        if project_to_couch_mode not in ('off', 'fill_empty', 'replace_all'):
+            return jsonify({'error': 'Invalid project_to_couch_mode (use off, fill_empty, replace_all)'}), 400
+        project_id_raw = data.get('project_id')
+        project_id = (project_id_raw or '').strip() if isinstance(project_id_raw, str) else ''
+        project_dir = None
+        if project_to_couch_mode != 'off':
+            if not project_id:
+                return jsonify({'error': 'project_id required when project_to_couch_mode is not off'}), 400
+            pm = get_project_manager()
+            project_dir = pm.projects_dir / project_id
+            if not project_dir.is_dir():
+                return jsonify({'error': f'Project not found: {project_id}'}), 404
         
         if not photo_ids:
             return jsonify({'error': 'No photos selected'}), 400
@@ -1011,6 +1103,8 @@ def export_gallery_api():
                     remote_hub_ws_base=remote_hub_ws_base,
                     remote_session_id=remote_session_id,
                     gallery_public_http_base=gallery_public_http_base,
+                    project_dir=project_dir,
+                    project_to_couch_mode=project_to_couch_mode,
                 )
             except Exception as e:
                 result['error'] = str(e)
@@ -2637,6 +2731,181 @@ def browse_folders():
         return jsonify({'error': str(e)}), 500
 
 
+# =============================================================================
+# AUDIO LIBRARY (workspace-scoped browse + stream + project playlist)
+# =============================================================================
+
+
+@app.get('/api/audio/roots')
+def audio_roots_api():
+    """Allowed audio roots = enabled workspace folders (NAS paths, etc.)."""
+    try:
+        workspace_path = get_current_workspace()
+        roots = audio_roots_for_workspace(workspace_path)
+        items = []
+        for r in roots:
+            key = str(r)
+            mf = media_manager.get_folder(key)
+            items.append(
+                {
+                    'path': key,
+                    'name': mf.name if mf else r.name,
+                    'from_media_manager': mf is not None,
+                    'enabled_in_workspace': True,
+                }
+            )
+        return jsonify(
+            {
+                'success': True,
+                'workspace_path': str(workspace_path),
+                'roots': items,
+            }
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.get('/api/audio/browse')
+def audio_browse_api():
+    """
+    List subdirectories and audio files (non-recursive).
+    Query: root (required, must match /api/audio/roots), path (optional subdir).
+    """
+    try:
+        from flask import request
+
+        workspace_path = get_current_workspace()
+        roots = audio_roots_for_workspace(workspace_path)
+        root_param = request.args.get('root') or ''
+        base = match_audio_root(root_param, roots)
+        if not base:
+            return jsonify({'error': 'root is not an allowed audio root'}), 400
+
+        path_param = request.args.get('path')
+        if path_param:
+            dpath, err = resolve_dir_under_audio_roots(path_param, roots)
+            if err or not dpath:
+                return jsonify({'error': err or 'invalid path'}), 400
+            try:
+                if not dpath.is_relative_to(base):
+                    return jsonify({'error': 'path must be under the given root'}), 403
+            except ValueError:
+                return jsonify({'error': 'path must be under the given root'}), 403
+        else:
+            dpath = base
+
+        directories, files = list_audio_directory(dpath)
+        parent = None
+        if dpath != base:
+            parent = str(dpath.parent)
+
+        return jsonify(
+            {
+                'success': True,
+                'root': str(base),
+                'path': str(dpath),
+                'parent': parent,
+                'directories': directories,
+                'files': files,
+                'audio_extensions': sorted(AUDIO_EXTENSIONS),
+            }
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.get('/api/audio/stream')
+def audio_stream_api():
+    """Stream an audio file for in-browser preview (Range requests if supported)."""
+    try:
+        from flask import request
+
+        workspace_path = get_current_workspace()
+        roots = audio_roots_for_workspace(workspace_path)
+        path_param = request.args.get('path') or ''
+        rp, err = resolve_path_under_audio_roots(path_param, roots)
+        if err or not rp:
+            return jsonify({'error': err or 'not found'}), 404
+
+        mime = guess_mimetype(rp)
+        return send_file(
+            str(rp),
+            mimetype=mime,
+            conditional=True,
+            max_age=3600,
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.get('/api/projects/<project_id>/audio/playlist')
+def get_project_audio_playlist(project_id):
+    try:
+        pm = get_project_manager()
+        project = pm.get_project(project_id)
+        if not project:
+            return jsonify({'error': 'Project not found'}), 404
+        pl = project.audio_playlist or {'tracks': [], 'default_track_id': None}
+        return jsonify({'success': True, 'playlist': pl})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.put('/api/projects/<project_id>/audio/playlist')
+def put_project_audio_playlist(project_id):
+    try:
+        from flask import request
+
+        workspace_path = get_current_workspace()
+        roots = audio_roots_for_workspace(workspace_path)
+        pm = get_project_manager()
+        project = pm.get_project(project_id)
+        if not project:
+            return jsonify({'error': 'Project not found'}), 404
+        body = request.get_json()
+        normalized, err = normalize_playlist_from_request(body, roots)
+        if err:
+            return jsonify({'error': err}), 400
+        project.audio_playlist = normalized
+        pm.save_project(project)
+        return jsonify({'success': True, 'playlist': normalized, 'project': project.to_dict()})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.post('/api/projects/<project_id>/audio/playlist/from-paths')
+def post_project_audio_playlist_from_paths(project_id):
+    try:
+        from flask import request
+
+        workspace_path = get_current_workspace()
+        roots = audio_roots_for_workspace(workspace_path)
+        pm = get_project_manager()
+        project = pm.get_project(project_id)
+        if not project:
+            return jsonify({'error': 'Project not found'}), 404
+        body = request.get_json() or {}
+        paths = body.get('paths')
+        pl, err = playlist_from_paths(paths, roots)
+        if err:
+            return jsonify({'error': err}), 400
+        project.audio_playlist = pl
+        pm.save_project(project)
+        return jsonify({'success': True, 'playlist': pl, 'project': project.to_dict()})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 @app.delete('/api/workspace/folders/remove')
 def remove_folder_from_workspace():
     """
@@ -2846,6 +3115,54 @@ def create_project():
         return jsonify({'error': str(e)}), 500
 
 
+@app.post('/api/projects/<project_id>/clone')
+def clone_project_route(project_id):
+    """Clone project (folders, selection, export & quality settings); empty export history."""
+    try:
+        from flask import request
+
+        data = request.get_json() or {}
+        name = (data.get('name') or '').strip()
+        if not name:
+            return jsonify({'error': 'name is required'}), 400
+        pm = get_project_manager()
+        dup = pm.clone_project(project_id, name)
+        if not dup:
+            return jsonify({'error': 'Project not found'}), 404
+        return jsonify({'success': True, 'project': dup.to_dict()})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.post('/api/projects/<project_id>/sync-workspace-folders')
+def sync_project_workspace_folders(project_id):
+    """
+    Rebuild this project's folder list from the current workspace config.
+    Use after adding/removing workspace folders so the Media tab shows new paths.
+    """
+    try:
+        pm = get_project_manager()
+        project = pm.sync_folders_from_workspace(project_id)
+        if not project:
+            return jsonify({'error': 'Project not found'}), 404
+        project = pm.get_project(project_id)
+        for f in project.folders or []:
+            fp = f.get('path')
+            if not fp:
+                continue
+            mf = media_manager.get_folder(fp)
+            if mf:
+                f['photo_count'] = mf.total_photos
+                f['video_count'] = mf.total_videos
+                f['audio_count'] = mf.total_audio
+        pm.save_project(project)
+        return jsonify({'success': True, 'project': project.to_dict()})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 @app.put('/api/projects/<project_id>')
 def update_project(project_id):
     """Update an existing project"""
@@ -2877,11 +3194,32 @@ def update_project(project_id):
         if 'manual_exclusions' in data:
             project.manual_exclusions = data['manual_exclusions']
         if 'export_settings' in data:
-            from photo_tool.projects.manager import ExportSettings
-            project.export_settings = ExportSettings(**data['export_settings']) if data['export_settings'] else None
+            from photo_tool.projects.manager import export_settings_from_dict
+
+            raw_es = data['export_settings']
+            if raw_es is None:
+                project.export_settings = None
+            elif isinstance(raw_es, dict):
+                project.export_settings = export_settings_from_dict(
+                    raw_es if raw_es else {}
+                )
+            else:
+                project.export_settings = None
         if 'quality_settings' in data:
             from photo_tool.projects.manager import QualityDetectionSettings
             project.quality_settings = QualityDetectionSettings(**data['quality_settings']) if data['quality_settings'] else None
+        if 'audio_playlist' in data:
+            roots = audio_roots_for_workspace(get_current_workspace())
+            raw_pl = data['audio_playlist']
+            if raw_pl is None:
+                project.audio_playlist = None
+            elif isinstance(raw_pl, dict):
+                normalized, err = normalize_playlist_from_request(raw_pl, roots)
+                if err:
+                    return jsonify({'error': f'audio_playlist: {err}'}), 400
+                project.audio_playlist = normalized
+            else:
+                return jsonify({'error': 'audio_playlist must be an object or null'}), 400
         
         # Save
         pm.save_project(project)
@@ -3123,133 +3461,127 @@ def get_project_media(project_id):
                                 print(f"⚠️ Auto-migration failed: {e}")
                                 # Continue anyway - will fall back to legacy if needed
                         
-                        # Load from SQLite
+                        # Load from SQLite: LIMIT/OFFSET in SQL so we never materialize 50k+ rows in Python.
                         with perf_measure("sqlite_query"):
-                            # Convert media_type 'all' to None
                             query_media_type = None if media_type == 'all' else media_type
-                            
-                            # ========================================================================
-                            # NEW APPROACH: Always load from Workspace DB filtered by enabled_folders
-                            # No Project DB population needed! Just filter on-the-fly!
-                            # ========================================================================
                             workspace_conn = hybrid_mgr.db_manager.get_workspace_db()
                             cursor = workspace_conn.cursor()
-                            
-                            # Build query for enabled folders
                             folder_conditions = ' OR '.join(['folder LIKE ?' for _ in enabled_folders])
                             folder_params = [f"{str(f)}%" for f in enabled_folders]
-                            
+
+                            # One aggregation over enabled folders (bounded groups), not O(n) per row windows on full set.
+                            burst_agg = f"""
+                                SELECT CAST(pm3.burst_id AS TEXT) AS bid,
+                                       COUNT(*) AS cnt,
+                                       MIN(m3.path) AS lead_path
+                                FROM media m3
+                                INNER JOIN photo_metadata pm3 ON m3.id = pm3.media_id
+                                WHERE ({folder_conditions})
+                                  AND m3.is_available = 1
+                                  AND pm3.burst_id IS NOT NULL
+                                  AND TRIM(IFNULL(CAST(pm3.burst_id AS TEXT), '')) != ''
+                                GROUP BY CAST(pm3.burst_id AS TEXT)
+                            """
+                            base_cols = """
+                                    m.id, m.path, m.filename, m.folder, m.media_type,
+                                    m.file_size, m.file_mtime, m.is_available,
+                                    m.rating, m.color, m.keywords, m.comment,
+                                    m.created_at, m.updated_at,
+                                    pm.capture_time, pm.width, pm.height,
+                                    pm.camera_make, pm.camera_model, pm.lens_model,
+                                    pm.iso, pm.aperture, pm.shutter_speed, pm.focal_length,
+                                    pm.blur_laplacian, pm.blur_tenengrad, pm.blur_roi,
+                                    pm.burst_id, pm.is_burst_candidate, pm.burst_neighbors,
+                                    bs.cnt AS _burst_group_size,
+                                    bs.lead_path AS _burst_lead_path
+                            """
+
                             if query_media_type:
-                                query = f"""
-                                    SELECT 
-                                        m.id, m.path, m.filename, m.folder, m.media_type,
-                                        m.file_size, m.file_mtime, m.is_available,
-                                        m.rating, m.color, m.keywords, m.comment,
-                                        m.created_at, m.updated_at,
-                                        pm.capture_time, pm.width, pm.height,
-                                        pm.camera_make, pm.camera_model, pm.lens_model,
-                                        pm.iso, pm.aperture, pm.shutter_speed, pm.focal_length,
-                                        pm.blur_laplacian, pm.blur_tenengrad, pm.blur_roi,
-                                        pm.burst_id, pm.is_burst_candidate, pm.burst_neighbors
+                                count_sql = (
+                                    f"SELECT COUNT(*) AS c FROM media m WHERE ({folder_conditions}) "
+                                    "AND m.media_type = ? AND m.is_available = 1"
+                                )
+                                cursor.execute(count_sql, folder_params + [query_media_type])
+                                total_count = int(cursor.fetchone()['c'])
+
+                                page_sql = f"""
+                                    SELECT {base_cols.strip()}
                                     FROM media m
                                     LEFT JOIN photo_metadata pm ON m.id = pm.media_id
-                                    WHERE ({folder_conditions}) 
+                                    LEFT JOIN ({burst_agg}) bs
+                                      ON CAST(pm.burst_id AS TEXT) = bs.bid
+                                    WHERE ({folder_conditions})
                                       AND m.media_type = ?
                                       AND m.is_available = 1
-                                    ORDER BY 
-                                        CASE 
-                                            WHEN pm.capture_time IS NOT NULL THEN pm.capture_time
-                                            WHEN m.file_mtime IS NOT NULL THEN datetime(m.file_mtime, 'unixepoch')
-                                            ELSE m.filename
-                                        END ASC
+                                    ORDER BY
+                                      CASE
+                                        WHEN pm.capture_time IS NOT NULL THEN pm.capture_time
+                                        WHEN m.file_mtime IS NOT NULL THEN datetime(m.file_mtime, 'unixepoch')
+                                        ELSE m.filename
+                                      END ASC
+                                    LIMIT ? OFFSET ?
                                 """
-                                cursor.execute(query, folder_params + [query_media_type])
+                                cursor.execute(
+                                    page_sql,
+                                    folder_params + folder_params + [query_media_type, limit, offset],
+                                )
                             else:
-                                query = f"""
-                                    SELECT 
-                                        m.id, m.path, m.filename, m.folder, m.media_type,
-                                        m.file_size, m.file_mtime, m.is_available,
-                                        m.rating, m.color, m.keywords, m.comment,
-                                        m.created_at, m.updated_at,
-                                        pm.capture_time, pm.width, pm.height,
-                                        pm.camera_make, pm.camera_model, pm.lens_model,
-                                        pm.iso, pm.aperture, pm.shutter_speed, pm.focal_length,
-                                        pm.blur_laplacian, pm.blur_tenengrad, pm.blur_roi,
-                                        pm.burst_id, pm.is_burst_candidate, pm.burst_neighbors
+                                count_sql = (
+                                    f"SELECT COUNT(*) AS c FROM media m WHERE ({folder_conditions}) "
+                                    "AND m.is_available = 1"
+                                )
+                                cursor.execute(count_sql, folder_params)
+                                total_count = int(cursor.fetchone()['c'])
+
+                                page_sql = f"""
+                                    SELECT {base_cols.strip()}
                                     FROM media m
                                     LEFT JOIN photo_metadata pm ON m.id = pm.media_id
+                                    LEFT JOIN ({burst_agg}) bs
+                                      ON CAST(pm.burst_id AS TEXT) = bs.bid
                                     WHERE ({folder_conditions})
                                       AND m.is_available = 1
-                                    ORDER BY 
-                                        CASE 
-                                            WHEN pm.capture_time IS NOT NULL THEN pm.capture_time
-                                            WHEN m.file_mtime IS NOT NULL THEN datetime(m.file_mtime, 'unixepoch')
-                                            ELSE m.filename
-                                        END ASC
+                                    ORDER BY
+                                      CASE
+                                        WHEN pm.capture_time IS NOT NULL THEN pm.capture_time
+                                        WHEN m.file_mtime IS NOT NULL THEN datetime(m.file_mtime, 'unixepoch')
+                                        ELSE m.filename
+                                      END ASC
+                                    LIMIT ? OFFSET ?
                                 """
-                                cursor.execute(query, folder_params)
-                            
+                                cursor.execute(
+                                    page_sql,
+                                    folder_params + folder_params + [limit, offset],
+                                )
+
                             media_list = [dict(row) for row in cursor.fetchall()]
+
+                            counts_by_type = {'photo': 0, 'video': 0, 'audio': 0, 'unknown': 0}
+                            if query_media_type:
+                                counts_by_type[query_media_type] = total_count
+                            else:
+                                ctype_sql = (
+                                    f"SELECT m.media_type AS t, COUNT(*) AS c FROM media m "
+                                    f"WHERE ({folder_conditions}) AND m.is_available = 1 GROUP BY m.media_type"
+                                )
+                                cursor.execute(ctype_sql, folder_params)
+                                for row in cursor.fetchall():
+                                    t = row['t']
+                                    if t in counts_by_type:
+                                        counts_by_type[t] = int(row['c'])
+                                    else:
+                                        counts_by_type['unknown'] += int(row['c'])
+
                             workspace_conn.close()
-                            
-                            # DEBUG: Check actual sort order from database
-                            if len(media_list) > 0:
-                                print(f"📊 DEBUG: {len(media_list)} total items loaded")
-                                # Show first 5 and last 5 items with timestamps
-                                print(f"📅 First 5 items (should be oldest):")
-                                for item in media_list[:5]:
-                                    mtime = f"mtime:{item.get('file_mtime', 'NULL')}" if not item.get('capture_time') else ""
-                                    print(f"   {item.get('capture_time') or 'None'} {mtime} - {item['filename']} - {Path(item['folder']).name}")
-                                if len(media_list) > 10:
-                                    print(f"📅 Last 5 items (should be newest):")
-                                    for item in media_list[-5:]:
-                                        mtime = f"mtime:{item.get('file_mtime', 'NULL')}" if not item.get('capture_time') else ""
-                                        print(f"   {item.get('capture_time') or 'None'} {mtime} - {item['filename']} - {Path(item['folder']).name}")
-                            
-                            # DEBUG: Check if color data is present
-                            colored_items = [m for m in media_list if m.get('color')]
-                            print(f"📊 Color labels: {len(colored_items)} with color")
-                            if colored_items:
-                                sample = colored_items[0]
-                                print(f"   Sample: {sample['filename']} - color={sample['color']}, rating={sample['rating']}")
-                            
-                            print(f"✅ Loaded {len(media_list)} items from workspace DB (filtered by {len(enabled_folders)} folders)")
-                        
-                        # ============================================================================
-                        # STEP 1: Identify burst leaders (one per burst_id)
-                        # ============================================================================
-                        burst_groups = {}  # burst_id -> list of media items
-                        burst_leaders = set()  # Set of paths that are burst leaders
-                        
-                        for media in media_list:
-                            burst_id = media.get('burst_id')
-                            if burst_id:
-                                if burst_id not in burst_groups:
-                                    burst_groups[burst_id] = []
-                                burst_groups[burst_id].append(media)
-                        
-                        # Select one leader per burst group (first photo alphabetically)
-                        total_burst_photos = 0
-                        for burst_id, group in burst_groups.items():
-                            if group:
-                                # Sort by filename to ensure consistent leader selection
-                                group.sort(key=lambda x: x['filename'])
-                                leader = group[0]
-                                burst_leaders.add(leader['path'])
-                                total_burst_photos += len(group)
-                        
-                        print(f"📦 Burst grouping: {len(burst_groups)} groups, {len(burst_leaders)} leaders, {total_burst_photos} total photos in bursts")
-                        
-                        # Debug: Show a few sample groups
-                        sample_groups = list(burst_groups.items())[:3]
-                        if sample_groups:
-                            print(f"📦 Sample burst groups:")
-                            for burst_id, group in sample_groups:
-                                print(f"   {burst_id}: {len(group)} photos - {[m['filename'] for m in group]}")
-                        
-                        # ============================================================================
-                        # STEP 2: Parse JSON fields and build response
-                        # ============================================================================
+                            logger.info(
+                                "SQLite page: total=%s fetched=%s limit=%s offset=%s",
+                                total_count,
+                                len(media_list),
+                                limit,
+                                offset,
+                            )
+
+                        # Build response (burst leader / count from SQL window functions)
                         result = []
                         for media in media_list:
                             # Parse keywords (JSON string → array)
@@ -3268,10 +3600,19 @@ def get_project_media(project_id):
                                 except:
                                     burst_neighbors_list = []
                             
-                            # Determine if this photo is a burst leader
                             burst_id = media.get('burst_id')
-                            is_burst_lead = (media['path'] in burst_leaders)
-                            
+                            lead_path = media.get('_burst_lead_path')
+                            bgs = media.get('_burst_group_size')
+                            has_burst = burst_id is not None and str(burst_id).strip() != ''
+                            is_burst_lead = bool(
+                                has_burst
+                                and lead_path is not None
+                                and lead_path == media.get('path')
+                            )
+                            burst_count_val = (
+                                int(bgs) if (is_burst_lead and bgs is not None) else 0
+                            )
+
                             # Build response item with ALL fields
                             item = {
                                 'id': media['path'],
@@ -3304,8 +3645,7 @@ def get_project_media(project_id):
                                 # Only the selected leader is marked as burst_lead
                                 'is_burst_lead': is_burst_lead,
                                 'burst_neighbors': burst_neighbors_list,
-                                # Only set burst_count for leaders
-                                'burst_count': len(burst_groups.get(burst_id, [])) if is_burst_lead else 0,
+                                'burst_count': burst_count_val,
                                 # Critical: thumbnail paths
                                 'thumbnail': f"/thumbnails/{Path(media['filename']).stem}.jpg",
                                 'full_image': f"/images/{Path(media['filename']).stem}{Path(media['filename']).suffix}",
@@ -3317,23 +3657,44 @@ def get_project_media(project_id):
                             }
                             
                             result.append(item)
-                        
-                        # Apply pagination
-                        total_count = len(result)
-                        result = result[offset:offset + limit]
-                        
-                        # Log performance
+
                         timings = get_perf_timings()
-                        print(f"✅ SQLite load complete: {total_count} items in {timings.get('sqlite_load_total', 0):.3f}s")
-                        logger.info(f"📊 SQLite Performance: {timings}")
-                        
+                        _emit_console_line(
+                            f"📥 SQLite page: {len(result)} Zeilen (Gesamt im Scope: {total_count}), "
+                            f"DB-Zeit ~{timings.get('sqlite_query', 0) or timings.get('sqlite_load_total', 0):.3f}s"
+                        )
+
                         project_dir_sql = pm.projects_dir / project_id
                         psm_sql = ProjectSidecarManager(project_dir_sql)
-                        for item in result:
-                            if item.get('type') == 'photo':
-                                _apply_rating_layer_to_photo_item(
-                                    item, Path(item['path']), psm_sql, rating_layer
+                        sidecar_index_sql = load_project_sidecar_index(project_dir_sql)
+                        photo_indices = [i for i, x in enumerate(result) if x.get('type') == 'photo']
+                        n_photo = len(photo_indices)
+                        _emit_console_line(
+                            f"🧩 Rating-Layer ({rating_layer}): merge für {n_photo} Fotos "
+                            f"(Videos/Audio übersprungen) …"
+                        )
+                        for k, i in enumerate(photo_indices):
+                            item = result[i]
+                            _apply_rating_layer_to_photo_item_sqlite_batch(
+                                item,
+                                Path(item['path']),
+                                psm_sql,
+                                rating_layer,
+                                sidecar_index_sql,
+                            )
+                            if n_photo and (k + 1) % 200 == 0:
+                                _emit_console_line(
+                                    f"   … merge Fortschritt: {k + 1}/{n_photo} Fotos"
                                 )
+                        if n_photo:
+                            _emit_console_line(f"   … merge fertig: {n_photo}/{n_photo} Fotos")
+
+                        timings = get_perf_timings()
+                        _emit_console_line(
+                            f"✅ /media fertig: {len(result)} zurück, total_count={total_count}, "
+                            f"timings={timings}"
+                        )
+                        logger.info(f"📊 SQLite media path done: {timings}")
 
                         # Return in the SAME format as legacy (media array)
                         return jsonify({
@@ -3345,10 +3706,14 @@ def get_project_media(project_id):
                             'source': 'sqlite',
                             'project_id': project_id,
                             'rating_layer': rating_layer,
+                            'merge_debug': {
+                                'photos_merged': n_photo,
+                                'rows_in_page': len(result),
+                            },
                             'counts': {
-                                'photos': len([m for m in result if m['type'] == 'photo']),
-                                'videos': len([m for m in result if m['type'] == 'video']),
-                                'audio': len([m for m in result if m['type'] == 'audio'])
+                                'photos': counts_by_type.get('photo', 0),
+                                'videos': counts_by_type.get('video', 0),
+                                'audio': counts_by_type.get('audio', 0),
                             }
                         })
                 
@@ -4248,6 +4613,10 @@ if __name__ == '__main__':
     print("\nTo enable firewall (run as Administrator):")
     print('   netsh advfirewall firewall add rule name="Photo Tool Web GUI" dir=in action=allow protocol=TCP localport=8000')
     print("\nPress Ctrl+C to stop\n")
+    print(
+        "Tipp: Fortschrittszeilen live im Terminal → Prozess mit unbuffered starten "
+        "(z. B. python -u gui_poc/server.py oder PYTHONUNBUFFERED=1).\n"
+    )
     
     # Bind to all interfaces (0.0.0.0) for network access
     app.run(debug=True, port=8000, host='0.0.0.0')

@@ -769,6 +769,11 @@ h1 {
     padding: 20px;
 }
 
+/* Stacked above .modal-overlay (10000), e.g. folder picker opened from Add Media Folder */
+.modal.modal--stack-top {
+    z-index: 10050;
+}
+
 .modal-content {
     max-width: 1200px;
     width: 100%;

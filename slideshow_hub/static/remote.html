@@ -162,6 +162,7 @@
   </div>
 
   <div class="status" id="status">Nicht verbunden.</div>
+  <div class="status" id="tvAutoplayLine" style="margin-top:8px;font-size:0.88rem;opacity:0.92;display:none" aria-live="polite"></div>
 
   <h2 style="font-size:1rem;margin:20px 0 8px">Bewertung (aktuelles Bild)</h2>
   <div class="stars" id="stars"></div>
@@ -314,6 +315,130 @@
       ws.send(JSON.stringify(Object.assign({ type: 'cmd', action: action, from: 'remote' }, extra || {})));
     }
 
+    var BLIND_DEBOUNCE_MS = 250;
+    var blindLastByQ = { LU: 0, LD: 0, RU: 0, RD: 0 };
+
+    function rebuildEligible() {
+      eligibleIndices = [];
+      if (!slidesCache || !slidesCache.length) return;
+      var sel = document.getElementById('minStarsFilter');
+      var m = sel ? parseInt(sel.value, 10) : 0;
+      if (isNaN(m)) m = 0;
+      for (var i = 0; i < slidesCache.length; i++) {
+        var s = slidesCache[i];
+        var r = s.couch_rating != null ? Number(s.couch_rating) : 0;
+        if (r >= m) eligibleIndices.push(i);
+      }
+    }
+
+    function refreshSlidesFromHub() {
+      var params = new URLSearchParams();
+      params.set('session_id', sessionIdForApi());
+      var u = slidesJsonUrl();
+      if (u) params.set('slides_json_url', u);
+      return fetch(location.origin + '/api/slides-json?' + params.toString())
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (x) {
+          if (!x.ok) {
+            var d = x.j.detail;
+            if (Array.isArray(d)) d = d.map(function (e) { return e.msg || e; }).join('; ');
+            throw new Error(d || JSON.stringify(x.j));
+          }
+          slidesCache = x.j.slides || [];
+          rebuildEligible();
+          setStatus('Manifest: ' + slidesCache.length + ' Folien · ' + eligibleIndices.length + ' mit Filter');
+        })
+        .catch(function (e) { setStatus('Manifest-Fehler: ' + e.message); });
+    }
+
+    function maybeSyncFilterPosition() {
+      var en = document.getElementById('filterNavEnabled');
+      if (!en || !en.checked || !eligibleIndices.length) return;
+      var pos = eligibleIndices.indexOf(currentIndex);
+      if (pos >= 0) return;
+      for (var p = 0; p < eligibleIndices.length; p++) {
+        if (eligibleIndices[p] >= currentIndex) {
+          sendCmd('goto', { index: eligibleIndices[p] });
+          return;
+        }
+      }
+      sendCmd('goto', { index: eligibleIndices[eligibleIndices.length - 1] });
+    }
+
+    function navNextFiltered() {
+      var en = document.getElementById('filterNavEnabled');
+      if (!en || !en.checked || !eligibleIndices.length) {
+        sendCmd('next');
+        return;
+      }
+      var pos = eligibleIndices.indexOf(currentIndex);
+      if (pos < 0) pos = -1;
+      var np = pos + 1;
+      if (np < eligibleIndices.length) {
+        sendCmd('goto', { index: eligibleIndices[np] });
+      } else {
+        sendCmd('next');
+      }
+    }
+
+    function navPrevFiltered() {
+      var en = document.getElementById('filterNavEnabled');
+      if (!en || !en.checked || !eligibleIndices.length) {
+        sendCmd('prev');
+        return;
+      }
+      var pos = eligibleIndices.indexOf(currentIndex);
+      if (pos < 0) {
+        sendCmd('prev');
+        return;
+      }
+      if (pos > 0) {
+        sendCmd('goto', { index: eligibleIndices[pos - 1] });
+      } else {
+        sendCmd('prev');
+      }
+    }
+
+    function rateDelta(delta) {
+      var url = slidesJsonUrl();
+      var body = {
+        slide_index: currentIndex,
+        session_id: sessionIdForApi(),
+        rating_delta: delta
+      };
+      if (url) body.slides_json_url = url;
+      fetch(location.origin + '/api/rate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (x) {
+          if (!x.ok) {
+            var d = x.j.detail;
+            if (Array.isArray(d)) d = d.map(function (e) { return e.msg || e; }).join('; ');
+            throw new Error(d || JSON.stringify(x.j));
+          }
+          setStatus('Δ-Bewertung Folie ' + (currentIndex + 1) + ' ✓');
+        })
+        .catch(function (e) { setStatus('Fehler: ' + e.message); });
+    }
+
+    function blindZoneTap(q) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        setStatus('Nicht verbunden.');
+        return;
+      }
+      var now = Date.now();
+      if (now - blindLastByQ[q] < BLIND_DEBOUNCE_MS) return;
+      blindLastByQ[q] = now;
+      sendCmd('blind_tap', { quadrant: q });
+      if (q === 'LU') rateDelta(1);
+      else if (q === 'LD') rateDelta(-1);
+      else if (q === 'RU') navNextFiltered();
+      else if (q === 'RD') navPrevFiltered();
+    }
+
     document.getElementById('btnConnect').onclick = function () {
       const base = document.getElementById('hubWs').value.trim().replace(/\/+$/, '');
       const session = document.getElementById('session').value.trim() || 'default';
@@ -363,9 +488,33 @@
               expectTvGalleryFill = false;
             }
             setStatus(line);
+            var tap = document.getElementById('tvAutoplayLine');
+            if (tap) {
+              if (!('min_couch_stars' in msg)) {
+                tap.style.display = 'block';
+                tap.textContent = 'Hinweis: Ältere TV-Slideshow — für Autoplay-Zeile hier bitte Galerie neu exportieren.';
+              } else {
+                var mn = typeof msg.min_couch_stars === 'number' ? msg.min_couch_stars : parseInt(msg.min_couch_stars, 10);
+                if (!isNaN(mn) && mn > 0) {
+                  tap.style.display = 'block';
+                  var pl = msg.progress_line ? String(msg.progress_line) : '';
+                  tap.textContent = 'TV Autoplay: ≥' + mn + '★ — Fortschritt ' + (pl || '—');
+                } else {
+                  tap.style.display = 'block';
+                  tap.textContent = 'TV Autoplay: alle Folien (kein Mindest-★-Filter auf dem TV)';
+                }
+              }
+            }
+            maybeSyncFilterPosition();
           }
           if (msg.type === 'rated' && msg.ok) {
-            setStatus('Gespeichert: Folie ' + ((msg.slide_index != null ? msg.slide_index : currentIndex) + 1));
+            var si = msg.slide_index != null ? msg.slide_index : currentIndex;
+            if (slidesCache && si >= 0 && si < slidesCache.length) {
+              if (msg.couch_rating !== undefined) slidesCache[si].couch_rating = msg.couch_rating;
+              if (msg.couch_color !== undefined) slidesCache[si].couch_color = msg.couch_color;
+              rebuildEligible();
+            }
+            setStatus('Gespeichert: Folie ' + (si + 1));
           }
         } catch (e) {}
       };
@@ -374,11 +523,13 @@
     document.getElementById('btnDisconnect').onclick = function () {
       if (ws) { ws.close(); ws = null; }
       lastTvStateAt = 0;
+      var tap = document.getElementById('tvAutoplayLine');
+      if (tap) { tap.style.display = 'none'; tap.textContent = ''; }
       setStatus('Getrennt.');
     };
 
-    document.getElementById('btnPrev').onclick = function () { sendCmd('prev'); };
-    document.getElementById('btnNext').onclick = function () { sendCmd('next'); };
+    document.getElementById('btnPrev').onclick = function () { navPrevFiltered(); };
+    document.getElementById('btnNext').onclick = function () { navNextFiltered(); };
     document.getElementById('btnToggle').onclick = function () { sendCmd('toggle'); };
 
     document.getElementById('btnChromeHide').onclick = function () { sendCmd('hide_chrome'); };
@@ -405,6 +556,70 @@
       var v = this.value.trim();
       if (v) try { localStorage.setItem(GALLERY_BASE_LS, normalizeGalleryBase(v)); } catch (e) {}
     });
+
+    document.getElementById('minStarsFilter').addEventListener('change', function () {
+      rebuildEligible();
+      setStatus('Filter: ' + eligibleIndices.length + ' Folien');
+      maybeSyncFilterPosition();
+    });
+
+    document.getElementById('filterNavEnabled').addEventListener('change', function () {
+      if (this.checked && (!slidesCache || !slidesCache.length)) {
+        refreshSlidesFromHub();
+      } else {
+        maybeSyncFilterPosition();
+      }
+    });
+
+    document.getElementById('btnReloadSlides').onclick = function () { refreshSlidesFromHub(); };
+
+    (function initBlindOverlay() {
+      var ov = document.getElementById('blindRatingOverlay');
+      var exitBtn = document.getElementById('brExit');
+      var fsBtn = document.getElementById('brFsOptional');
+      var openBtn = document.getElementById('btnBlindRating');
+      if (!ov || !exitBtn || !openBtn) return;
+      openBtn.onclick = function () {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          setStatus('Zuerst mit Hub verbinden.');
+          return;
+        }
+        ov.classList.add('open');
+        ov.setAttribute('aria-hidden', 'false');
+      };
+      exitBtn.onclick = function () {
+        ov.classList.remove('open');
+        ov.setAttribute('aria-hidden', 'true');
+        if (document.fullscreenElement === ov) {
+          try { document.exitFullscreen(); } catch (e) {}
+        }
+      };
+      if (fsBtn) {
+        fsBtn.onclick = function () {
+          if (!document.fullscreenElement) {
+            ov.requestFullscreen().catch(function () { setStatus('Vollbild nicht verfügbar'); });
+          } else {
+            document.exitFullscreen();
+          }
+        };
+      }
+      ov.querySelectorAll('.br-zone').forEach(function (z) {
+        var q = z.getAttribute('data-q');
+        if (!q) return;
+        function down() { z.classList.add('br-pressed'); }
+        function up() { z.classList.remove('br-pressed'); }
+        z.addEventListener('pointerdown', down);
+        z.addEventListener('pointerup', function (e) {
+          e.preventDefault();
+          up();
+          blindZoneTap(q);
+        });
+        z.addEventListener('pointercancel', up);
+        z.addEventListener('pointerleave', function (e) {
+          if (e.buttons === 0) up();
+        });
+      });
+    })();
 
     const starsEl = document.getElementById('stars');
     for (let s = 1; s <= 5; s++) {

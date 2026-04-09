@@ -3,14 +3,25 @@ Project Manager for Photo Tool
 Handles project creation, loading, saving, and deletion
 """
 
+import copy
 import yaml
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, fields
 from ..util.logging import get_logger
+from ..config import load_config
+from ..workspace import Workspace
 
 logger = get_logger("projects")
+
+
+def _folder_identity_key(path_str: str) -> str:
+    """Normalize path for comparing workspace vs project folder entries (UNC-safe best-effort)."""
+    try:
+        return str(Path(path_str).resolve())
+    except (OSError, ValueError):
+        return str(Path(path_str))
 
 
 @dataclass
@@ -25,11 +36,13 @@ class ProjectFilters:
 
 @dataclass
 class ExportSettings:
-    """Export settings for the project"""
+    """Export settings for the project (persisted per project; Photo Tool export modal)."""
     slideshow_enabled: bool = True
     slideshow_duration: int = 5
     smart_tv_mode: bool = False
     template: str = "photoswipe"
+    profile: str = "web"
+    generate_webp: bool = False
     music_files: Optional[List[str]] = None
     music_autoplay: bool = False     # 🎵 Autoplay music on load
     music_ducking_volume: int = 30   # 🎚️ Music volume during pause (0-100%)
@@ -42,6 +55,11 @@ class ExportSettings:
     gallery_public_http_base: Optional[str] = None
     # Parent folder for <output_name>/ (web root: index.html, slides.json, images/; empty = workspace/exports)
     export_base_path: Optional[str] = None
+    project_to_couch_mode: str = "off"  # off | fill_empty | replace_all
+    couch_import_slides_path: Optional[str] = None
+    export_title: Optional[str] = None
+    # Media tab rating layer preference (stored with export modal for convenience)
+    active_rating_layer: str = "project"
 
 
 @dataclass
@@ -97,6 +115,9 @@ class Project:
     # Metadata
     exports: Optional[List[Dict[str, Any]]] = None
     stats: Optional[Dict[str, Any]] = None
+
+    # Audio library (paths under workspace-enabled folders; see /api/audio/*)
+    audio_playlist: Optional[Dict[str, Any]] = None
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization"""
@@ -110,11 +131,37 @@ class Project:
         # Convert nested dicts to dataclasses
         if 'filters' in data and data['filters']:
             data['filters'] = ProjectFilters(**data['filters'])
-        if 'export_settings' in data and data['export_settings']:
-            data['export_settings'] = ExportSettings(**data['export_settings'])
+        if 'export_settings' in data:
+            raw_es = data['export_settings']
+            if raw_es is None:
+                data['export_settings'] = None
+            elif isinstance(raw_es, dict):
+                data['export_settings'] = export_settings_from_dict(
+                    raw_es if raw_es else {}
+                )
+            else:
+                data['export_settings'] = None
         if 'quality_settings' in data and data['quality_settings']:
             data['quality_settings'] = QualityDetectionSettings(**data['quality_settings'])
+        ap = data.get('audio_playlist')
+        if ap is not None and not isinstance(ap, dict):
+            data['audio_playlist'] = None
         return cls(**data)
+
+
+def export_settings_from_dict(d: Optional[Dict[str, Any]]) -> Optional[ExportSettings]:
+    """Build ExportSettings from YAML/API dict; ignore unknown keys (for forward compatibility)."""
+    if d is None:
+        return None
+    if not isinstance(d, dict):
+        return None
+    allowed = {f.name for f in fields(ExportSettings)}
+    filtered = {k: v for k, v in d.items() if k in allowed}
+    try:
+        return ExportSettings(**filtered)
+    except TypeError:
+        logger.warning("export_settings_from_dict: invalid fields, using defaults")
+        return ExportSettings()
 
 
 class ProjectManager:
@@ -216,6 +263,71 @@ class ProjectManager:
             logger.error(f"Failed to save project: {e}")
             return False
     
+    def sync_folders_from_workspace(self, project_id: str) -> Optional[Project]:
+        """
+        Rebuild project.folders from the workspace config's folder list.
+        Preserves enabled flag and counts for paths that still exist; new paths are disabled.
+        Removes project entries that no longer exist on the workspace.
+        """
+        project = self.get_project(project_id)
+        if not project:
+            return None
+        try:
+            ws_root = Path(project.workspace_path)
+        except Exception as e:
+            logger.warning("sync_folders_from_workspace: bad workspace_path: %s", e)
+            return project
+
+        ws = Workspace(ws_root)
+        if not ws.config_file.exists():
+            logger.warning("sync_folders_from_workspace: missing %s", ws.config_file)
+            return project
+
+        config = load_config(ws.config_file)
+        ws_folders = config.folders or []
+
+        old_by_key: Dict[str, Dict[str, Any]] = {}
+        for pf in project.folders or []:
+            raw = pf.get("path")
+            if not raw:
+                continue
+            old_by_key[_folder_identity_key(str(raw))] = dict(pf)
+
+        merged: List[Dict[str, Any]] = []
+        for wf in ws_folders:
+            path = wf.get("path")
+            if not path:
+                continue
+            key = _folder_identity_key(str(path))
+            prev = old_by_key.get(key)
+            pc = wf.get("photo_count")
+            if pc is None:
+                pc = (prev or {}).get("photo_count") or 0
+            vc = wf.get("video_count")
+            if vc is None:
+                vc = (prev or {}).get("video_count") or 0
+            ac = wf.get("audio_count")
+            if ac is None:
+                ac = (prev or {}).get("audio_count") or 0
+            merged.append(
+                {
+                    "path": str(path),
+                    "enabled": bool(prev.get("enabled")) if prev else False,
+                    "photo_count": int(pc),
+                    "video_count": int(vc),
+                    "audio_count": int(ac),
+                }
+            )
+
+        project.folders = merged
+        self.save_project(project)
+        logger.info(
+            "sync_folders_from_workspace: project %s now has %s folders",
+            project_id,
+            len(merged),
+        )
+        return project
+
     def create_project(
         self,
         name: str,
@@ -271,7 +383,7 @@ class ProjectManager:
             selection_mode=selection_mode,
             filters=ProjectFilters(**filters) if filters else None,
             photo_ids=photo_ids,
-            export_settings=ExportSettings(**export_settings) if export_settings else None,
+            export_settings=export_settings_from_dict(export_settings) if export_settings else None,
             quality_settings=QualityDetectionSettings(**quality_settings) if quality_settings else QualityDetectionSettings(),
             exports=[],
             stats={}
@@ -282,6 +394,56 @@ class ProjectManager:
         
         return project
     
+    def clone_project(self, source_id: str, new_name: str) -> Optional[Project]:
+        """Duplicate project folders, selection, export & quality settings; new id/name; empty export history."""
+        src = self.get_project(source_id)
+        if not src:
+            return None
+        name = (new_name or "").strip()
+        if not name:
+            return None
+        base_id = name.lower().replace(" ", "-").replace("/", "-")
+        project_id = base_id
+        if any(p["id"] == project_id for p in self.index["projects"]):
+            project_id = f"{base_id}-{int(datetime.now().timestamp())}"
+        now = datetime.now().isoformat()
+        dup_folders = copy.deepcopy(src.folders) if src.folders else None
+        dup_filters = ProjectFilters(**asdict(src.filters)) if src.filters else None
+        dup_photo_ids = list(src.photo_ids) if src.photo_ids else None
+        dup_manual_add = list(src.manual_additions) if src.manual_additions else None
+        dup_manual_exc = list(src.manual_exclusions) if src.manual_exclusions else None
+        dup_export = (
+            export_settings_from_dict(asdict(src.export_settings))
+            if src.export_settings
+            else None
+        )
+        dup_quality = (
+            QualityDetectionSettings(**asdict(src.quality_settings))
+            if src.quality_settings
+            else QualityDetectionSettings()
+        )
+        dup_audio = copy.deepcopy(src.audio_playlist) if src.audio_playlist else None
+        project = Project(
+            id=project_id,
+            name=name,
+            created=now,
+            updated=now,
+            workspace_path=src.workspace_path,
+            folders=dup_folders,
+            selection_mode=src.selection_mode,
+            filters=dup_filters,
+            photo_ids=dup_photo_ids,
+            manual_additions=dup_manual_add,
+            manual_exclusions=dup_manual_exc,
+            export_settings=dup_export,
+            quality_settings=dup_quality,
+            exports=[],
+            stats={},
+            audio_playlist=dup_audio,
+        )
+        self.save_project(project)
+        return project
+
     def delete_project(self, project_id: str) -> bool:
         """Delete a project"""
         try:

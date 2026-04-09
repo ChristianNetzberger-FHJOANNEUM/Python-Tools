@@ -12,6 +12,14 @@
 #   http://<NAS-IP>:8090/health
 #   http://<NAS-IP>:8090/remote
 # WebSocket base for TV + phone: ws://<NAS-IP>:8090/ws  (session appended by clients)
+#
+# --- Dauerhafte Konfiguration ---
+# Diese Datei (lokal angepasst) auf die NAS legen und immer wieder mit demselben
+# `docker compose -f ... up -d` starten. Dann bleiben Volume + SLIDESHUB_GALLERY_PATH_MAP
+# nach jedem neuen Image erhalten (im Gegensatz zu „Image importieren → neuen Container per Hand“).
+#
+# Passe an: GALLERY_ORIGIN, Host-Pfad der web-Freigabe RECHTS in volumes muss zum
+# rechten Wert in SLIDESHUB_GALLERY_PATH_MAP passen (hier beides /volume1/web).
 
 services:
   slideshow-hub:
@@ -23,8 +31,9 @@ services:
     restart: unless-stopped
     ports:
       - "8090:8090"
-    # environment:
-    #   SLIDESHUB_GALLERY_PATH_MAP: '{"http://192.168.0.100:8080":"/volume1/web"}'
-    # Uncomment so /api/rate can write sidecars next to originals (paths in slides.json must match inside container):
-    # volumes:
-    #   - /volume1/photos:/photos:rw
+    environment:
+      SLIDESHUB_GALLERY_PATH_MAP: '{"http://192.168.0.100:8080":"/volume1/web"}'
+    volumes:
+      - /volume1/web:/volume1/web:rw
+    # Optional: Originalbilder für ältere Setups mit Schreibzugriff auf source_path
+    # - /volume1/photos:/photos:rw

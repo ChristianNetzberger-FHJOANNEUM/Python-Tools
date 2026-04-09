@@ -173,6 +173,33 @@ sudo docker logs slideshow-remote-hub --tail 50
 
 **Wichtig:** `docker load` legt nur ein **Abbild** an; ein **Container** entsteht durch `docker run` oder die Docker-UI („Ausführen“ / „Erstellen“) mit Port **8090:8090**.
 
+Der **obige** Einzeiler-`docker run` enthält **weder** Volume **noch** `SLIDESHUB_GALLERY_PATH_MAP` — Bewerten und „Manifest laden“ funktionieren dann nicht. Für Produktivbetrieb siehe **Abschnitt 5.1**.
+
+### 5.1 Dauerhafte Konfiguration (Volumes & Env nach jedem Deployment)
+
+**Problem:** In vielen NAS-Oberflächen legt man nach **Import eines neuen Images** einen **neuen** Container an. Dabei gehen **Volume-Zuordnung** und **Umgebungsvariablen** leicht verloren — dieselbe Prozedur wie beim ersten Mal.
+
+**Empfehlung:** Konfiguration in einer **Compose-Datei** auf der NAS festhalten und den Hub **immer über Compose** starten/aktualisieren (nicht nur „Image → Container“ per Mausklick).
+
+1. **Repo-Datei** `compose.slideshow-hub.yml` auf den Docker-Host kopieren (z. B. `/volume1/docker/slideshow-hub/compose.yml`).
+2. **Anpassen** (einmalig):
+   - `SLIDESHUB_GALLERY_PATH_MAP`: Schlüssel = exakter Browser-**Origin** der Galerie (`http://IP:Port`), Wert = **Mount-Pfad im Container** (z. B. `/volume1/web` oder `/nas-web`).
+   - `volumes`: **Links** = Ordner auf dem NAS-Host (Freigabe `web`), **rechts** = **derselbe** Pfad wie im JSON-Wert der Map.
+3. **Image aktualisieren:** `docker load -i slideshow-hub.tar` (neues Tag `slideshow-hub:local`), dann im Compose-Ordner:
+
+   ```bash
+   cd /pfad/zum/compose-ordner
+   sudo docker compose -f compose.yml up -d
+   ```
+
+   (Dateiname anpassen; unter DSM ggf. **Container Manager → Projekt** mit derselben YAML.)
+
+**Synology DSM:** Abhängig von Version **„Projekt“** / **Stack** aus `docker-compose`-Datei — dort bleiben Volumes und Variablen am Projekt hängen, auch wenn das Image neu geladen wird.
+
+**Alternative ohne Compose:** Ein kleines Shell-Skript auf der NAS mit **vollständigem** `docker run … -e SLIDESHUB_GALLERY_PATH_MAP=… -v /…:/…:rw -p 8090:8090` — nur nicht verlieren und nach Image-Update erneut ausführen.
+
+**Kurz:** Was persistent sein soll, gehört **nicht** nur in die UI eines einmal angelegten Containers, sondern in **deklarierte** Konfiguration (Compose oder Skript), die du bei jedem Deploy **wiederverwendest**.
+
 ### Pfad-Hinweis (UGreen / Synology)
 
 Der Pfad zur `.tar` hängt vom Volume ab, z. B. `/volume1/data/docker-images/…`. Mit `ls` auf der NAS den exakten Ort prüfen.

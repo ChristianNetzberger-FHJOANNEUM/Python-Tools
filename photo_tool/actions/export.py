@@ -6,12 +6,14 @@ Export filtered photo selections as standalone HTML galleries
 import json
 import shutil
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Literal, Optional, Dict, Any
 from datetime import datetime, timezone
 
 from PIL import Image
 
 from ..util.logging import get_logger
+from ..projects.rating_layers import RATING_LAYER_PROJECT
+from ..projects.project_sidecar import ProjectSidecarManager
 from .metadata import get_metadata, get_metadata_file
 from .export_profiles import get_profile, optimize_image, generate_optimized_thumbnail, list_profiles
 
@@ -188,6 +190,62 @@ def _merge_couch_from_existing_slides_json(
         logger.warning("Could not merge couch fields from existing slides.json: %s", e)
 
 
+def _apply_project_to_couch_seed(
+    project_dir: Path,
+    mode: Literal["fill_empty", "replace_all"],
+    photo_data: List[Dict[str, Any]],
+    slides_manifest: List[Dict[str, Any]],
+) -> None:
+    """
+    After _merge_couch_from_existing_slides_json: copy project-layer rating/color into
+    couch_rating / couch_color per Spezifikation_Export_Projekt_nach_Couch_slides.md.
+    """
+    if mode not in ("fill_empty", "replace_all"):
+        return
+    if not project_dir.is_dir():
+        logger.warning("project_to_couch: project_dir missing %s", project_dir)
+        return
+    psm = ProjectSidecarManager(project_dir)
+    n = min(len(photo_data), len(slides_manifest))
+    for i in range(n):
+        s = slides_manifest[i]
+        raw_path = s.get("source_path")
+        if not raw_path:
+            continue
+        try:
+            photo_path = Path(raw_path)
+        except Exception:
+            continue
+        try:
+            gm = get_metadata(photo_path)
+            merged = psm.merge_metadata(gm, photo_path, active_rating_layer=RATING_LAYER_PROJECT)
+        except Exception as e:
+            logger.warning("project_to_couch: merge failed for %s: %s", photo_path.name, e)
+            continue
+        try:
+            r = merged.get("rating")
+            rating_v = int(r) if r is not None else 0
+        except (TypeError, ValueError):
+            rating_v = 0
+        rating_v = max(0, min(5, rating_v))
+        col = merged.get("color")
+        color_v = col if col not in (None, "") else None
+
+        if mode == "replace_all":
+            photo_data[i]["couch_rating"] = rating_v
+            photo_data[i]["couch_color"] = color_v
+            s["couch_rating"] = rating_v
+            s["couch_color"] = color_v
+        else:
+            if photo_data[i].get("couch_rating") is None:
+                photo_data[i]["couch_rating"] = rating_v
+                s["couch_rating"] = rating_v
+            cc = photo_data[i].get("couch_color")
+            if cc is None or cc == "":
+                photo_data[i]["couch_color"] = color_v
+                s["couch_color"] = color_v
+
+
 # Progress tracking for export
 _export_progress = {
     'status': 'idle',  # idle, running, complete, error
@@ -219,6 +277,8 @@ def export_gallery(
     remote_session_id: str = "default",
     gallery_public_http_base: Optional[str] = None,  # http(s) URL of gallery folder if TV opens file:///… (Hub/slides.json)
     apply_edits: bool = True,  # NEW: Apply non-destructive edits during export
+    project_dir: Optional[Path] = None,
+    project_to_couch_mode: str = "off",
     # Legacy parameters (deprecated, use profile instead)
     max_image_size: Optional[int] = None,
     thumbnail_size: Optional[int] = None
@@ -501,6 +561,15 @@ def export_gallery(
         
         if slides_manifest:
             _merge_couch_from_existing_slides_json(gallery_dir, slides_manifest, photo_data)
+
+        _ptc = (project_to_couch_mode or "off").strip().lower()
+        if (
+            slides_manifest
+            and _ptc in ("fill_empty", "replace_all")
+            and project_dir is not None
+        ):
+            pd = Path(project_dir)
+            _apply_project_to_couch_seed(pd, _ptc, photo_data, slides_manifest)
         
         if template == "slideshow":
             _ensure_splash_qr_vendor(gallery_dir)
@@ -1096,19 +1165,58 @@ def _generate_slideshow_html(
             gap: 15px;
             margin-bottom: 15px;
         }}
+
+        /* Große vertikale Klick-/Touch-Fläche — der sichtbare Balken bleibt schlank */
+        .slideshow-progress-bar-hit {{
+            flex: 1;
+            min-height: 40px;
+            padding: 14px 0;
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }}
         
         .slideshow-progress-bar {{
             flex: 1;
-            height: 6px;
+            height: 10px;
             background: rgba(255, 255, 255, 0.2);
-            border-radius: 3px;
+            border-radius: 5px;
             overflow: hidden;
-            cursor: pointer;
             position: relative;
         }}
-        
-        .slideshow-progress-bar:hover {{
+
+        .slideshow-progress-bar-hit:hover .slideshow-progress-bar {{
             background: rgba(255, 255, 255, 0.3);
+        }}
+        
+        .footer-qr-wrap {{
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            gap: 2px;
+            margin-left: 4px;
+            max-width: 96px;
+        }}
+        .footer-qr-wrap .footer-qr-mount img,
+        .footer-qr-wrap .footer-qr-mount canvas {{
+            display: block;
+            border-radius: 6px;
+            background: #fff;
+            padding: 2px;
+            max-width: 88px;
+            max-height: 88px;
+        }}
+        .footer-qr-link {{
+            font-size: 0.58rem;
+            color: #c4b5fd;
+            max-width: 96px;
+            line-height: 1.15;
+            text-align: center;
+            word-break: break-all;
         }}
         
         .slideshow-progress-fill {{
@@ -1299,6 +1407,30 @@ def _generate_slideshow_html(
             text-shadow: 0 2px 10px rgba(0, 0, 0, 0.8);
             margin-top: 0;
         }}
+
+        .splash-minstars-row {{
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+            margin-top: 4px;
+        }}
+        .splash-minstars-row label {{
+            font-size: 0.95rem;
+            color: #ddd;
+            text-shadow: 0 1px 8px rgba(0, 0, 0, 0.85);
+        }}
+        .splash-minstars-row select {{
+            background: rgba(255, 255, 255, 0.12);
+            color: #fff;
+            border: 1px solid rgba(255, 255, 255, 0.28);
+            padding: 10px 16px;
+            border-radius: 10px;
+            font-size: 1rem;
+            cursor: pointer;
+            min-width: 220px;
+        }}
         
         .splash-play-btn {{
             background: linear-gradient(135deg, #8b5cf6, #ec4899);
@@ -1466,6 +1598,10 @@ def _generate_slideshow_html(
                     <div class="splash-qr-hint">QR scannen oder Link (WLAN)</div>
                 </div>
             </div>
+            <div class="splash-minstars-row">
+                <label for="splashMinStars">Autoplay: Mindest-Sterne (effektiv Couch → sonst Projekt)</label>
+                <select id="splashMinStars" aria-label="Mindest-Sterne für Autoplay und Fortschritt"></select>
+            </div>
             <div class="splash-subtitle">{splash_subtitle}</div>
         </div>
     </div>
@@ -1494,10 +1630,16 @@ def _generate_slideshow_html(
         
         <div class="slideshow-footer">
             <div class="slideshow-progress">
-                <div class="slideshow-progress-bar">
-                    <div class="slideshow-progress-fill" id="progressBar"></div>
+                <div class="slideshow-progress-bar-hit" id="progressBarHit" title="Folie wählen (große Klickfläche)">
+                    <div class="slideshow-progress-bar">
+                        <div class="slideshow-progress-fill" id="progressBar"></div>
+                    </div>
                 </div>
                 <div class="slideshow-progress-text" id="progressText">1 / {len(photo_data)}</div>
+                <div id="footerQrWrap" class="footer-qr-wrap" aria-label="QR Remote">
+                    <div id="footerQrMount" class="footer-qr-mount"></div>
+                    <a id="footerQrLink" class="footer-qr-link" href="#" target="_blank" rel="noopener"></a>
+                </div>
             </div>
             
             <div class="slideshow-controls">
@@ -1528,6 +1670,11 @@ def _generate_slideshow_html(
                     <div class="slideshow-setting">
                         <input type="checkbox" id="loopCheck" onchange="event.stopPropagation(); toggleLoop();" checked>
                         <label for="loopCheck">Loop</label>
+                    </div>
+                    
+                    <div class="slideshow-setting">
+                        <span>Min ⭐:</span>
+                        <select id="footerMinStars" onchange="event.stopPropagation(); onFooterMinStarsChange();" title="Nur Slides mit effektiver Bewertung ≥ Schwelle im Autoplay; Fortschritt zeigt Trefferanzahl."></select>
                     </div>
                 </div>
                 
@@ -1563,7 +1710,7 @@ def _generate_slideshow_html(
         let slideInterval = null;
         let slideDuration = {slideshow_duration * 1000};
 
-        const MIN_COUCH_STARS_AUTOPLAY = (function () {{
+        function parseMinCouchStarsFromUrl() {{
             try {{
                 const raw = new URLSearchParams(location.search).get('min_couch_stars');
                 if (raw == null || raw === '') return 0;
@@ -1571,17 +1718,97 @@ def _generate_slideshow_html(
                 if (isNaN(n)) return 0;
                 return Math.max(0, Math.min(5, n));
             }} catch (e) {{ return 0; }}
-        }})();
+        }}
+
+        let minCouchStarsAutoplay = parseMinCouchStarsFromUrl();
 
         function slideEligibleForAutoplay(i) {{
-            if (MIN_COUCH_STARS_AUTOPLAY <= 0) return true;
+            if (minCouchStarsAutoplay <= 0) return true;
             const p = photos[i];
             if (!p) return false;
-            return effectiveRating(p) >= MIN_COUCH_STARS_AUTOPLAY;
+            return effectiveRating(p) >= minCouchStarsAutoplay;
+        }}
+
+        function getEligibleSlideIndices() {{
+            if (minCouchStarsAutoplay <= 0) {{
+                const a = [];
+                for (let i = 0; i < photos.length; i++) a.push(i);
+                return a;
+            }}
+            const out = [];
+            for (let i = 0; i < photos.length; i++) {{
+                if (slideEligibleForAutoplay(i)) out.push(i);
+            }}
+            return out;
+        }}
+
+        function progressMetrics() {{
+            const elig = getEligibleSlideIndices();
+            const filtered = minCouchStarsAutoplay > 0;
+            const total = elig.length;
+            if (photos.length === 0) {{
+                return {{ pct: 0, line: '0 / 0', filtered }};
+            }}
+            if (!filtered) {{
+                const t = photos.length;
+                const pos = currentIndex + 1;
+                return {{ pct: (pos / t) * 100, line: `${{pos}} / ${{t}}`, filtered }};
+            }}
+            if (total === 0) {{
+                return {{ pct: 0, line: `0 / 0 (≥${{minCouchStarsAutoplay}}⭐)`, filtered }};
+            }}
+            const posIn = elig.indexOf(currentIndex);
+            if (posIn < 0) {{
+                return {{ pct: 0, line: `— / ${{total}}`, filtered }};
+            }}
+            return {{ pct: ((posIn + 1) / total) * 100, line: `${{posIn + 1}} / ${{total}}`, filtered }};
+        }}
+
+        function fillMinStarsSelectOptions(selectEl) {{
+            if (!selectEl) return;
+            selectEl.innerHTML = '';
+            const opts = [
+                [0, 'Alle Slides (kein Sterne-Filter)'],
+                [1, '⭐ 1+'],
+                [2, '⭐ 2+'],
+                [3, '⭐ 3+'],
+                [4, '⭐ 4+'],
+                [5, '⭐ 5'],
+            ];
+            for (let j = 0; j < opts.length; j++) {{
+                const o = document.createElement('option');
+                o.value = String(opts[j][0]);
+                o.textContent = opts[j][1];
+                selectEl.appendChild(o);
+            }}
+        }}
+
+        function syncMinStarsWidgets() {{
+            const v = String(Math.max(0, Math.min(5, minCouchStarsAutoplay)));
+            const s = document.getElementById('splashMinStars');
+            const f = document.getElementById('footerMinStars');
+            if (s) s.value = v;
+            if (f) f.value = v;
+        }}
+
+        function setMinCouchStarsAutoplay(n) {{
+            let v = parseInt(n, 10);
+            if (isNaN(v)) v = 0;
+            v = Math.max(0, Math.min(5, v));
+            minCouchStarsAutoplay = v;
+            syncMinStarsWidgets();
+            updateDisplay();
+            if (isPlaying) startAutoplay();
+        }}
+
+        function onFooterMinStarsChange() {{
+            const el = document.getElementById('footerMinStars');
+            if (!el) return;
+            setMinCouchStarsAutoplay(el.value);
         }}
 
         function nextSlideFilteredForAutoplay() {{
-            if (MIN_COUCH_STARS_AUTOPLAY <= 0) {{
+            if (minCouchStarsAutoplay <= 0) {{
                 nextSlide();
                 return;
             }}
@@ -1601,7 +1828,6 @@ def _generate_slideshow_html(
                     }}
                 }}
             }}
-            nextSlide();
         }}
 
         const RATING_HUD_LS_KEY = 'photoSlideshowRatingHudVisible';
@@ -1689,6 +1915,53 @@ def _generate_slideshow_html(
             }}, 520);
         }}
 
+        /** TV: aktuelle couch_* aus slides.json (NAS) — eingebettetes photos-Array ist nur Export-Snapshot. */
+        async function mergeCouchRatingsFromSlidesJson() {{
+            let url = '';
+            try {{
+                const u = new URL(window.location.href);
+                if (u.protocol === 'http:' || u.protocol === 'https:') {{
+                    url = new URL('slides.json', u.href).href;
+                }} else if (GALLERY_PUBLIC_HTTP_BASE) {{
+                    const base = String(GALLERY_PUBLIC_HTTP_BASE).trim().replace(/\\/+$/, '') + '/';
+                    url = new URL('slides.json', base).href;
+                }}
+            }} catch (e) {{
+                return;
+            }}
+            if (!url) return;
+            try {{
+                const res = await fetch(url, {{ cache: 'no-store' }});
+                if (!res.ok) {{
+                    remoteHubLog('slides.json HTTP', res.status);
+                    return;
+                }}
+                const data = await res.json();
+                const slides = data.slides || [];
+                const n = Math.min(photos.length, slides.length);
+                for (let i = 0; i < n; i++) {{
+                    const s = slides[i];
+                    if (!s || typeof s !== 'object') continue;
+                    if ('couch_rating' in s) {{
+                        const v = s.couch_rating;
+                        if (v === null || v === undefined || v === '') {{
+                            photos[i].couch_rating = null;
+                        }} else {{
+                            const num = Number(v);
+                            if (!isNaN(num)) photos[i].couch_rating = Math.max(0, Math.min(5, num));
+                        }}
+                    }}
+                    if ('couch_color' in s) {{
+                        const c = s.couch_color;
+                        photos[i].couch_color = c === '' || c == null ? null : c;
+                    }}
+                }}
+                remoteHubLog('merged couch_* from slides.json for', n, 'slides');
+            }} catch (e) {{
+                remoteHubLog('slides.json merge failed', e);
+            }}
+        }}
+
         function syncRemoteHubLedWrap() {{
             const wrap = document.getElementById('remoteHubLedWrap');
             if (!wrap) return;
@@ -1769,21 +2042,49 @@ def _generate_slideshow_html(
             }}
         }}
 
-        function renderSplashRemoteQr() {{
+        function styleQrMountPreferCanvas(mount) {{
+            if (!mount) return;
+            setTimeout(function () {{
+                const c = mount.querySelector('canvas');
+                const im = mount.querySelector('img');
+                if (c) {{
+                    c.style.display = 'block';
+                    c.style.maxWidth = '100%';
+                    c.style.height = 'auto';
+                }}
+                if (im && c) {{
+                    im.style.display = 'none';
+                }} else if (im && (!im.complete || im.naturalWidth === 0)) {{
+                    im.style.display = 'none';
+                }}
+            }}, 0);
+        }}
+
+        /** Splash (groß) + Leiste (kompakt): gleiche Invite-URL — TV-Cache/Resume: Leiste einblenden → scannen. */
+        function renderRemoteQrCodes() {{
             const wrap = document.getElementById('splashQrWrap');
             const mount = document.getElementById('splashQrMount');
             const link = document.getElementById('splashQrFallbackLink');
+            const footerWrap = document.getElementById('footerQrWrap');
+            const footerMount = document.getElementById('footerQrMount');
+            const footerLink = document.getElementById('footerQrLink');
             if (!wrap || !mount) return;
             const invite = buildRemoteInviteUrl();
             if (!invite) {{
                 wrap.style.display = 'none';
-                remoteHubLog('splash QR skipped (no invite)', REMOTE_HUB_WS_BASE, getGalleryBaseUrl());
+                if (footerWrap) footerWrap.style.display = 'none';
+                remoteHubLog('QR skipped (no invite)', REMOTE_HUB_WS_BASE, getGalleryBaseUrl());
                 return;
             }}
             wrap.style.display = 'flex';
+            if (footerWrap) footerWrap.style.display = 'flex';
             if (link) {{
                 link.href = invite;
                 link.textContent = 'Remote öffnen · Link';
+            }}
+            if (footerLink) {{
+                footerLink.href = invite;
+                footerLink.textContent = 'Remote / Handy';
             }}
             const hintEl = wrap.querySelector('.splash-qr-hint');
             if (hintEl) {{
@@ -1791,12 +2092,17 @@ def _generate_slideshow_html(
             }}
             const setQrLoadFailed = function () {{
                 mount.innerHTML = '';
+                if (footerMount) footerMount.innerHTML = '';
                 if (link) {{
                     link.textContent = 'Remote öffnen · Link (QR-Skript fehlt — Datei vendor/qrcode.min.js prüfen oder Link antippen)';
+                }}
+                if (footerLink) {{
+                    footerLink.textContent = 'Link öffnen';
                 }}
                 if (hintEl) {{
                     hintEl.textContent = 'Mit neu exportierter Galerie liegt das Skript unter gleichem Ordner wie index.html (vendor/). Sonst Link nutzen.';
                 }}
+                if (footerWrap) footerWrap.style.display = 'flex';
             }};
             const draw = function () {{
                 try {{
@@ -1810,21 +2116,19 @@ def _generate_slideshow_html(
                         colorLight: '#ffffff',
                         correctLevel: QRCode.CorrectLevel.M
                     }});
-                    /* qrcodejs calls makeImage() → <img src="data:...">; many TV browsers show a blank image. Prefer canvas. */
-                    setTimeout(function () {{
-                        const c = mount.querySelector('canvas');
-                        const im = mount.querySelector('img');
-                        if (c) {{
-                            c.style.display = 'block';
-                            c.style.maxWidth = '100%';
-                            c.style.height = 'auto';
-                        }}
-                        if (im && c) {{
-                            im.style.display = 'none';
-                        }} else if (im && (!im.complete || im.naturalWidth === 0)) {{
-                            im.style.display = 'none';
-                        }}
-                    }}, 0);
+                    styleQrMountPreferCanvas(mount);
+                    if (footerMount) {{
+                        footerMount.innerHTML = '';
+                        new QRCode(footerMount, {{
+                            text: invite,
+                            width: 88,
+                            height: 88,
+                            colorDark: '#1a1a2e',
+                            colorLight: '#ffffff',
+                            correctLevel: QRCode.CorrectLevel.L
+                        }});
+                        styleQrMountPreferCanvas(footerMount);
+                    }}
                 }} catch (e) {{
                     console.warn('QR', e);
                     setQrLoadFailed();
@@ -1852,6 +2156,8 @@ def _generate_slideshow_html(
         function sendRemoteState() {{
             if (!remoteWs || remoteWs.readyState !== WebSocket.OPEN) return;
             try {{
+                const pm = progressMetrics();
+                const elig = getEligibleSlideIndices();
                 remoteWs.send(JSON.stringify({{
                     type: 'state',
                     index: currentIndex,
@@ -1859,7 +2165,11 @@ def _generate_slideshow_html(
                     playing: isPlaying,
                     gallery_base: getGalleryBaseUrl(),
                     tv_instance: TV_INSTANCE_ID,
-                    state_seq: ++TV_STATE_SEQ
+                    state_seq: ++TV_STATE_SEQ,
+                    min_couch_stars: minCouchStarsAutoplay,
+                    eligible_total: elig.length,
+                    progress_line: pm.line,
+                    autoplay_filter_active: minCouchStarsAutoplay > 0
                 }}));
             }} catch (e) {{}}
         }}
@@ -1897,7 +2207,7 @@ def _generate_slideshow_html(
                         if (ri >= 0 && ri < photos.length) {{
                             if (msg.couch_rating !== undefined) photos[ri].couch_rating = msg.couch_rating;
                             if (msg.couch_color !== undefined) photos[ri].couch_color = msg.couch_color;
-                            if (ri === currentIndex) updateDisplay();
+                            updateDisplay();
                         }}
                         return;
                     }}
@@ -1958,7 +2268,7 @@ def _generate_slideshow_html(
         const prevBtn = document.getElementById('prevBtn');
         const nextBtn = document.getElementById('nextBtn');
         const progressBar = document.getElementById('progressBar');
-        const progressBarContainer = document.querySelector('.slideshow-progress-bar');
+        const progressBarHit = document.getElementById('progressBarHit');
         const progressText = document.getElementById('progressText');
         const counter = document.getElementById('counter');
         const fullscreenBtn = document.getElementById('fullscreenBtn');
@@ -2023,10 +2333,15 @@ def _generate_slideshow_html(
                 container.classList.toggle('active', i === currentIndex);
             }});
             
-            const progress = ((currentIndex + 1) / photos.length * 100);
-            progressBar.style.width = progress + '%';
-            progressText.textContent = `${{currentIndex + 1}} / ${{photos.length}}`;
-            counter.textContent = `${{currentIndex + 1}} / ${{photos.length}}`;
+            const pm = progressMetrics();
+            progressBar.style.width = pm.pct + '%';
+            progressText.textContent = pm.line;
+            counter.textContent = pm.line;
+            if (progressBarHit) {{
+                progressBarHit.title = pm.filtered && minCouchStarsAutoplay > 0
+                    ? `Nur ≥${{minCouchStarsAutoplay}}⭐ — ${{pm.line}} (Klick springt zwischen Treffern)`
+                    : 'Folie wählen (große Klickfläche)';
+            }}
             
             prevBtn.disabled = currentIndex === 0 && !isLooping;
             nextBtn.disabled = currentIndex === photos.length - 1 && !isLooping;
@@ -2077,11 +2392,31 @@ def _generate_slideshow_html(
         function startAutoplay() {{
             stopSlideshow();
             slideInterval = setInterval(() => {{
+                const idxBefore = currentIndex;
                 nextSlideFilteredForAutoplay();
-                if (!isLooping && currentIndex === photos.length - 1) {{
-                    stopSlideshow();
-                    isPlaying = false;
-                    playBtn.textContent = '▶️ Play';
+                if (!isLooping) {{
+                    if (minCouchStarsAutoplay <= 0) {{
+                        if (currentIndex === photos.length - 1) {{
+                            stopSlideshow();
+                            isPlaying = false;
+                            playBtn.textContent = '▶️ Play';
+                        }}
+                    }} else {{
+                        const elig = getEligibleSlideIndices();
+                        if (elig.length === 0) {{
+                            stopSlideshow();
+                            isPlaying = false;
+                            playBtn.textContent = '▶️ Play';
+                        }} else {{
+                            const p = elig.indexOf(currentIndex);
+                            const atLastElig = p === elig.length - 1;
+                            if (atLastElig && currentIndex === idxBefore) {{
+                                stopSlideshow();
+                                isPlaying = false;
+                                playBtn.textContent = '▶️ Play';
+                            }}
+                        }}
+                    }}
                 }}
             }}, slideDuration);
         }}
@@ -2228,16 +2563,44 @@ def _generate_slideshow_html(
             toggleControlsVisibility();
         }});
         
-        // Make progress bar clickable (jump to slide)
-        progressBarContainer.addEventListener('click', (e) => {{
-            e.stopPropagation();  // Prevent triggering toggleControlsVisibility
-            const rect = progressBarContainer.getBoundingClientRect();
-            const clickX = e.clientX - rect.left;
-            const percent = clickX / rect.width;
-            const targetIndex = Math.floor(percent * photos.length);
+        function progressPointerX(e, rect) {{
+            let clientX = e.clientX;
+            if (e.changedTouches && e.changedTouches.length) {{
+                clientX = e.changedTouches[0].clientX;
+            }} else if (e.touches && e.touches.length) {{
+                clientX = e.touches[0].clientX;
+            }}
+            return clientX - rect.left;
+        }}
+
+        function onProgressBarSeek(e) {{
+            if (!progressBarHit || photos.length === 0) return;
+            e.stopPropagation();
+            const rect = progressBarHit.getBoundingClientRect();
+            const w = rect.width;
+            if (w <= 0) return;
+            const x = Math.max(0, Math.min(w, progressPointerX(e, rect)));
+            const percent = x / w;
+            let targetIndex;
+            if (minCouchStarsAutoplay > 0) {{
+                const elig = getEligibleSlideIndices();
+                if (!elig.length) return;
+                const slot = Math.min(elig.length - 1, Math.floor(percent * elig.length));
+                targetIndex = elig[slot];
+            }} else {{
+                targetIndex = Math.floor(percent * photos.length);
+            }}
             jumpToSlide(Math.max(0, Math.min(photos.length - 1, targetIndex)));
             showControlsTemporarily();
-        }});
+        }}
+
+        if (progressBarHit) {{
+            progressBarHit.addEventListener('click', onProgressBarSeek);
+            progressBarHit.addEventListener('touchend', function (e) {{
+                e.preventDefault();
+                onProgressBarSeek(e);
+            }}, {{ passive: false }});
+        }}
         
         // 📺 TV Remote / Keyboard Control
         document.addEventListener('keydown', (e) => {{
@@ -2317,8 +2680,14 @@ def _generate_slideshow_html(
             }}
         }});
         
+        let slideshowBootPromise = null;
+
         // 🎬 Splash Screen: Start slideshow on button click
-        function startSlideshowFromSplash() {{
+        async function startSlideshowFromSplash() {{
+            if (slideshowBootPromise) await slideshowBootPromise;
+            const splashSel = document.getElementById('splashMinStars');
+            if (splashSel) minCouchStarsAutoplay = Math.max(0, Math.min(5, parseInt(splashSel.value, 10) || 0));
+            syncMinStarsWidgets();
             // Hide splash screen
             const splashScreen = document.getElementById('splashScreen');
             splashScreen.classList.add('hidden');
@@ -2368,20 +2737,26 @@ def _generate_slideshow_html(
         // Make startSlideshow globally accessible for splash button
         window.startSlideshow = startSlideshowFromSplash;
         
-        // Initialize display
-        updateDisplay();
-        applyRatingHudVisibility();
-        renderSplashRemoteQr();
-        (function showFileGalleryHttpHint() {{
-            try {{
-                const u = new URL(window.location.href);
-                const need = u.protocol === 'file:' || !u.origin || u.origin === 'null';
-                const h = document.getElementById('fileGalleryHttpHint');
-                if (h && need && REMOTE_HUB_WS_BASE && !GALLERY_PUBLIC_HTTP_BASE) h.style.display = 'block';
-            }} catch (e) {{}}
-        }})();
-        syncRemoteHubLedWrap();
-        connectRemoteHub();
+        async function runSlideshowBoot() {{
+            await mergeCouchRatingsFromSlidesJson();
+            fillMinStarsSelectOptions(document.getElementById('splashMinStars'));
+            fillMinStarsSelectOptions(document.getElementById('footerMinStars'));
+            syncMinStarsWidgets();
+            updateDisplay();
+            applyRatingHudVisibility();
+            renderRemoteQrCodes();
+            (function showFileGalleryHttpHint() {{
+                try {{
+                    const u = new URL(window.location.href);
+                    const need = u.protocol === 'file:' || !u.origin || u.origin === 'null';
+                    const h = document.getElementById('fileGalleryHttpHint');
+                    if (h && need && REMOTE_HUB_WS_BASE && !GALLERY_PUBLIC_HTTP_BASE) h.style.display = 'block';
+                }} catch (e) {{}}
+            }})();
+            syncRemoteHubLedWrap();
+            connectRemoteHub();
+        }}
+        slideshowBootPromise = runSlideshowBoot();
         
         // Generated: {now}
     </script>

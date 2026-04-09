@@ -20,6 +20,27 @@ from .rating_layers import (
 
 logger = get_logger("project_sidecar")
 
+# merge_metadata: use default to load project sidecar from disk; pass explicit dict | None to skip disk I/O
+_PROJECT_META_UNSET = object()
+
+
+def load_project_sidecar_index(project_dir: Path) -> Dict[str, Dict[str, Any]]:
+    """
+    Load all project .sidecars/*.json into { photo_filename -> data } for batch merge (e.g. SQLite media API).
+    Keys match Path(photo).name (e.g. foo.jpg for foo.jpg.json).
+    """
+    sidecar_dir = Path(project_dir) / ".sidecars"
+    out: Dict[str, Dict[str, Any]] = {}
+    if not sidecar_dir.is_dir():
+        return out
+    for path in sidecar_dir.glob("*.json"):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                out[path.stem] = json.load(f)
+        except Exception as e:
+            logger.debug("load_project_sidecar_index skip %s: %s", path, e)
+    return out
+
 
 class ProjectSidecarManager:
     """Manages project-specific metadata sidecars"""
@@ -65,6 +86,8 @@ class ProjectSidecarManager:
         photo_path: Path,
         *,
         active_rating_layer: str = DEFAULT_RATING_LAYER,
+        trust_sqlite_global: bool = False,
+        project_meta: Any = _PROJECT_META_UNSET,
     ) -> Dict[str, Any]:
         """
         Merge global and project-specific metadata (color/keywords unchanged).
@@ -72,24 +95,35 @@ class ProjectSidecarManager:
 
         Couch ratings live in the project sidecar as ``couch_rating`` (0–5).
         Fallback chain for couch layer: couch → project → global archive rating.
+
+        If ``trust_sqlite_global`` is True, archive rating comes only from ``global_meta`` (no ``.rating.json`` read).
+        If ``project_meta`` is not ``_PROJECT_META_UNSET``, use that dict or None instead of reading disk
+        (pass preloaded index via :func:`load_project_sidecar_index`).
         """
         layer = normalize_rating_layer(active_rating_layer)
         result = global_meta.copy()
-        gr_file = get_rating(photo_path)
-        base_global = int(gr_file) if gr_file is not None else int(global_meta.get('rating') or 0)
+        if trust_sqlite_global:
+            base_global = int(global_meta.get("rating") or 0)
+        else:
+            gr_file = get_rating(photo_path)
+            base_global = int(gr_file) if gr_file is not None else int(global_meta.get("rating") or 0)
 
-        project_meta = self.get_project_metadata(photo_path)
-        has_pm = bool(project_meta)
+        if project_meta is _PROJECT_META_UNSET:
+            proj_sc = self.get_project_metadata(photo_path)
+        else:
+            proj_sc = project_meta
+        has_pm = bool(proj_sc)
 
-        proj_set = has_pm and 'rating' in project_meta
-        proj_r = int(project_meta['rating']) if proj_set else None
+        proj_set = has_pm and proj_sc is not None and "rating" in proj_sc
+        proj_r = int(proj_sc["rating"]) if proj_set else None
 
         couch_set = (
             has_pm
-            and 'couch_rating' in project_meta
-            and project_meta['couch_rating'] is not None
+            and proj_sc is not None
+            and "couch_rating" in proj_sc
+            and proj_sc["couch_rating"] is not None
         )
-        couch_r = int(project_meta['couch_rating']) if couch_set else None
+        couch_r = int(proj_sc["couch_rating"]) if couch_set else None
 
         result['_rating_global'] = base_global
         result['_rating_project'] = proj_r
@@ -130,23 +164,28 @@ class ProjectSidecarManager:
 
         result['_has_project_override'] = True
 
-        proj_color_set = 'color' in project_meta and project_meta.get('color') not in (None, '')
-        couch_color_val = project_meta.get('couch_color')
+        proj_color_set = (
+            proj_sc is not None
+            and "color" in proj_sc
+            and proj_sc.get("color") not in (None, "")
+        )
+        couch_color_val = proj_sc.get("couch_color") if proj_sc is not None else None
         couch_color_set = (
-            'couch_color' in project_meta
-            and couch_color_val not in (None, '')
+            proj_sc is not None
+            and "couch_color" in proj_sc
+            and couch_color_val not in (None, "")
         )
 
         result['_color_global'] = base_g_color
-        result['_color_project'] = project_meta.get('color') if proj_color_set else None
+        result['_color_project'] = proj_sc["color"] if proj_color_set else None
         result['_color_couch'] = couch_color_val if couch_color_set else None
 
         if layer == RATING_LAYER_GLOBAL:
             result['color'] = base_g_color
             result['_color_source'] = 'global'
         elif layer == RATING_LAYER_PROJECT:
-            if proj_color_set:
-                result['color'] = project_meta['color']
+            if proj_color_set and proj_sc is not None:
+                result['color'] = proj_sc['color']
                 result['_color_source'] = 'project'
             else:
                 result['color'] = base_g_color
@@ -155,8 +194,8 @@ class ProjectSidecarManager:
             if couch_color_set:
                 result['color'] = couch_color_val
                 result['_color_source'] = 'couch'
-            elif proj_color_set:
-                result['color'] = project_meta['color']
+            elif proj_color_set and proj_sc is not None:
+                result['color'] = proj_sc['color']
                 result['_color_source'] = 'project'
             else:
                 result['color'] = base_g_color
@@ -164,11 +203,12 @@ class ProjectSidecarManager:
 
         # Keywords merge (combine global + project)
         global_keywords = set(global_meta.get('keywords', []))
-        project_keywords = set(project_meta.get('keywords', []))
+        pk_raw = proj_sc.get("keywords", []) if proj_sc is not None else []
+        project_keywords = set(pk_raw if isinstance(pk_raw, list) else [])
         result['keywords'] = sorted(list(global_keywords | project_keywords))
         result['_project_keywords'] = sorted(list(project_keywords))
 
-        result['_project_updated'] = project_meta.get('updated')
+        result['_project_updated'] = proj_sc.get('updated') if proj_sc is not None else None
 
         return result
     

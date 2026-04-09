@@ -25,6 +25,8 @@ const { createApp } = Vue;
                     expandedBursts: new Set(),  // Track which bursts are expanded inline
                     burstDebugModal: null,  // Photo object for burst debug modal
                     showQuickRateMenu: false,  // Toggle for Quick Rate All dropdown
+                    _suspendExportPersist: false,
+                    _persistExportTimer: null,
                     burstProgress: {
                         show: false,
                         step: '',
@@ -68,6 +70,8 @@ const { createApp } = Vue;
                     exportRemoteHubWsBase: '',         // ðŸ“¡ Slideshow remote hub (ws://host:8090/ws)
                     exportRemoteSessionId: 'default',
                     exportGalleryPublicHttpBase: '',   // http(s) NAS-URL zur Galerie wenn TV file:/// nutzt (Hub/slides.json)
+                    /** Couch in slides.json aus Projekt-Ebene: off | fill_empty | replace_all */
+                    exportProjectToCouchMode: 'off',
                     exportBasePath: '',                // optional: parent folder for <slug>/ (web root; else workspace/exports)
                     couchImportSlidesPath: '',
                     couchImportPreview: null,
@@ -91,6 +95,10 @@ const { createApp } = Vue;
                     newProjectName: '',
                     newProjectMode: 'filter',
                     savingProject: false,
+                    syncingWorkspaceFolders: false,
+                    /** Persisted via GET/PUT /api/projects/:id/audio/playlist */
+                    projectAudioPlaylist: { tracks: [], default_track_id: null },
+                    playlistSaveBusy: false,
                     currentProject: null,
                     currentProjectId: null,
                     /** Welche Sternebene angezeigt/bewertet wird: global | project | couch */
@@ -427,70 +435,206 @@ const { createApp } = Vue;
                     this.resetVisiblePhotos();
                 },
                 'currentView'(newView) {
-                    // Reset when switching to media view
                     if (newView === 'media') {
                         this.resetVisiblePhotos();
                     }
                 },
                 'showExportModal'(isOpen, wasOpen) {
                     if (wasOpen && !isOpen) {
-                        this.saveExportSettings();
+                        if (this.currentProjectId) this.persistProjectExportSettingsNow();
+                        else this.saveExportSettingsGlobalLegacy();
                     }
                 },
-                'exportBasePath'() {
-                    clearTimeout(this._exportPathSettingsTimer);
-                    this._exportPathSettingsTimer = setTimeout(() => {
-                        this._exportPathSettingsTimer = null;
-                        this.saveExportSettings();
-                    }, 350);
-                },
-                'exportTitle'() {
-                    clearTimeout(this._exportTitleSettingsTimer);
-                    this._exportTitleSettingsTimer = setTimeout(() => {
-                        this._exportTitleSettingsTimer = null;
-                        this.saveExportSettings();
-                    }, 350);
-                }
+                'exportBasePath'() { this.schedulePersistProjectExportSettings(); },
+                'exportTitle'() { this.schedulePersistProjectExportSettings(); },
+                'exportTemplate'() { this.schedulePersistProjectExportSettings(); },
+                'exportProfile'() { this.schedulePersistProjectExportSettings(); },
+                'exportWebP'() { this.schedulePersistProjectExportSettings(); },
+                'exportSlideshowEnabled'() { this.schedulePersistProjectExportSettings(); },
+                'exportSlideshowDuration'() { this.schedulePersistProjectExportSettings(); },
+                'exportSmartTVMode'() { this.schedulePersistProjectExportSettings(); },
+                'exportSplashTitle'() { this.schedulePersistProjectExportSettings(); },
+                'exportSplashSubtitle'() { this.schedulePersistProjectExportSettings(); },
+                'exportRemoteHubWsBase'() { this.schedulePersistProjectExportSettings(); },
+                'exportRemoteSessionId'() { this.schedulePersistProjectExportSettings(); },
+                'exportGalleryPublicHttpBase'() { this.schedulePersistProjectExportSettings(); },
+                'exportProjectToCouchMode'() { this.schedulePersistProjectExportSettings(); },
+                'exportMusicFiles'() { this.schedulePersistProjectExportSettings(); },
+                'exportMusicAutoplay'() { this.schedulePersistProjectExportSettings(); },
+                'exportMusicDuckingVolume'() { this.schedulePersistProjectExportSettings(); },
+                'couchImportSlidesPath'() { this.schedulePersistProjectExportSettings(); },
+                'activeRatingLayer'() { this.schedulePersistProjectExportSettings(); }
             },
             
             methods: {
-                // 💾 Load export settings from localStorage
+                /** Legacy global backup (browser-wide) when no project is active */
                 loadExportSettings() {
                     const saved = localStorage.getItem('exportSettings');
                     if (saved) {
                         try {
-                            const settings = JSON.parse(saved);
-                            this.exportTemplate = settings.template || 'photoswipe';
-                            this.exportProfile = settings.profile || 'web';
-                            this.exportWebP = settings.webp || false;
-                            this.exportSlideshowEnabled = settings.slideshowEnabled !== undefined ? settings.slideshowEnabled : true;
-                            this.exportSlideshowDuration = settings.slideshowDuration || 5;
-                            this.exportSmartTVMode = settings.smartTVMode || false;
-                            this.exportSplashTitle = settings.splashTitle || '';
-                            this.exportSplashSubtitle = settings.splashSubtitle || '';
-                            this.exportRemoteHubWsBase = settings.remoteHubWsBase || '';
-                            this.exportRemoteSessionId = settings.remoteSessionId || 'default';
-                            this.exportGalleryPublicHttpBase = settings.galleryPublicHttpBase || '';
-                            this.exportBasePath = settings.exportBasePath || '';
-                            this.couchImportSlidesPath = settings.couchImportSlidesPath || '';
-                            if (['global', 'project', 'couch'].includes(settings.activeRatingLayer)) {
-                                this.activeRatingLayer = settings.activeRatingLayer;
-                            }
-                            this.exportMusicFiles = settings.musicFiles || '';
-                            this.exportMusicAutoplay = settings.musicAutoplay || false;
-                            this.exportMusicDuckingVolume = settings.musicDuckingVolume !== undefined ? settings.musicDuckingVolume : 30;
-                            if (settings.exportTitle != null && String(settings.exportTitle).trim() !== '') {
-                                this.exportTitle = String(settings.exportTitle).trim();
-                            }
-                            console.log('✅ Loaded export settings from localStorage');
+                            this.applyExportSettingsFromLegacyLocal(JSON.parse(saved));
+                            console.log('✅ Loaded export settings from localStorage (global fallback)');
                         } catch (e) {
                             console.error('Failed to load export settings:', e);
                         }
                     }
                 },
-                
-                // 💾 Save export settings to localStorage
-                saveExportSettings() {
+
+                applyExportSettingsFromLegacyLocal(settings) {
+                    if (!settings || typeof settings !== 'object') return;
+                    this.exportTemplate = settings.template || 'photoswipe';
+                    this.exportProfile = settings.profile || 'web';
+                    this.exportWebP = settings.webp || false;
+                    this.exportSlideshowEnabled = settings.slideshowEnabled !== undefined ? settings.slideshowEnabled : true;
+                    this.exportSlideshowDuration = settings.slideshowDuration || 5;
+                    this.exportSmartTVMode = settings.smartTVMode || false;
+                    this.exportSplashTitle = settings.splashTitle || '';
+                    this.exportSplashSubtitle = settings.splashSubtitle || '';
+                    this.exportRemoteHubWsBase = settings.remoteHubWsBase || '';
+                    this.exportRemoteSessionId = settings.remoteSessionId || 'default';
+                    this.exportGalleryPublicHttpBase = settings.galleryPublicHttpBase || '';
+                    if (['off', 'fill_empty', 'replace_all'].includes(settings.projectToCouchMode)) {
+                        this.exportProjectToCouchMode = settings.projectToCouchMode;
+                    }
+                    this.exportBasePath = settings.exportBasePath || '';
+                    this.couchImportSlidesPath = settings.couchImportSlidesPath || '';
+                    if (['global', 'project', 'couch'].includes(settings.activeRatingLayer)) {
+                        this.activeRatingLayer = settings.activeRatingLayer;
+                    }
+                    this.exportMusicFiles = settings.musicFiles || '';
+                    this.exportMusicAutoplay = settings.musicAutoplay || false;
+                    this.exportMusicDuckingVolume = settings.musicDuckingVolume !== undefined ? settings.musicDuckingVolume : 30;
+                    if (settings.exportTitle != null && String(settings.exportTitle).trim() !== '') {
+                        this.exportTitle = String(settings.exportTitle).trim();
+                    }
+                },
+
+                defaultProjectExportSettingsSnake() {
+                    return {
+                        slideshow_enabled: true,
+                        slideshow_duration: 5,
+                        smart_tv_mode: false,
+                        template: 'photoswipe',
+                        profile: 'web',
+                        generate_webp: false,
+                        music_files: null,
+                        music_autoplay: false,
+                        music_ducking_volume: 30,
+                        quick_update: false,
+                        splash_title: null,
+                        splash_subtitle: null,
+                        remote_hub_ws_base: null,
+                        remote_session_id: 'default',
+                        gallery_public_http_base: null,
+                        export_base_path: null,
+                        project_to_couch_mode: 'off',
+                        couch_import_slides_path: null,
+                        export_title: null,
+                        active_rating_layer: 'project'
+                    };
+                },
+
+                /** Server export_settings (snake_case) → export modal (full merged object) */
+                applyExportSettingsFromPayload(es) {
+                    if (!es || typeof es !== 'object') return;
+                    this._suspendExportPersist = true;
+                    this.exportSlideshowEnabled = !!es.slideshow_enabled;
+                    this.exportSlideshowDuration = Number(es.slideshow_duration) || 5;
+                    this.exportSmartTVMode = !!es.smart_tv_mode;
+                    this.exportTemplate = es.template != null ? String(es.template) : 'photoswipe';
+                    this.exportProfile = es.profile != null ? String(es.profile) : 'web';
+                    this.exportWebP = !!es.generate_webp;
+                    if (Array.isArray(es.music_files)) {
+                        this.exportMusicFiles = es.music_files.join('\n');
+                    } else if (typeof es.music_files === 'string') {
+                        this.exportMusicFiles = es.music_files;
+                    } else {
+                        this.exportMusicFiles = '';
+                    }
+                    this.exportMusicAutoplay = !!es.music_autoplay;
+                    this.exportMusicDuckingVolume = es.music_ducking_volume != null
+                        ? Number(es.music_ducking_volume) : 30;
+                    this.exportSplashTitle = es.splash_title != null ? String(es.splash_title) : '';
+                    this.exportSplashSubtitle = es.splash_subtitle != null ? String(es.splash_subtitle) : '';
+                    this.exportRemoteHubWsBase = es.remote_hub_ws_base != null ? String(es.remote_hub_ws_base) : '';
+                    this.exportRemoteSessionId = es.remote_session_id != null
+                        ? (String(es.remote_session_id) || 'default') : 'default';
+                    this.exportGalleryPublicHttpBase = es.gallery_public_http_base != null
+                        ? String(es.gallery_public_http_base) : '';
+                    this.exportBasePath = es.export_base_path != null ? String(es.export_base_path) : '';
+                    this.exportProjectToCouchMode = ['off', 'fill_empty', 'replace_all'].includes(es.project_to_couch_mode)
+                        ? es.project_to_couch_mode : 'off';
+                    this.couchImportSlidesPath = es.couch_import_slides_path != null
+                        ? String(es.couch_import_slides_path) : '';
+                    this.exportTitle = es.export_title != null ? String(es.export_title).trim() : '';
+                    this.activeRatingLayer = ['global', 'project', 'couch'].includes(es.active_rating_layer)
+                        ? es.active_rating_layer : 'project';
+                    this.$nextTick(() => { this._suspendExportPersist = false; });
+                },
+
+                buildProjectExportSettingsPayload() {
+                    const lines = (this.exportMusicFiles || '').split('\n').map(f => f.trim()).filter(f => f);
+                    return {
+                        slideshow_enabled: !!this.exportSlideshowEnabled,
+                        slideshow_duration: Number(this.exportSlideshowDuration) || 5,
+                        smart_tv_mode: !!this.exportSmartTVMode,
+                        template: this.exportTemplate || 'photoswipe',
+                        profile: this.exportProfile || 'web',
+                        generate_webp: !!this.exportWebP,
+                        music_files: lines.length ? lines : null,
+                        music_autoplay: !!this.exportMusicAutoplay,
+                        music_ducking_volume: Number(this.exportMusicDuckingVolume) || 30,
+                        quick_update: false,
+                        splash_title: (this.exportSplashTitle || '').trim() || null,
+                        splash_subtitle: (this.exportSplashSubtitle || '').trim() || null,
+                        remote_hub_ws_base: (this.exportRemoteHubWsBase || '').trim() || null,
+                        remote_session_id: (this.exportRemoteSessionId || 'default').trim() || 'default',
+                        gallery_public_http_base: (this.exportGalleryPublicHttpBase || '').trim() || null,
+                        export_base_path: (this.exportBasePath || '').trim() || null,
+                        project_to_couch_mode: ['off', 'fill_empty', 'replace_all'].includes(this.exportProjectToCouchMode)
+                            ? this.exportProjectToCouchMode : 'off',
+                        couch_import_slides_path: (this.couchImportSlidesPath || '').trim() || null,
+                        export_title: (this.exportTitle || '').trim() || null,
+                        active_rating_layer: ['global', 'project', 'couch'].includes(this.activeRatingLayer)
+                            ? this.activeRatingLayer : 'project'
+                    };
+                },
+
+                schedulePersistProjectExportSettings() {
+                    if (this._suspendExportPersist) return;
+                    if (!this.currentProjectId) {
+                        this.saveExportSettingsGlobalLegacy();
+                        return;
+                    }
+                    if (this._persistExportTimer) clearTimeout(this._persistExportTimer);
+                    this._persistExportTimer = setTimeout(() => {
+                        this._persistExportTimer = null;
+                        this.persistProjectExportSettingsNow();
+                    }, 450);
+                },
+
+                async persistProjectExportSettingsNow() {
+                    if (!this.currentProjectId || this._suspendExportPersist) return;
+                    try {
+                        const body = { export_settings: this.buildProjectExportSettingsPayload() };
+                        const res = await fetch(`/api/projects/${this.currentProjectId}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(body)
+                        });
+                        const data = await res.json();
+                        if (data.error) throw new Error(data.error);
+                        if (this.currentProject) {
+                            this.currentProject.export_settings = this.buildProjectExportSettingsPayload();
+                        }
+                        this.saveExportSettingsGlobalLegacy();
+                        console.log('💾 Export settings saved to project');
+                    } catch (e) {
+                        console.error('Failed to persist export settings:', e);
+                    }
+                },
+
+                saveExportSettingsGlobalLegacy() {
                     const settings = {
                         template: this.exportTemplate,
                         profile: this.exportProfile,
@@ -503,6 +647,7 @@ const { createApp } = Vue;
                         remoteHubWsBase: this.exportRemoteHubWsBase,
                         remoteSessionId: this.exportRemoteSessionId,
                         galleryPublicHttpBase: this.exportGalleryPublicHttpBase,
+                        projectToCouchMode: this.exportProjectToCouchMode,
                         exportBasePath: this.exportBasePath,
                         couchImportSlidesPath: this.couchImportSlidesPath,
                         activeRatingLayer: this.activeRatingLayer,
@@ -511,8 +656,47 @@ const { createApp } = Vue;
                         musicDuckingVolume: this.exportMusicDuckingVolume,
                         exportTitle: (this.exportTitle || '').trim()
                     };
-                    localStorage.setItem('exportSettings', JSON.stringify(settings));
-                    console.log('💾 Saved export settings to localStorage');
+                    try {
+                        localStorage.setItem('exportSettings', JSON.stringify(settings));
+                    } catch (e) { /* ignore */ }
+                },
+
+                saveExportSettings() {
+                    if (this.currentProjectId) {
+                        this.schedulePersistProjectExportSettings();
+                    } else {
+                        this.saveExportSettingsGlobalLegacy();
+                    }
+                },
+
+                async cloneProjectFromCurrent() {
+                    if (!this.currentProjectId || !this.currentProject) {
+                        alert('Bitte zuerst ein Projekt auswählen.');
+                        return;
+                    }
+                    const suggestion = this.currentProject.name + ' — Kopie';
+                    const name = prompt('Name für die Projekt-Kopie (z. B. Web-Slideshow, Medienpool):', suggestion);
+                    if (!name || !String(name).trim()) return;
+                    try {
+                        await this.persistProjectExportSettingsNow();
+                        const res = await fetch(`/api/projects/${this.currentProjectId}/clone`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ name: String(name).trim() })
+                        });
+                        const data = await res.json();
+                        if (data.error) throw new Error(data.error);
+                        await this.loadProjects();
+                        const np = data.project && data.project.id;
+                        if (np) {
+                            await this.activateProject(np);
+                            this.currentView = 'projects';
+                            alert(`Projekt geklont: „${data.project.name}“. Export-Einstellungen wurden übernommen — Profil/Ordner bei Bedarf anpassen.`);
+                        }
+                    } catch (e) {
+                        alert('Klonen fehlgeschlagen: ' + e.message);
+                        console.error(e);
+                    }
                 },
                 
                 async loadPhotos() {
@@ -1487,6 +1671,8 @@ const { createApp } = Vue;
                         this.photos = [];
                         this.videos = [];
                         this.audio = [];
+                        this.applyExportSettingsFromPayload(this.defaultProjectExportSettingsSnake());
+                        this.loadExportSettings();
                         
                         alert(`âœ“ Switched to workspace. Select a project to load media.`);
                         
@@ -1679,22 +1865,7 @@ const { createApp } = Vue;
                         const photoIds = this.newProjectMode === 'explicit' ? 
                             this.filteredPhotos.map(p => p.id) : null;
                         
-                        // Collect export settings
-                        const exportSettings = {
-                            slideshow_enabled: this.exportSlideshowEnabled,
-                            slideshow_duration: this.exportSlideshowDuration,
-                            smart_tv_mode: this.exportSmartTVMode,
-                            template: this.exportTemplate,
-                            music_files: this.exportMusicFiles.split('\n').map(f => f.trim()).filter(f => f),
-                            music_autoplay: this.exportMusicAutoplay,  // ðŸŽµ Autoplay toggle
-                            music_ducking_volume: this.exportMusicDuckingVolume,  // ðŸŽšï¸ Ducking volume
-                            splash_title: this.exportSplashTitle || null,      // ðŸŽ¬ Custom splash title
-                            splash_subtitle: this.exportSplashSubtitle || null, // ðŸŽ¬ Custom splash subtitle
-                            remote_hub_ws_base: this.exportRemoteHubWsBase.trim() || null,
-                            remote_session_id: (this.exportRemoteSessionId || 'default').trim() || 'default',
-                            gallery_public_http_base: this.exportGalleryPublicHttpBase.trim() || null,
-                            export_base_path: this.exportBasePath.trim() || null
-                        };
+                        const exportSettings = this.buildProjectExportSettingsPayload();
                         
                         const res = await fetch('/api/projects', {
                             method: 'POST',
@@ -1798,37 +1969,137 @@ const { createApp } = Vue;
                 
                 async activateProject(projectId) {
                     try {
-                        // 1. Set as current project
                         this.currentProjectId = projectId;
-                        
-                        // 2. Load full project details
+
                         const res = await fetch(`/api/projects/${projectId}`);
                         const data = await res.json();
-                        
+
                         if (data.error) {
                             throw new Error(data.error);
                         }
-                        
+
                         this.currentProject = data.project;
-                        
-                        // 3. Load quality settings if available
+
                         if (data.project.quality_settings) {
                             Object.assign(this.qualitySettings, data.project.quality_settings);
                         }
-                        
-                        if (data.project.export_settings) {
-                            const es = data.project.export_settings;
-                            if (es.export_base_path) this.exportBasePath = es.export_base_path;
-                            if (es.gallery_public_http_base != null && es.gallery_public_http_base !== '') {
-                                this.exportGalleryPublicHttpBase = es.gallery_public_http_base;
-                            }
+
+                        const es = data.project.export_settings;
+                        if (es && typeof es === 'object' && Object.keys(es).length > 0) {
+                            this.applyExportSettingsFromPayload(
+                                Object.assign(this.defaultProjectExportSettingsSnake(), es)
+                            );
+                        } else {
+                            this.loadExportSettings();
+                            await this.persistProjectExportSettingsNow();
                         }
-                        
+
+                        await this.loadProjectAudioPlaylist();
+
                         console.log(`âœ“ Project "${data.project.name}" activated`);
-                        
                     } catch (err) {
                         console.error('Error activating project:', err);
                         alert(`Failed to activate project: ${err.message}`);
+                    }
+                },
+
+                audioStreamUrlForPath(path) {
+                    if (!path) return '';
+                    return `/api/audio/stream?path=${encodeURIComponent(path)}`;
+                },
+
+                playlistHasPath(path) {
+                    return (this.projectAudioPlaylist.tracks || []).some((t) => t.source_path === path);
+                },
+
+                _newPlaylistTrackId() {
+                    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+                        return crypto.randomUUID();
+                    }
+                    return `t-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+                },
+
+                async loadProjectAudioPlaylist() {
+                    if (!this.currentProjectId) return;
+                    try {
+                        const res = await fetch(`/api/projects/${this.currentProjectId}/audio/playlist`);
+                        const data = await res.json();
+                        if (data.error || !data.playlist) return;
+                        this.projectAudioPlaylist = {
+                            tracks: data.playlist.tracks || [],
+                            default_track_id: data.playlist.default_track_id || null,
+                        };
+                    } catch (e) {
+                        console.warn('loadProjectAudioPlaylist', e);
+                    }
+                },
+
+                async persistProjectPlaylist(payload) {
+                    if (!this.currentProjectId) return;
+                    this.playlistSaveBusy = true;
+                    try {
+                        const res = await fetch(`/api/projects/${this.currentProjectId}/audio/playlist`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload),
+                        });
+                        const data = await res.json();
+                        if (data.error) throw new Error(data.error);
+                        if (data.playlist) {
+                            this.projectAudioPlaylist = {
+                                tracks: data.playlist.tracks || [],
+                                default_track_id: data.playlist.default_track_id || null,
+                            };
+                        }
+                    } catch (e) {
+                        alert(`Playlist speichern: ${e.message || e}`);
+                        throw e;
+                    } finally {
+                        this.playlistSaveBusy = false;
+                    }
+                },
+
+                async addAudioToProjectPlaylist(item) {
+                    if (!item || !item.path) return;
+                    const path = item.path;
+                    const tracks = [...(this.projectAudioPlaylist.tracks || [])];
+                    if (tracks.some((t) => t.source_path === path)) return;
+                    const id = this._newPlaylistTrackId();
+                    tracks.push({
+                        id,
+                        source_path: path,
+                        label: item.name || null,
+                        order: tracks.length,
+                    });
+                    let defaultId = this.projectAudioPlaylist.default_track_id;
+                    if (!defaultId && tracks.length) defaultId = tracks[0].id;
+                    try {
+                        await this.persistProjectPlaylist({ tracks, default_track_id: defaultId });
+                    } catch (e) {
+                        /* alert in persist */
+                    }
+                },
+
+                async removePlaylistTrack(trackId) {
+                    let tracks = (this.projectAudioPlaylist.tracks || []).filter((t) => t.id !== trackId);
+                    tracks = tracks.map((t, i) => ({ ...t, order: i }));
+                    let defaultId = this.projectAudioPlaylist.default_track_id;
+                    if (defaultId === trackId) defaultId = tracks[0] ? tracks[0].id : null;
+                    try {
+                        await this.persistProjectPlaylist({ tracks, default_track_id: defaultId });
+                    } catch (e) {
+                        /* alert in persist */
+                    }
+                },
+
+                async setDefaultPlaylistTrack(trackId) {
+                    try {
+                        await this.persistProjectPlaylist({
+                            tracks: [...(this.projectAudioPlaylist.tracks || [])],
+                            default_track_id: trackId,
+                        });
+                    } catch (e) {
+                        /* alert in persist */
                     }
                 },
                 
@@ -1840,10 +2111,15 @@ const { createApp } = Vue;
                         this.audio = [];
                         return;
                     }
+                    // Gleichzeitige doppelte Aufrufe (z. B. Race) → ein Request
+                    if (this._loadProjectMediaInFlight) {
+                        return this._loadProjectMediaInFlight;
+                    }
                     
                     // Reset visible count when loading new media
                     this.resetVisiblePhotos();
                     
+                    const run = (async () => {
                     try {
                         this.loading = true;
                         this.error = null;
@@ -1872,6 +2148,10 @@ const { createApp } = Vue;
                         this.mediaCount = data.total || 0;
                         
                         console.log(`âœ“ Loaded ${this.photos.length} photos, ${this.videos.length} videos, ${this.audio.length} audio`);
+                        if (data.merge_debug) {
+                            console.log('merge_debug', data.merge_debug);
+                        }
+                        await this.loadProjectAudioPlaylist();
                         
                         // DEBUG: Log burst data
                         const photosWithBurst = this.photos.filter(p => p.burst_id);
@@ -1891,17 +2171,21 @@ const { createApp } = Vue;
                         
                         // Update blur stats
                         this.updateBlurStats();
-                        
-                        // Auto-load bursts if photos available
-                        if (this.photos.length > 0) {
-                            await this.loadProjectBursts();
-                        }
+                        // Bursts: nicht hier laden — würde alle Ordner erneut scannen (/api/projects/.../bursts).
+                        // Tab „Bursts“ ruft switchToBursts → loadBursts (/api/bursts) nur bei Bedarf auf.
                         
                     } catch (err) {
                         this.error = err.message;
                         console.error('Error loading project media:', err);
                     } finally {
                         this.loading = false;
+                    }
+                    })();
+                    this._loadProjectMediaInFlight = run;
+                    try {
+                        await run;
+                    } finally {
+                        this._loadProjectMediaInFlight = null;
                     }
                 },
                 
@@ -1954,10 +2238,13 @@ const { createApp } = Vue;
                     try {
                         this.savingProject = true;
                         
+                        const payload = JSON.parse(JSON.stringify(this.currentProject));
+                        payload.export_settings = this.buildProjectExportSettingsPayload();
+                        
                         const res = await fetch(`/api/projects/${this.currentProject.id}`, {
                             method: 'PUT',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(this.currentProject)
+                            body: JSON.stringify(payload)
                         });
                         
                         const data = await res.json();
@@ -1994,6 +2281,35 @@ const { createApp } = Vue;
                     // Update enabled folder count
                     const enabledCount = this.currentProject.folders.filter(f => f.enabled).length;
                     console.log(`âœ“ ${enabledCount} folder(s) enabled - click "Load Media" to apply`);
+                },
+
+                /**
+                 * After adding/removing folders in the workspace, merge the workspace folder list
+                 * into this project (new paths appear disabled; existing toggles preserved).
+                 */
+                async syncProjectFoldersFromWorkspace() {
+                    if (!this.currentProjectId) return;
+                    this.syncingWorkspaceFolders = true;
+                    try {
+                        const res = await fetch(
+                            `/api/projects/${this.currentProjectId}/sync-workspace-folders`,
+                            { method: 'POST' }
+                        );
+                        const data = await res.json();
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        if (data.project) {
+                            this.currentProject = data.project;
+                        } else {
+                            await this.activateProject(this.currentProjectId);
+                        }
+                    } catch (err) {
+                        alert(`Sync folders failed: ${err.message}`);
+                        console.error(err);
+                    } finally {
+                        this.syncingWorkspaceFolders = false;
+                    }
                 },
                 
                 async saveProjectName() {
@@ -2637,8 +2953,11 @@ const { createApp } = Vue;
                         return;
                     }
                     
-                    // 💾 Save settings before export
-                    this.saveExportSettings();
+                    if (this.currentProjectId) {
+                        await this.persistProjectExportSettingsNow();
+                    } else {
+                        this.saveExportSettingsGlobalLegacy();
+                    }
                     
                     this.exporting = true;
                     this.exportProgress.show = true;
@@ -2655,6 +2974,13 @@ const { createApp } = Vue;
                         .split('\n')
                         .map(f => f.trim())
                         .filter(f => f.length > 0);
+
+                    const ptc = (this.currentProjectId && this.exportTemplate === 'slideshow')
+                        ? this.exportProjectToCouchMode
+                        : 'off';
+                    const exportProjectId = (ptc !== 'off' && this.currentProjectId)
+                        ? this.currentProjectId
+                        : undefined;
                     
                     const fetchPromise = fetch('/api/export/gallery', {
                         method: 'POST',
@@ -2679,7 +3005,9 @@ const { createApp } = Vue;
                             export_base_path: this.exportBasePath.trim() || undefined,
                             music_files: musicFiles.length > 0 ? musicFiles : undefined,
                             music_autoplay: this.exportMusicAutoplay,  // ðŸŽµ Autoplay toggle
-                            music_ducking_volume: this.exportMusicDuckingVolume  // ðŸŽšï¸ Ducking volume (0-100%)
+                            music_ducking_volume: this.exportMusicDuckingVolume,  // ðŸŽšï¸ Ducking volume (0-100%)
+                            project_id: exportProjectId,
+                            project_to_couch_mode: ptc
                         })
                     });
 
