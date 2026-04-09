@@ -32,6 +32,15 @@ from photo_tool.actions.metadata import (
 from photo_tool.actions.export import export_gallery, _export_progress
 from photo_tool.projects import ProjectManager, ProjectSidecarManager
 from photo_tool.projects.project_sidecar import load_project_sidecar_index
+from photo_tool.projects.playlist_folder import (
+    build_folder_playlist_state,
+    ensure_playlist_structure,
+    save_cues,
+    save_order_yaml,
+    delete_order_yaml,
+    playlist_root,
+    resolve_track_path_by_id,
+)
 from photo_tool.projects.rating_layers import (
     normalize_rating_layer,
     RATING_LAYER_GLOBAL,
@@ -2903,6 +2912,159 @@ def post_project_audio_playlist_from_paths(project_id):
     except Exception as e:
         import traceback
         traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+def _project_dir_or_404(pm, project_id):
+    project = pm.get_project(project_id)
+    if not project:
+        return None, (jsonify({'error': 'Project not found'}), 404)
+    project_dir = pm.projects_dir / project_id
+    project_dir.mkdir(parents=True, exist_ok=True)
+    return project_dir, None
+
+
+@app.get('/api/projects/<project_id>/playlist-folder')
+def get_playlist_folder(project_id):
+    """Playlist under project_dir/playlist: tracks, order mode, sparse cues."""
+    try:
+        pm = get_project_manager()
+        tup = _project_dir_or_404(pm, project_id)
+        if tup[0] is None:
+            return tup[1]
+        project_dir = tup[0]
+        ensure_playlist_structure(project_dir)
+        state = build_folder_playlist_state(project_dir)
+        return jsonify({'success': True, **state})
+    except Exception as e:
+        logger.exception("get_playlist_folder")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.post('/api/projects/<project_id>/playlist-folder/upload')
+def post_playlist_folder_upload(project_id):
+    """Save uploaded audio into project playlist folder; assign stable track_id via sidecar."""
+    try:
+        from flask import request
+        from werkzeug.utils import secure_filename
+
+        pm = get_project_manager()
+        tup = _project_dir_or_404(pm, project_id)
+        if tup[0] is None:
+            return tup[1]
+        project_dir = tup[0]
+        if 'file' not in request.files:
+            return jsonify({'error': 'no file'}), 400
+        f = request.files['file']
+        if not f or not f.filename:
+            return jsonify({'error': 'empty filename'}), 400
+        name = secure_filename(f.filename)
+        if not name:
+            return jsonify({'error': 'bad filename'}), 400
+        suf = Path(name).suffix.lower()
+        if suf not in AUDIO_EXTENSIONS:
+            return jsonify({'error': f'unsupported audio type {suf}'}), 400
+        ensure_playlist_structure(project_dir)
+        dest = playlist_root(project_dir) / name
+        f.save(str(dest))
+        state = build_folder_playlist_state(project_dir)
+        return jsonify({'success': True, **state})
+    except Exception as e:
+        logger.exception("post_playlist_folder_upload")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.put('/api/projects/<project_id>/playlist-folder/order')
+def put_playlist_folder_order(project_id):
+    """Body: { order: [filenames] } or { clear: true } to remove playlist_order.yaml (alpha mode)."""
+    try:
+        from flask import request
+
+        pm = get_project_manager()
+        tup = _project_dir_or_404(pm, project_id)
+        if tup[0] is None:
+            return tup[1]
+        project_dir = tup[0]
+        body = request.get_json() or {}
+        if body.get('clear'):
+            delete_order_yaml(project_dir)
+        else:
+            order = body.get('order')
+            if not isinstance(order, list):
+                return jsonify({'error': 'order must be a list'}), 400
+            save_order_yaml(project_dir, order)
+        state = build_folder_playlist_state(project_dir)
+        return jsonify({'success': True, **state})
+    except Exception as e:
+        logger.exception("put_playlist_folder_order")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.get('/api/projects/<project_id>/playlist-folder/cues')
+def get_playlist_folder_cues(project_id):
+    try:
+        pm = get_project_manager()
+        tup = _project_dir_or_404(pm, project_id)
+        if tup[0] is None:
+            return tup[1]
+        project_dir = tup[0]
+        ensure_playlist_structure(project_dir)
+        state = build_folder_playlist_state(project_dir)
+        return jsonify({'success': True, 'cues': state['cues'], 'tracks': state['tracks']})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.put('/api/projects/<project_id>/playlist-folder/cues')
+def put_playlist_folder_cues(project_id):
+    """Body: { cues: [ { at_slide, track_id }, ... ] }"""
+    try:
+        from flask import request
+
+        pm = get_project_manager()
+        tup = _project_dir_or_404(pm, project_id)
+        if tup[0] is None:
+            return tup[1]
+        project_dir = tup[0]
+        body = request.get_json() or {}
+        cues = body.get('cues')
+        if cues is None:
+            cues = []
+        if not isinstance(cues, list):
+            return jsonify({'error': 'cues must be a list'}), 400
+        save_cues(project_dir, cues)
+        state = build_folder_playlist_state(project_dir)
+        return jsonify({'success': True, **state})
+    except Exception as e:
+        logger.exception("put_playlist_folder_cues")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.get('/api/projects/<project_id>/playlist-folder/stream')
+def get_playlist_folder_stream(project_id):
+    """Stream audio from project playlist folder by track_id."""
+    try:
+        from flask import request
+
+        track_id = (request.args.get('track_id') or '').strip()
+        if not track_id:
+            return jsonify({'error': 'track_id required'}), 400
+        pm = get_project_manager()
+        tup = _project_dir_or_404(pm, project_id)
+        if tup[0] is None:
+            return tup[1]
+        project_dir = tup[0]
+        rp = resolve_track_path_by_id(project_dir, track_id)
+        if not rp or not rp.is_file():
+            return jsonify({'error': 'track not found'}), 404
+        try:
+            rp.resolve().relative_to(playlist_root(project_dir).resolve())
+        except ValueError:
+            return jsonify({'error': 'invalid path'}), 403
+        mime = guess_mimetype(rp)
+        return send_file(str(rp), mimetype=mime, conditional=True, max_age=3600)
+    except Exception as e:
+        logger.exception("get_playlist_folder_stream")
         return jsonify({'error': str(e)}), 500
 
 

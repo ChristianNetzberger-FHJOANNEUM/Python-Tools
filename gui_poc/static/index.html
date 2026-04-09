@@ -75,6 +75,10 @@
                             :disabled="!currentProjectId">
                         🎬 Media {{ currentProjectId && mediaCount > 0 ? `(${mediaCount})` : '' }}
                     </button>
+                    <button class="tab" :class="{ active: currentView === 'audio-playlist' }" @click="switchToAudioPlaylist"
+                            :disabled="!currentProjectId">
+                        🎵 Audio {{ playlistFolderState.tracks && playlistFolderState.tracks.length ? `(${playlistFolderState.tracks.length})` : '' }}
+                    </button>
                     <button class="tab" :class="{ active: currentView === 'bursts' }" @click="switchToBursts"
                             :disabled="!currentProjectId">
                         📦 Bursts {{ currentProjectId && bursts.length > 0 ? `(${bursts.length})` : '' }}
@@ -1090,6 +1094,99 @@
                 <button @click="loadMore" :disabled="loading">
                     {{ loading ? 'Loading...' : `Load More (${totalPhotos - photos.length} remaining)` }}
                 </button>
+            </div>
+        </div>
+        
+        <!-- Project playlist folder: upload, YAML order, sparse cues -->
+        <div v-if="currentView === 'audio-playlist'" style="padding: 0 0 40px 0;">
+            <div v-if="!currentProjectId" class="loading">
+                <div style="font-size: 3rem; margin-bottom: 20px;">📁</div>
+                <div>Kein Projekt gewählt</div>
+            </div>
+            <div v-else style="max-width: 960px; margin: 0 auto;">
+                <h2 style="font-size: 1.25rem; margin-bottom: 8px;">🎵 Projekt-Playlist (Ordner)</h2>
+                <p style="color: #94a3b8; font-size: 0.88rem; line-height: 1.45; margin-bottom: 18px;">
+                    Dateien liegen unter <code style="color:#cbd5e1;">…/projects/&lt;Projekt-ID&gt;/playlist/</code>.
+                    Optional <code style="color:#cbd5e1;">playlist_order.yaml</code> legt die Reihenfolge fest (YAML ist Master: nicht gelistete Dateien sind deaktiviert).
+                    Ohne YAML: alle Audiodateien, alphabetisch. Stabile <code style="color:#cbd5e1;">track_id</code> in <code style="color:#cbd5e1;">playlist/.ids/</code>.
+                </p>
+                <div
+                    @dragover.prevent="playlistFolderDropZoneOver = true"
+                    @dragleave.prevent="playlistFolderDropZoneOver = false"
+                    @drop.prevent="onPlaylistFolderDrop($event)"
+                    :style="{
+                        border: playlistFolderDropZoneOver ? '2px dashed #4ade80' : '2px dashed rgba(148,163,184,0.45)',
+                        borderRadius: '12px',
+                        padding: '28px',
+                        textAlign: 'center',
+                        marginBottom: '22px',
+                        background: playlistFolderDropZoneOver ? 'rgba(74,222,128,0.08)' : 'rgba(255,255,255,0.03)',
+                        color: '#94a3b8',
+                        fontSize: '0.95rem'
+                    }">
+                    <strong style="color:#e2e8f0;">Audio hierher ziehen</strong> (Upload) oder Ordner manuell auf der NAS befüllen.
+                    <div style="margin-top: 10px;">
+                        <input type="file" accept="audio/*" multiple @change="onPlaylistFolderFileInput" style="display:none" ref="playlistFolderFileInput" />
+                        <button type="button" @click="$refs.playlistFolderFileInput.click()"
+                                style="background: rgba(59,130,246,0.25); border: 1px solid rgba(59,130,246,0.5); color: #93c5fd; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-weight: 600;">
+                            Dateien wählen…
+                        </button>
+                    </div>
+                </div>
+                <div v-if="playlistFolderBusy" style="color:#93c5fd; margin-bottom:10px;">⏳ …</div>
+                <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px; align-items:center;">
+                    <span style="font-size:0.85rem; color:#94a3b8;">Reihenfolge:</span>
+                    <span style="font-size:0.85rem; color:#cbd5e1;">{{ playlistFolderState.has_order_yaml ? 'YAML (Master)' : 'Alphabetisch' }}</span>
+                    <button type="button" @click="freezePlaylistFolderOrderYaml" :disabled="playlistFolderBusy || !(playlistFolderState.tracks||[]).length"
+                            style="background: rgba(139,92,246,0.2); border: 1px solid rgba(139,92,246,0.45); color: #c4b5fd; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.8rem;">
+                        Aktuelle Reihenfolge als YAML speichern
+                    </button>
+                    <button type="button" @click="clearPlaylistFolderOrderYaml" :disabled="playlistFolderBusy || !playlistFolderState.has_order_yaml"
+                            style="background: rgba(148,163,184,0.15); border: 1px solid rgba(148,163,184,0.35); color: #cbd5e1; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.8rem;">
+                        YAML löschen → Alphabet
+                    </button>
+                </div>
+                <div v-if="(playlistFolderState.tracks||[]).length === 0" style="padding:16px; background:rgba(0,0,0,0.2); border-radius:8px; color:#64748b;">
+                    Noch keine Audiodateien im Playlist-Ordner.
+                </div>
+                <div v-else style="display:flex; flex-direction:column; gap:8px; margin-bottom:28px;">
+                    <div v-for="(t, idx) in playlistFolderState.tracks" :key="t.track_id"
+                         style="display:flex; flex-wrap:wrap; align-items:center; gap:10px; padding:10px 12px; background:rgba(0,0,0,0.22); border-radius:8px; border:1px solid rgba(255,255,255,0.1);">
+                        <span style="min-width:2rem; color:#64748b; font-size:0.8rem;">{{ idx + 1 }}</span>
+                        <span style="flex:1; min-width:140px; color:#e2e8f0; font-size:0.88rem; word-break:break-all;">{{ t.filename }}</span>
+                        <audio :src="playlistFolderStreamUrl(t.track_id)" controls preload="none" style="max-width:240px; height:32px;"></audio>
+                        <button type="button" @click="movePlaylistTrack(idx, -1)" :disabled="idx === 0 || playlistFolderBusy"
+                                style="padding:4px 8px; border-radius:4px; background:rgba(255,255,255,0.08); color:#cbd5e1; border:none; cursor:pointer;">↑</button>
+                        <button type="button" @click="movePlaylistTrack(idx, 1)" :disabled="idx === playlistFolderState.tracks.length - 1 || playlistFolderBusy"
+                                style="padding:4px 8px; border-radius:4px; background:rgba(255,255,255,0.08); color:#cbd5e1; border:none; cursor:pointer;">↓</button>
+                    </div>
+                </div>
+                <h3 style="font-size:1.05rem; margin-bottom:10px;">Audio-Cues (sparse)</h3>
+                <p style="color:#94a3b8; font-size:0.82rem; margin-bottom:12px;">
+                    <code style="color:#cbd5e1;">at_slide</code> = Manifest-Index (0 … N−1) wie in der exportierten Slideshow. Gilt ab diesem Slide bis zum nächsten Cue.
+                    Gespeichert in <code style="color:#cbd5e1;">playlist/audio_cues.yaml</code>.
+                </p>
+                <div style="margin-bottom:10px;">
+                    <button type="button" @click="addPlaylistCueRow()"
+                            style="background: rgba(74,222,128,0.2); border: 1px solid rgba(74,222,128,0.45); color: #4ade80; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem;">
+                        + Cue
+                    </button>
+                    <button type="button" @click="savePlaylistFolderCues"
+                            :disabled="playlistFolderBusy"
+                            style="margin-left:8px; background: rgba(59,130,246,0.25); border: 1px solid rgba(59,130,246,0.5); color: #93c5fd; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem;">
+                        Cues speichern
+                    </button>
+                </div>
+                <div v-for="(c, ci) in playlistCuesDraft" :key="'cue-' + ci" style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:8px;">
+                    <label style="font-size:0.82rem; color:#94a3b8;">Slide
+                        <input type="number" min="0" v-model.number="c.at_slide" style="width:5rem; margin-left:6px; padding:4px 8px; border-radius:4px; border:1px solid rgba(255,255,255,0.1); background:rgba(0,0,0,0.3); color:#fff;" />
+                    </label>
+                    <select v-model="c.track_id" style="min-width:220px; padding:6px 8px; border-radius:6px; background:#1e293b; color:#e2e8f0; border:1px solid rgba(255,255,255,0.15);">
+                        <option value="">— Track —</option>
+                        <option v-for="t in playlistFolderState.tracks" :key="'opt-' + t.track_id" :value="t.track_id">{{ t.filename }}</option>
+                    </select>
+                    <button type="button" @click="playlistCuesDraft.splice(ci, 1)" style="background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.4); color:#f87171; padding:4px 8px; border-radius:4px; cursor:pointer;">✕</button>
+                </div>
             </div>
         </div>
         

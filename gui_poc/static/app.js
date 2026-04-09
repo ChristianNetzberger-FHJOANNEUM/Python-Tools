@@ -99,6 +99,11 @@ const { createApp } = Vue;
                     /** Persisted via GET/PUT /api/projects/:id/audio/playlist */
                     projectAudioPlaylist: { tracks: [], default_track_id: null },
                     playlistSaveBusy: false,
+                    /** Folder playlist: projects/<id>/playlist/ + YAML + cues */
+                    playlistFolderState: { tracks: [], cues: [], order_mode: 'alpha', has_order_yaml: false },
+                    playlistFolderBusy: false,
+                    playlistFolderDropZoneOver: false,
+                    playlistCuesDraft: [],
                     currentProject: null,
                     currentProjectId: null,
                     /** Welche Sternebene angezeigt/bewertet wird: global | project | couch */
@@ -1087,6 +1092,173 @@ const { createApp } = Vue;
                     }
                 },
                 
+                async switchToAudioPlaylist() {
+                    this.currentView = 'audio-playlist';
+                    await this.loadPlaylistFolder();
+                },
+                
+                playlistFolderStreamUrl(trackId) {
+                    if (!this.currentProjectId || !trackId) return '';
+                    return `/api/projects/${this.currentProjectId}/playlist-folder/stream?track_id=${encodeURIComponent(trackId)}`;
+                },
+                
+                async loadPlaylistFolder() {
+                    if (!this.currentProjectId) return;
+                    this.playlistFolderBusy = true;
+                    try {
+                        const res = await fetch(`/api/projects/${this.currentProjectId}/playlist-folder`);
+                        const data = await res.json();
+                        if (data.error) throw new Error(data.error);
+                        this.playlistFolderState = {
+                            tracks: data.tracks || [],
+                            cues: data.cues || [],
+                            order_mode: data.order_mode || 'alpha',
+                            has_order_yaml: !!data.has_order_yaml,
+                        };
+                        this.playlistCuesDraft = (data.cues || []).map((c) => ({
+                            at_slide: c.at_slide,
+                            track_id: c.track_id,
+                        }));
+                    } catch (e) {
+                        console.error('loadPlaylistFolder', e);
+                        alert(`Playlist-Ordner: ${e.message || e}`);
+                    } finally {
+                        this.playlistFolderBusy = false;
+                    }
+                },
+                
+                async onPlaylistFolderDrop(e) {
+                    this.playlistFolderDropZoneOver = false;
+                    const files = Array.from(e.dataTransfer.files || []);
+                    for (const f of files) {
+                        await this.uploadPlaylistFolderFile(f);
+                    }
+                },
+                
+                async onPlaylistFolderFileInput(e) {
+                    const files = Array.from(e.target.files || []);
+                    e.target.value = '';
+                    for (const f of files) {
+                        await this.uploadPlaylistFolderFile(f);
+                    }
+                },
+                
+                async uploadPlaylistFolderFile(file) {
+                    if (!this.currentProjectId || !file) return;
+                    this.playlistFolderBusy = true;
+                    try {
+                        const fd = new FormData();
+                        fd.append('file', file);
+                        const res = await fetch(`/api/projects/${this.currentProjectId}/playlist-folder/upload`, {
+                            method: 'POST',
+                            body: fd,
+                        });
+                        const data = await res.json();
+                        if (data.error) throw new Error(data.error);
+                        this._applyPlaylistFolderResponse(data);
+                    } catch (e) {
+                        alert(`Upload: ${e.message || e}`);
+                    } finally {
+                        this.playlistFolderBusy = false;
+                    }
+                },
+                
+                _applyPlaylistFolderResponse(data) {
+                    this.playlistFolderState = {
+                        tracks: data.tracks || [],
+                        cues: data.cues || [],
+                        order_mode: data.order_mode || 'alpha',
+                        has_order_yaml: !!data.has_order_yaml,
+                    };
+                    this.playlistCuesDraft = (data.cues || []).map((c) => ({
+                        at_slide: c.at_slide,
+                        track_id: c.track_id,
+                    }));
+                },
+                
+                async putPlaylistFolderOrder(filenames) {
+                    if (!this.currentProjectId) return;
+                    this.playlistFolderBusy = true;
+                    try {
+                        const res = await fetch(`/api/projects/${this.currentProjectId}/playlist-folder/order`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ order: filenames }),
+                        });
+                        const data = await res.json();
+                        if (data.error) throw new Error(data.error);
+                        this._applyPlaylistFolderResponse(data);
+                    } catch (e) {
+                        alert(`Reihenfolge: ${e.message || e}`);
+                    } finally {
+                        this.playlistFolderBusy = false;
+                    }
+                },
+                
+                async movePlaylistTrack(index, delta) {
+                    const t = this.playlistFolderState.tracks;
+                    if (!t || !t.length) return;
+                    const j = index + delta;
+                    if (j < 0 || j >= t.length) return;
+                    const copy = [...t];
+                    const tmp = copy[index];
+                    copy[index] = copy[j];
+                    copy[j] = tmp;
+                    await this.putPlaylistFolderOrder(copy.map((x) => x.filename));
+                },
+                
+                async freezePlaylistFolderOrderYaml() {
+                    const t = this.playlistFolderState.tracks || [];
+                    if (!t.length) return;
+                    await this.putPlaylistFolderOrder(t.map((x) => x.filename));
+                },
+                
+                async clearPlaylistFolderOrderYaml() {
+                    if (!this.currentProjectId) return;
+                    this.playlistFolderBusy = true;
+                    try {
+                        const res = await fetch(`/api/projects/${this.currentProjectId}/playlist-folder/order`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ clear: true }),
+                        });
+                        const data = await res.json();
+                        if (data.error) throw new Error(data.error);
+                        this._applyPlaylistFolderResponse(data);
+                    } catch (e) {
+                        alert(`YAML: ${e.message || e}`);
+                    } finally {
+                        this.playlistFolderBusy = false;
+                    }
+                },
+                
+                addPlaylistCueRow() {
+                    this.playlistCuesDraft.push({ at_slide: 0, track_id: (this.playlistFolderState.tracks[0] && this.playlistFolderState.tracks[0].track_id) || '' });
+                },
+                
+                async savePlaylistFolderCues() {
+                    if (!this.currentProjectId) return;
+                    const cues = this.playlistCuesDraft
+                        .filter((c) => c.track_id && Number.isFinite(Number(c.at_slide)))
+                        .map((c) => ({ at_slide: parseInt(c.at_slide, 10), track_id: c.track_id }));
+                    cues.sort((a, b) => a.at_slide - b.at_slide);
+                    this.playlistFolderBusy = true;
+                    try {
+                        const res = await fetch(`/api/projects/${this.currentProjectId}/playlist-folder/cues`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ cues }),
+                        });
+                        const data = await res.json();
+                        if (data.error) throw new Error(data.error);
+                        this._applyPlaylistFolderResponse(data);
+                    } catch (e) {
+                        alert(`Cues: ${e.message || e}`);
+                    } finally {
+                        this.playlistFolderBusy = false;
+                    }
+                },
+                
                 async switchToProjects() {
                     this.currentView = 'projects';
                     if (this.projects.length === 0) {
@@ -1995,6 +2167,7 @@ const { createApp } = Vue;
                         }
 
                         await this.loadProjectAudioPlaylist();
+                        this.loadPlaylistFolder().catch((e) => console.warn('loadPlaylistFolder', e));
 
                         console.log(`âœ“ Project "${data.project.name}" activated`);
                     } catch (err) {
