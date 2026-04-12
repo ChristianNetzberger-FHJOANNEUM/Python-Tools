@@ -1,156 +1,79 @@
 """
-Pre-generate thumbnails for all scanned photos.
-Run this once to create thumbnail cache - makes browsing instant!
+Pre-generate thumbnails for scanned photos (SQLite → workspace/cache/thumbnails).
+CLI shares implementation with the GUI (thumbnail_cache_service).
 """
+from __future__ import annotations
+
+import argparse
 import sys
 from pathlib import Path
 
-if __name__ != '__main__':
-    exit(0)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+_GUI_POC = Path(__file__).resolve().parent
+if str(_GUI_POC) not in sys.path:
+    sys.path.insert(0, str(_GUI_POC))
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+from photo_tool.workspace.manager import WorkspaceManager, get_enabled_folders
+from thumbnail_cache_service import (
+    load_photo_paths_from_db,
+    run_thumbnail_batch,
+    workspace_db_path_default,
+)
 
-import sqlite3
-from PIL import Image
-from concurrent.futures import ThreadPoolExecutor
-import time
 
-# Import workspace manager
-from photo_tool.workspace.manager import WorkspaceManager
+def main() -> None:
+    p = argparse.ArgumentParser(description="Fill thumbnail cache from workspace_media.db")
+    p.add_argument(
+        "--scope",
+        choices=("all", "enabled"),
+        default="all",
+        help="all DB photos (is_available=1) or only paths under enabled workspace folders",
+    )
+    p.add_argument("--force", action="store_true", help="Regenerate even if cached JPEG exists")
+    p.add_argument("--workers", type=int, default=8, help="Parallel workers (1–16)")
+    p.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompt")
+    args = p.parse_args()
+    workers = max(1, min(int(args.workers), 16))
 
-def generate_thumbnail(photo_data, workspace_path):
-    """Generate one thumbnail"""
-    photo_path = Path(photo_data['path'])
-    filename = photo_data['filename']
-    
-    # Output path (use workspace directory!)
-    cache_dir = workspace_path / "cache" / "thumbnails"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    thumb_path = cache_dir / f"{photo_path.stem}.jpg"
-    
-    # Skip if already exists
-    if thumb_path.exists():
-        return {'status': 'exists', 'file': filename}
-    
-    try:
-        # Check if original exists
-        if not photo_path.exists():
-            return {'status': 'missing', 'file': filename}
-        
-        # Open and process
-        img = Image.open(photo_path)
-        
-        # Apply EXIF orientation
-        try:
-            exif = img.getexif()
-            if exif:
-                orientation = exif.get(0x0112)
-                if orientation == 3:
-                    img = img.rotate(180, expand=True)
-                elif orientation == 6:
-                    img = img.rotate(270, expand=True)
-                elif orientation == 8:
-                    img = img.rotate(90, expand=True)
-        except:
-            pass
-        
-        # Resize
-        img.thumbnail((300, 300), Image.Resampling.LANCZOS)
-        
-        # Convert to RGB if needed
-        if img.mode in ('RGBA', 'LA', 'P'):
-            img = img.convert('RGB')
-        
-        # Save
-        img.save(thumb_path, 'JPEG', quality=85, optimize=True)
-        
-        return {'status': 'created', 'file': filename}
-    
-    except Exception as e:
-        return {'status': 'error', 'file': filename, 'error': str(e)}
-
-def main():
-    """Generate all thumbnails"""
-    print("\n" + "="*60)
-    print("THUMBNAIL GENERATION UTILITY")
-    print("="*60)
-    
-    # Get workspace
     ws_manager = WorkspaceManager()
     workspace_path_str = ws_manager.get_current_workspace()
     if not workspace_path_str:
         print("ERROR: No workspace selected. Select workspace in GUI first!")
-        return
-    
-    workspace_path = Path(workspace_path_str)
-    print(f"Workspace: {workspace_path}")
-    
-    # Get database (from gui_poc/db/)
-    db_path = Path(__file__).parent / 'db' / 'workspace_media.db'
-    if not db_path.exists():
-        print("ERROR: Database not found. Run migration first!")
-        return
-    print(f"Database: {db_path}")
-    
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    
-    # Get all photos
-    cursor.execute("""
-        SELECT m.path, m.filename, m.folder
-        FROM media m
-        WHERE m.media_type = 'photo'
-        ORDER BY m.folder, m.filename
-    """)
-    
-    photos = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    
-    print(f"Found {len(photos)} photos in database")
-    print("="*60)
-    
-    response = input("\nGenerate thumbnails for all photos? (yes/no): ")
-    if response.lower() != 'yes':
-        print("Cancelled.")
-        return
-    
-    # Create cache directory (in workspace!)
-    cache_dir = workspace_path / "cache" / "thumbnails"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    print(f"\nCache directory: {cache_dir}")
-    
-    # Generate thumbnails in parallel
-    print(f"\nGenerating thumbnails (8 parallel workers)...")
-    start_time = time.time()
-    
-    results = {'created': 0, 'exists': 0, 'missing': 0, 'error': 0}
-    
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        futures = [executor.submit(generate_thumbnail, photo, workspace_path) for photo in photos]
-        
-        for i, future in enumerate(futures, 1):
-            result = future.result()
-            results[result['status']] += 1
-            
-            # Progress update every 100 photos
-            if i % 100 == 0:
-                elapsed = time.time() - start_time
-                rate = i / elapsed
-                remaining = (len(photos) - i) / rate
-                print(f"  Progress: {i}/{len(photos)} ({i*100//len(photos)}%) - {rate:.1f} thumbs/sec - ETA: {remaining:.0f}s")
-    
-    elapsed = time.time() - start_time
-    
-    print("\n" + "="*60)
-    print("THUMBNAIL GENERATION COMPLETE!")
-    print("="*60)
-    print(f"Created:  {results['created']} new thumbnails")
-    print(f"Existed:  {results['exists']} already cached")
-    print(f"Missing:  {results['missing']} original files not found")
-    print(f"Errors:   {results['error']} generation errors")
-    print(f"\nTotal time: {elapsed:.1f}s ({len(photos)/elapsed:.1f} thumbs/sec)")
-    print("\nRestart the server and enjoy instant thumbnail loading!")
+        sys.exit(1)
 
-if __name__ == '__main__':
+    workspace_path = Path(workspace_path_str)
+    db_path = workspace_db_path_default()
+    if not db_path.is_file():
+        print(f"ERROR: Database not found: {db_path}")
+        sys.exit(1)
+
+    roots = get_enabled_folders(workspace_path) if args.scope == "enabled" else None
+    filter_roots = roots if args.scope == "enabled" else None
+    paths = load_photo_paths_from_db(db_path, enabled_roots=filter_roots)
+    print(f"Workspace: {workspace_path}")
+    print(f"Database: {db_path}")
+    print(f"Scope: {args.scope} — {len(paths)} photo paths")
+
+    if not args.yes:
+        if input("\nGenerate thumbnails? (yes/no): ").strip().lower() != "yes":
+            print("Cancelled.")
+            return
+
+    def progress(done: int, total: int, path: str, counts: dict) -> None:
+        if total and (done % 100 == 0 or done == total or done == 0):
+            print(f"  {done}/{total}  {counts}  {path or ''}".strip())
+
+    counts = run_thumbnail_batch(
+        workspace_path,
+        db_path,
+        scope=args.scope,
+        force=args.force,
+        max_workers=workers,
+        enabled_roots=roots,
+        progress=progress,
+    )
+    print("\nDone:", counts)
+
+
+if __name__ == "__main__":
     main()

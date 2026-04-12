@@ -72,6 +72,22 @@ const { createApp } = Vue;
                     exportGalleryPublicHttpBase: '',   // http(s) NAS-URL zur Galerie wenn TV file:/// nutzt (Hub/slides.json)
                     /** Couch in slides.json aus Projekt-Ebene: off | fill_empty | replace_all */
                     exportProjectToCouchMode: 'off',
+                    exportProfiles: [],                  // [{ id, slug, label, settings }] — settings = snake_case export payload
+                    activeExportProfileId: null,
+                    exportProfileSlug: '',              // folder name under export_base_path / workspace/exports
+                    /** Per-workspace NAS / landing (publish_settings.json) */
+                    publishSettings: {
+                        publish_root: '',
+                        nas_web_public_base: '',
+                        manifest_relative: 'manifest.json',
+                    },
+                    publishSettingsSaving: false,
+                    showLandingEntryModal: false,
+                    lastLandingExport: null, // { slug, title, gallery_path }
+                    landingEntryBusy: false,
+                    landingEntryError: null,
+                    landingEntryResult: null,            // last API response { entry, ... }
+                    landingEntryDescription: '',
                     exportBasePath: '',                // optional: parent folder for <slug>/ (web root; else workspace/exports)
                     couchImportSlidesPath: '',
                     couchImportPreview: null,
@@ -100,10 +116,14 @@ const { createApp } = Vue;
                     projectAudioPlaylist: { tracks: [], default_track_id: null },
                     playlistSaveBusy: false,
                     /** Folder playlist: projects/<id>/playlist/ + YAML + cues */
-                    playlistFolderState: { tracks: [], cues: [], order_mode: 'alpha', has_order_yaml: false },
+                    playlistFolderState: { tracks: [], cues: [], light_cues: [], order_mode: 'alpha', has_order_yaml: false },
                     playlistFolderBusy: false,
                     playlistFolderDropZoneOver: false,
                     playlistCuesDraft: [],
+                    /** Slide-first cue popover on media grid: { photoId, kind, slideIndex } */
+                    cuePanel: null,
+                    audioCueDraft: '',
+                    lightEffectDraft: '',
                     currentProject: null,
                     currentProjectId: null,
                     /** Welche Sternebene angezeigt/bewertet wird: global | project | couch */
@@ -150,6 +170,10 @@ const { createApp } = Vue;
                     scanProgress: null,
                     showConfigModal: false,
                     configInfo: null,
+                    thumbnailCacheJob: null,
+                    thumbnailCachePollTimer: null,
+                    thumbnailCacheScope: 'enabled',
+                    thumbnailCacheForce: false,
                     // File Browser
                     showFileBrowser: false,
                     browserCurrentPath: '',
@@ -244,6 +268,11 @@ const { createApp } = Vue;
                 currentBurstPhoto() {
                     if (!this.selectedBurst) return null;
                     return this.selectedBurst.photos[this.currentBurstPhotoIndex];
+                },
+
+                landingEntryJsonText() {
+                    const e = this.landingEntryResult && this.landingEntryResult.entry;
+                    return e ? JSON.stringify(e, null, 2) : '';
                 },
                 
                 filteredPhotos() {
@@ -443,6 +472,9 @@ const { createApp } = Vue;
                     if (newView === 'media') {
                         this.resetVisiblePhotos();
                     }
+                    if (newView === 'settings') {
+                        this.loadPublishSettings();
+                    }
                 },
                 'showExportModal'(isOpen, wasOpen) {
                     if (wasOpen && !isOpen) {
@@ -450,7 +482,11 @@ const { createApp } = Vue;
                         else this.saveExportSettingsGlobalLegacy();
                     }
                 },
-                'exportBasePath'() { this.schedulePersistProjectExportSettings(); },
+                'exportBasePath'() {
+                    this.schedulePersistProjectExportSettings();
+                    this.scheduleSyncPublishRootFromExport();
+                },
+                'exportProfileSlug'() { this.schedulePersistProjectExportSettings(); },
                 'exportTitle'() { this.schedulePersistProjectExportSettings(); },
                 'exportTemplate'() { this.schedulePersistProjectExportSettings(); },
                 'exportProfile'() { this.schedulePersistProjectExportSettings(); },
@@ -574,7 +610,10 @@ const { createApp } = Vue;
                     this.exportTitle = es.export_title != null ? String(es.export_title).trim() : '';
                     this.activeRatingLayer = ['global', 'project', 'couch'].includes(es.active_rating_layer)
                         ? es.active_rating_layer : 'project';
-                    this.$nextTick(() => { this._suspendExportPersist = false; });
+                    this.$nextTick(() => {
+                        this._suspendExportPersist = false;
+                        this.scheduleSyncPublishRootFromExport();
+                    });
                 },
 
                 buildProjectExportSettingsPayload() {
@@ -605,6 +644,365 @@ const { createApp } = Vue;
                     };
                 },
 
+                _newExportProfileId() {
+                    return this._newPlaylistTrackId();
+                },
+
+                slugifyExportTitle(title) {
+                    return String(title || '')
+                        .toLowerCase()
+                        .replace(/[^a-z0-9]+/g, '-')
+                        .replace(/^-|-$/g, '') || 'gallery';
+                },
+
+                sanitizeExportSlug(raw) {
+                    let s = String(raw || '')
+                        .toLowerCase()
+                        .replace(/[^a-z0-9-]+/g, '-')
+                        .replace(/-+/g, '-')
+                        .replace(/^-|-$/g, '');
+                    return s || 'gallery';
+                },
+
+                normalizeServerExportProfile(flat) {
+                    const id = flat.id || this._newExportProfileId();
+                    const slug = flat.slug != null ? String(flat.slug) : 'default';
+                    const label = flat.label != null ? String(flat.label) : null;
+                    const def = this.defaultProjectExportSettingsSnake();
+                    const settings = { ...def };
+                    for (const k of Object.keys(flat)) {
+                        if (k === 'id' || k === 'slug' || k === 'label') continue;
+                        if (flat[k] !== undefined) settings[k] = flat[k];
+                    }
+                    return { id, slug, label, settings };
+                },
+
+                initExportProfilesFromProjectPayload(project) {
+                    const profs = project.export_profiles;
+                    if (!Array.isArray(profs) || profs.length === 0) return false;
+                    this.exportProfiles = profs.map((p) => this.normalizeServerExportProfile(p));
+                    this.activeExportProfileId =
+                        project.active_export_profile_id || this.exportProfiles[0].id;
+                    const active = this.exportProfiles.find((x) => x.id === this.activeExportProfileId);
+                    if (active) {
+                        this.exportProfileSlug = active.slug || '';
+                        this.applyExportSettingsFromPayload({
+                            ...this.defaultProjectExportSettingsSnake(),
+                            ...active.settings,
+                        });
+                    }
+                    return true;
+                },
+
+                bootstrapExportProfilesFromCurrentModal() {
+                    if (!this.currentProjectId) return;
+                    const pid = this._newExportProfileId();
+                    const slug = this.sanitizeExportSlug(
+                        this.exportProfileSlug || this.slugifyExportTitle(this.exportTitle),
+                    );
+                    this.exportProfileSlug = slug;
+                    this.exportProfiles = [
+                        {
+                            id: pid,
+                            slug,
+                            label: (this.exportTitle || '').trim() || null,
+                            settings: this.buildProjectExportSettingsPayload(),
+                        },
+                    ];
+                    this.activeExportProfileId = pid;
+                },
+
+                commitActiveProfileToList() {
+                    if (!this.activeExportProfileId) return;
+                    const idx = this.exportProfiles.findIndex((x) => x.id === this.activeExportProfileId);
+                    const settings = this.buildProjectExportSettingsPayload();
+                    const slug = this.sanitizeExportSlug(
+                        this.exportProfileSlug || this.slugifyExportTitle(this.exportTitle),
+                    );
+                    const label = (this.exportTitle || '').trim() || null;
+                    const entry = { id: this.activeExportProfileId, slug, label, settings };
+                    if (idx >= 0) this.exportProfiles.splice(idx, 1, entry);
+                    else this.exportProfiles.push(entry);
+                },
+
+                selectExportProfileById(newId) {
+                    if (!newId || newId === this.activeExportProfileId) return;
+                    this.commitActiveProfileToList();
+                    this.activeExportProfileId = newId;
+                    const p = this.exportProfiles.find((x) => x.id === newId);
+                    if (!p) return;
+                    this.exportProfileSlug = p.slug || '';
+                    this.applyExportSettingsFromPayload({
+                        ...this.defaultProjectExportSettingsSnake(),
+                        ...p.settings,
+                    });
+                },
+
+                addExportProfile() {
+                    if (!this.currentProjectId) {
+                        alert('Export-Profile sind an ein Projekt gebunden. Bitte zuerst ein Projekt wählen.');
+                        return;
+                    }
+                    this.commitActiveProfileToList();
+                    const nid = this._newExportProfileId();
+                    const n = this.exportProfiles.length + 1;
+                    const base = { ...this.buildProjectExportSettingsPayload() };
+                    const slug = this._uniqueProfileSlug(this.sanitizeExportSlug(`export-${n}`));
+                    base.export_title = base.export_title || `Export ${n}`;
+                    this.exportProfiles.push({
+                        id: nid,
+                        slug,
+                        label: `Profil ${n}`,
+                        settings: base,
+                    });
+                    this.activeExportProfileId = nid;
+                    this.exportProfileSlug = slug;
+                    this.applyExportSettingsFromPayload({
+                        ...this.defaultProjectExportSettingsSnake(),
+                        ...base,
+                    });
+                    this.schedulePersistProjectExportSettings();
+                },
+
+                _uniqueProfileSlug(base) {
+                    let s = this.sanitizeExportSlug(base);
+                    const taken = () => new Set(this.exportProfiles.map((p) => p.slug));
+                    if (!taken().has(s)) return s;
+                    let i = 2;
+                    while (taken().has(`${s}-${i}`)) i += 1;
+                    return `${s}-${i}`;
+                },
+
+                duplicateExportProfile() {
+                    if (!this.currentProjectId) {
+                        alert('Export-Profile sind an ein Projekt gebunden. Bitte zuerst ein Projekt wählen.');
+                        return;
+                    }
+                    this.commitActiveProfileToList();
+                    const src = this.exportProfiles.find((x) => x.id === this.activeExportProfileId);
+                    if (!src) return;
+                    const nid = this._newExportProfileId();
+                    const settings = JSON.parse(JSON.stringify(src.settings || {}));
+                    const prevTitle = settings.export_title != null ? String(settings.export_title).trim() : '';
+                    const baseTitle = prevTitle ? `${prevTitle} (Kopie)` : `Kopie · ${src.slug || 'profil'}`;
+                    settings.export_title = baseTitle;
+                    const slug = this._uniqueProfileSlug(
+                        this.sanitizeExportSlug(`${src.slug || 'export'}-copy`)
+                    );
+                    this.exportProfiles.push({
+                        id: nid,
+                        slug,
+                        label: baseTitle,
+                        settings,
+                    });
+                    this.activeExportProfileId = nid;
+                    this.exportProfileSlug = slug;
+                    this.applyExportSettingsFromPayload({
+                        ...this.defaultProjectExportSettingsSnake(),
+                        ...settings,
+                    });
+                    this.schedulePersistProjectExportSettings();
+                },
+
+                deleteExportProfile() {
+                    if (!this.currentProjectId) return;
+                    if (this.exportProfiles.length <= 1) {
+                        alert('Das letzte Export-Profil kann nicht gelöscht werden.');
+                        return;
+                    }
+                    if (!confirm('Aktuelles Export-Profil wirklich löschen? Die Einstellungen sind danach nicht mehr im Projekt gespeichert.')) {
+                        return;
+                    }
+                    this.commitActiveProfileToList();
+                    const delId = this.activeExportProfileId;
+                    const idx = this.exportProfiles.findIndex((x) => x.id === delId);
+                    if (idx < 0) return;
+                    this.exportProfiles.splice(idx, 1);
+                    const nextIdx = idx > 0 ? idx - 1 : 0;
+                    const next = this.exportProfiles[nextIdx];
+                    if (!next) return;
+                    this.activeExportProfileId = next.id;
+                    this.exportProfileSlug = next.slug || '';
+                    this.applyExportSettingsFromPayload({
+                        ...this.defaultProjectExportSettingsSnake(),
+                        ...next.settings,
+                    });
+                    this.schedulePersistProjectExportSettings();
+                },
+
+                exportProfileSelectLabel(p) {
+                    if (!p) return '';
+                    const t = p.settings && p.settings.export_title;
+                    const parts = [p.label || t || '', p.slug].filter(Boolean);
+                    return parts.length ? parts.join(' · ') : p.slug;
+                },
+
+                async loadPublishSettings() {
+                    if (!this.currentWorkspace) return;
+                    try {
+                        const res = await fetch('/api/settings/publish');
+                        const d = await res.json();
+                        if (d.error) throw new Error(d.error);
+                        this.publishSettings = {
+                            publish_root: d.publish_root || '',
+                            nas_web_public_base: d.nas_web_public_base || '',
+                            manifest_relative: d.manifest_relative || 'manifest.json',
+                        };
+                    } catch (e) {
+                        console.warn('loadPublishSettings', e);
+                    }
+                },
+
+                async savePublishSettings() {
+                    this.publishSettingsSaving = true;
+                    try {
+                        const res = await fetch('/api/settings/publish', {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                publish_root: (this.publishSettings.publish_root || '').trim(),
+                                nas_web_public_base: (this.publishSettings.nas_web_public_base || '').trim(),
+                                manifest_relative: (this.publishSettings.manifest_relative || 'manifest.json').trim(),
+                            }),
+                        });
+                        const data = await res.json();
+                        if (data.error) throw new Error(data.error);
+                        if (data.settings) {
+                            this.publishSettings = {
+                                publish_root: data.settings.publish_root || '',
+                                nas_web_public_base: data.settings.nas_web_public_base || '',
+                                manifest_relative: data.settings.manifest_relative || 'manifest.json',
+                            };
+                        }
+                        alert('Veröffentlichungs-Einstellungen gespeichert (publish_settings.json im Workspace).');
+                    } catch (e) {
+                        alert(`Speichern fehlgeschlagen: ${e.message || e}`);
+                    } finally {
+                        this.publishSettingsSaving = false;
+                    }
+                },
+
+                /** Keep publish_settings.publish_root in sync with the active export base path (NAS web root). */
+                scheduleSyncPublishRootFromExport() {
+                    if (!this.currentWorkspace) return;
+                    if (this._syncPublishRootTimer) clearTimeout(this._syncPublishRootTimer);
+                    this._syncPublishRootTimer = setTimeout(() => {
+                        this._syncPublishRootTimer = null;
+                        this.syncPublishRootFromActiveExportPathNow();
+                    }, 500);
+                },
+
+                async syncPublishRootFromActiveExportPathNow() {
+                    if (!this.currentWorkspace) return;
+                    const path = (this.exportBasePath || '').trim();
+                    if (!path) return;
+                    const cur = (this.publishSettings.publish_root || '').trim();
+                    if (cur === path) return;
+                    this.publishSettings.publish_root = path;
+                    try {
+                        const res = await fetch('/api/settings/publish', {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                publish_root: path,
+                                nas_web_public_base: (this.publishSettings.nas_web_public_base || '').trim(),
+                                manifest_relative: (this.publishSettings.manifest_relative || 'manifest.json').trim(),
+                            }),
+                        });
+                        const data = await res.json();
+                        if (data.error) throw new Error(data.error);
+                        if (data.settings) {
+                            this.publishSettings = {
+                                publish_root: data.settings.publish_root || '',
+                                nas_web_public_base: data.settings.nas_web_public_base || '',
+                                manifest_relative: data.settings.manifest_relative || 'manifest.json',
+                            };
+                        }
+                        console.log('publish_root synced to active export base path');
+                    } catch (e) {
+                        console.warn('syncPublishRootFromExport', e);
+                    }
+                },
+
+                async openLandingEntryAfterExport(payload) {
+                    this.lastLandingExport = payload;
+                    this.landingEntryDescription = '';
+                    this.landingEntryResult = null;
+                    this.landingEntryError = null;
+                    this.showLandingEntryModal = true;
+                    await this.refreshLandingEntryPreview();
+                },
+
+                async refreshLandingEntryPreview() {
+                    if (!this.lastLandingExport) return;
+                    this.landingEntryBusy = true;
+                    this.landingEntryError = null;
+                    try {
+                        const res = await fetch('/api/settings/publish/landing-entry', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                slug: this.lastLandingExport.slug,
+                                title: this.lastLandingExport.title,
+                                description: (this.landingEntryDescription || '').trim() || undefined,
+                                require_gallery_dir: true,
+                                write_manifest: false,
+                            }),
+                        });
+                        const data = await res.json();
+                        if (!res.ok || data.error) throw new Error(data.error || res.statusText);
+                        this.landingEntryResult = data;
+                    } catch (e) {
+                        this.landingEntryError = e.message || String(e);
+                        this.landingEntryResult = null;
+                    } finally {
+                        this.landingEntryBusy = false;
+                    }
+                },
+
+                async writeLandingManifest() {
+                    if (!this.lastLandingExport) return;
+                    this.landingEntryBusy = true;
+                    this.landingEntryError = null;
+                    try {
+                        const res = await fetch('/api/settings/publish/landing-entry', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                slug: this.lastLandingExport.slug,
+                                title: this.lastLandingExport.title,
+                                description: (this.landingEntryDescription || '').trim() || undefined,
+                                require_gallery_dir: true,
+                                write_manifest: true,
+                                dry_run: false,
+                            }),
+                        });
+                        const data = await res.json();
+                        if (!res.ok || data.error) throw new Error(data.error || res.statusText);
+                        this.landingEntryResult = data;
+                        alert(
+                            `manifest.json aktualisiert:\n${data.manifest_path || ''}\n\nEinträge: ${data.galleries_count ?? '—'}`
+                        );
+                    } catch (e) {
+                        this.landingEntryError = e.message || String(e);
+                        alert(`Schreiben fehlgeschlagen: ${this.landingEntryError}`);
+                    } finally {
+                        this.landingEntryBusy = false;
+                    }
+                },
+
+                async copyLandingEntryJson() {
+                    const entry = this.landingEntryResult && this.landingEntryResult.entry;
+                    if (!entry) return;
+                    const text = JSON.stringify(entry, null, 2);
+                    try {
+                        await navigator.clipboard.writeText(text);
+                        alert('JSON in Zwischenablage kopiert.');
+                    } catch (e) {
+                        prompt('Kopieren nicht möglich — JSON:', text);
+                    }
+                },
+
                 schedulePersistProjectExportSettings() {
                     if (this._suspendExportPersist) return;
                     if (!this.currentProjectId) {
@@ -621,7 +1019,18 @@ const { createApp } = Vue;
                 async persistProjectExportSettingsNow() {
                     if (!this.currentProjectId || this._suspendExportPersist) return;
                     try {
-                        const body = { export_settings: this.buildProjectExportSettingsPayload() };
+                        this.commitActiveProfileToList();
+                        const flatProfiles = this.exportProfiles.map((p) => ({
+                            id: p.id,
+                            slug: p.slug,
+                            label: p.label,
+                            ...p.settings,
+                        }));
+                        const body = {
+                            export_settings: this.buildProjectExportSettingsPayload(),
+                            export_profiles: flatProfiles,
+                            active_export_profile_id: this.activeExportProfileId,
+                        };
                         const res = await fetch(`/api/projects/${this.currentProjectId}`, {
                             method: 'PUT',
                             headers: { 'Content-Type': 'application/json' },
@@ -631,6 +1040,8 @@ const { createApp } = Vue;
                         if (data.error) throw new Error(data.error);
                         if (this.currentProject) {
                             this.currentProject.export_settings = this.buildProjectExportSettingsPayload();
+                            this.currentProject.export_profiles = flatProfiles;
+                            this.currentProject.active_export_profile_id = this.activeExportProfileId;
                         }
                         this.saveExportSettingsGlobalLegacy();
                         console.log('💾 Export settings saved to project');
@@ -1102,26 +1513,18 @@ const { createApp } = Vue;
                     return `/api/projects/${this.currentProjectId}/playlist-folder/stream?track_id=${encodeURIComponent(trackId)}`;
                 },
                 
-                async loadPlaylistFolder() {
+                async loadPlaylistFolder(options = {}) {
+                    const silent = options.silent === true;
                     if (!this.currentProjectId) return;
                     this.playlistFolderBusy = true;
                     try {
                         const res = await fetch(`/api/projects/${this.currentProjectId}/playlist-folder`);
                         const data = await res.json();
                         if (data.error) throw new Error(data.error);
-                        this.playlistFolderState = {
-                            tracks: data.tracks || [],
-                            cues: data.cues || [],
-                            order_mode: data.order_mode || 'alpha',
-                            has_order_yaml: !!data.has_order_yaml,
-                        };
-                        this.playlistCuesDraft = (data.cues || []).map((c) => ({
-                            at_slide: c.at_slide,
-                            track_id: c.track_id,
-                        }));
+                        this._applyPlaylistFolderResponse(data);
                     } catch (e) {
                         console.error('loadPlaylistFolder', e);
-                        alert(`Playlist-Ordner: ${e.message || e}`);
+                        if (!silent) alert(`Playlist-Ordner: ${e.message || e}`);
                     } finally {
                         this.playlistFolderBusy = false;
                     }
@@ -1153,7 +1556,16 @@ const { createApp } = Vue;
                             method: 'POST',
                             body: fd,
                         });
-                        const data = await res.json();
+                        const text = await res.text();
+                        let data;
+                        try {
+                            data = JSON.parse(text);
+                        } catch {
+                            throw new Error((text && text.slice(0, 240)) || `HTTP ${res.status}`);
+                        }
+                        if (!res.ok) {
+                            throw new Error(data.error || data.message || `HTTP ${res.status}`);
+                        }
                         if (data.error) throw new Error(data.error);
                         this._applyPlaylistFolderResponse(data);
                     } catch (e) {
@@ -1163,10 +1575,41 @@ const { createApp } = Vue;
                     }
                 },
                 
+                async deletePlaylistTrack(t) {
+                    if (!this.currentProjectId || !t || !t.filename) return;
+                    if (!confirm(`Datei aus der Projekt-Playlist entfernen?\n\n${t.filename}\n\n(Sidecar & Cues für diesen Track werden bereinigt.)`)) {
+                        return;
+                    }
+                    this.playlistFolderBusy = true;
+                    try {
+                        const res = await fetch(
+                            `/api/projects/${this.currentProjectId}/playlist-folder/file?filename=${encodeURIComponent(t.filename)}`,
+                            { method: 'DELETE' },
+                        );
+                        const text = await res.text();
+                        let data;
+                        try {
+                            data = JSON.parse(text);
+                        } catch {
+                            throw new Error((text && text.slice(0, 240)) || `HTTP ${res.status}`);
+                        }
+                        if (!res.ok) {
+                            throw new Error(data.error || data.message || `HTTP ${res.status}`);
+                        }
+                        if (data.error) throw new Error(data.error);
+                        this._applyPlaylistFolderResponse(data);
+                    } catch (e) {
+                        alert(`Löschen: ${e.message || e}`);
+                    } finally {
+                        this.playlistFolderBusy = false;
+                    }
+                },
+                
                 _applyPlaylistFolderResponse(data) {
                     this.playlistFolderState = {
                         tracks: data.tracks || [],
                         cues: data.cues || [],
+                        light_cues: data.light_cues || [],
                         order_mode: data.order_mode || 'alpha',
                         has_order_yaml: !!data.has_order_yaml,
                     };
@@ -1174,6 +1617,133 @@ const { createApp } = Vue;
                         at_slide: c.at_slide,
                         track_id: c.track_id,
                     }));
+                },
+                
+                /** Manifest slide index = export order (this.photos order), not filtered grid order. */
+                photoManifestSlideIndex(photo) {
+                    if (!photo || !this.photos || !this.photos.length) return -1;
+                    if (photo.id != null) {
+                        const i = this.photos.findIndex((p) => p.id === photo.id);
+                        if (i >= 0) return i;
+                    }
+                    if (photo.path) {
+                        const i = this.photos.findIndex((p) => p.path === photo.path);
+                        if (i >= 0) return i;
+                    }
+                    return -1;
+                },
+                
+                audioCueAtSlide(slideIdx) {
+                    const list = (this.playlistFolderState.cues || []).filter((c) => c.at_slide === slideIdx);
+                    if (!list.length) return null;
+                    return list[list.length - 1];
+                },
+                
+                lightCueAtSlide(slideIdx) {
+                    const list = (this.playlistFolderState.light_cues || []).filter((c) => c.at_slide === slideIdx);
+                    if (!list.length) return null;
+                    return list[list.length - 1];
+                },
+                
+                cueHasAudio(photo) {
+                    const si = this.photoManifestSlideIndex(photo);
+                    if (si < 0) return false;
+                    return !!this.audioCueAtSlide(si);
+                },
+                
+                cueHasLight(photo) {
+                    const si = this.photoManifestSlideIndex(photo);
+                    if (si < 0) return false;
+                    return !!this.lightCueAtSlide(si);
+                },
+                
+                toggleCuePanel(photo, kind) {
+                    if (!this.currentProjectId) return;
+                    const si = this.photoManifestSlideIndex(photo);
+                    if (si < 0) return;
+                    const id = photo.id;
+                    if (
+                        this.cuePanel &&
+                        this.cuePanel.photoId === id &&
+                        this.cuePanel.kind === kind
+                    ) {
+                        this.cuePanel = null;
+                        return;
+                    }
+                    this.cuePanel = { photoId: id, kind, slideIndex: si };
+                    if (kind === 'audio') {
+                        const c = this.audioCueAtSlide(si);
+                        this.audioCueDraft = c ? c.track_id : '';
+                    } else {
+                        const c = this.lightCueAtSlide(si);
+                        this.lightEffectDraft = c ? c.effect_id : '';
+                    }
+                },
+                
+                closeCuePanel() {
+                    this.cuePanel = null;
+                },
+                
+                async saveAudioCueFromPanel() {
+                    if (!this.currentProjectId || !this.cuePanel || this.cuePanel.kind !== 'audio') return;
+                    const slideIndex = this.cuePanel.slideIndex;
+                    let cues = [...(this.playlistFolderState.cues || [])];
+                    cues = cues.filter((c) => c.at_slide !== slideIndex);
+                    const tid = (this.audioCueDraft || '').trim();
+                    if (tid) cues.push({ at_slide: slideIndex, track_id: tid });
+                    cues.sort((a, b) => a.at_slide - b.at_slide);
+                    this.playlistFolderBusy = true;
+                    try {
+                        const res = await fetch(`/api/projects/${this.currentProjectId}/playlist-folder/cues`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ cues }),
+                        });
+                        const data = await res.json();
+                        if (data.error) throw new Error(data.error);
+                        this._applyPlaylistFolderResponse(data);
+                        this.cuePanel = null;
+                    } catch (e) {
+                        alert(`Audio-Cue: ${e.message || e}`);
+                    } finally {
+                        this.playlistFolderBusy = false;
+                    }
+                },
+                
+                async removeAudioCueFromPanel() {
+                    this.audioCueDraft = '';
+                    await this.saveAudioCueFromPanel();
+                },
+                
+                async saveLightCueFromPanel() {
+                    if (!this.currentProjectId || !this.cuePanel || this.cuePanel.kind !== 'light') return;
+                    const slideIndex = this.cuePanel.slideIndex;
+                    let cues = [...(this.playlistFolderState.light_cues || [])];
+                    cues = cues.filter((c) => c.at_slide !== slideIndex);
+                    const eid = (this.lightEffectDraft || '').trim();
+                    if (eid) cues.push({ at_slide: slideIndex, effect_id: eid });
+                    cues.sort((a, b) => a.at_slide - b.at_slide);
+                    this.playlistFolderBusy = true;
+                    try {
+                        const res = await fetch(`/api/projects/${this.currentProjectId}/playlist-folder/light-cues`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ cues }),
+                        });
+                        const data = await res.json();
+                        if (data.error) throw new Error(data.error);
+                        this._applyPlaylistFolderResponse(data);
+                        this.cuePanel = null;
+                    } catch (e) {
+                        alert(`Licht-Cue: ${e.message || e}`);
+                    } finally {
+                        this.playlistFolderBusy = false;
+                    }
+                },
+                
+                async removeLightCueFromPanel() {
+                    this.lightEffectDraft = '';
+                    await this.saveLightCueFromPanel();
                 },
                 
                 async putPlaylistFolderOrder(filenames) {
@@ -1364,6 +1934,66 @@ const { createApp } = Vue;
                     }
                 },
                 
+                async refreshThumbnailCacheStatus() {
+                    let prev = this.thumbnailCacheJob;
+                    try {
+                        const res = await fetch('/api/workspace/thumbnail-cache/status');
+                        if (!res.ok) return;
+                        this.thumbnailCacheJob = await res.json();
+                        const s = this.thumbnailCacheJob;
+                        if (s.running && !this.thumbnailCachePollTimer) {
+                            this.thumbnailCachePollTimer = setInterval(() => this.refreshThumbnailCacheStatus(), 500);
+                        } else if (!s.running && this.thumbnailCachePollTimer) {
+                            clearInterval(this.thumbnailCachePollTimer);
+                            this.thumbnailCachePollTimer = null;
+                            if (s.finished && prev && prev.running) {
+                                if (s.last_error) {
+                                    alert('Thumbnail-Cache: ' + s.last_error);
+                                } else {
+                                    alert(
+                                        `Thumbnail-Cache fertig.\nNeu: ${s.created}, schon vorhanden: ${s.exists}, fehlend: ${s.missing}, Fehler: ${s.error}`
+                                    );
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        console.warn('thumbnail cache status', e);
+                    }
+                },
+
+                async startThumbnailCacheFill() {
+                    if (!this.currentWorkspace) {
+                        alert('Bitte zuerst einen Workspace wählen.');
+                        return;
+                    }
+                    try {
+                        const res = await fetch('/api/workspace/thumbnail-cache', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                scope: this.thumbnailCacheScope,
+                                force: this.thumbnailCacheForce
+                            })
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (res.status === 409) {
+                            alert(data.error || 'Thumbnail-Cache läuft bereits.');
+                            await this.refreshThumbnailCacheStatus();
+                            return;
+                        }
+                        if (!res.ok) {
+                            throw new Error(data.error || res.statusText);
+                        }
+                        if (data.job) {
+                            this.thumbnailCacheJob = data.job;
+                        }
+                        await this.refreshThumbnailCacheStatus();
+                    } catch (err) {
+                        alert('Thumbnail-Cache: ' + err.message);
+                        console.error(err);
+                    }
+                },
+
                 async showConfigInfo() {
                     try {
                         this.configInfo = null;
@@ -1844,7 +2474,12 @@ const { createApp } = Vue;
                         this.videos = [];
                         this.audio = [];
                         this.applyExportSettingsFromPayload(this.defaultProjectExportSettingsSnake());
+                        this.exportProfiles = [];
+                        this.activeExportProfileId = null;
+                        this.exportProfileSlug = '';
                         this.loadExportSettings();
+                        await this.loadPublishSettings();
+                        await this.syncPublishRootFromActiveExportPathNow();
                         
                         alert(`âœ“ Switched to workspace. Select a project to load media.`);
                         
@@ -2156,14 +2791,27 @@ const { createApp } = Vue;
                             Object.assign(this.qualitySettings, data.project.quality_settings);
                         }
 
-                        const es = data.project.export_settings;
-                        if (es && typeof es === 'object' && Object.keys(es).length > 0) {
-                            this.applyExportSettingsFromPayload(
-                                Object.assign(this.defaultProjectExportSettingsSnake(), es)
-                            );
+                        if (this.initExportProfilesFromProjectPayload(data.project)) {
+                            /* loaded named profiles + active */
                         } else {
-                            this.loadExportSettings();
-                            await this.persistProjectExportSettingsNow();
+                            const es = data.project.export_settings;
+                            if (es && typeof es === 'object' && Object.keys(es).length > 0) {
+                                this.applyExportSettingsFromPayload(
+                                    Object.assign(this.defaultProjectExportSettingsSnake(), es)
+                                );
+                                this.exportProfileSlug = this.sanitizeExportSlug(
+                                    this.slugifyExportTitle(this.exportTitle)
+                                );
+                                this.bootstrapExportProfilesFromCurrentModal();
+                                await this.persistProjectExportSettingsNow();
+                            } else {
+                                this.loadExportSettings();
+                                this.exportProfileSlug = this.sanitizeExportSlug(
+                                    this.exportProfileSlug || this.slugifyExportTitle(this.exportTitle)
+                                );
+                                this.bootstrapExportProfilesFromCurrentModal();
+                                await this.persistProjectExportSettingsNow();
+                            }
                         }
 
                         await this.loadProjectAudioPlaylist();
@@ -2325,6 +2973,7 @@ const { createApp } = Vue;
                             console.log('merge_debug', data.merge_debug);
                         }
                         await this.loadProjectAudioPlaylist();
+                        this.loadPlaylistFolder({ silent: true }).catch((e) => console.warn('loadPlaylistFolder', e));
                         
                         // DEBUG: Log burst data
                         const photosWithBurst = this.photos.filter(p => p.burst_id);
@@ -2621,15 +3270,19 @@ const { createApp } = Vue;
                 },
                 
                 formatCaptureTime(timestamp) {
-                    if (!timestamp) return '';
-                    // Parse "YYYY-MM-DD HH:MM:SS" format
-                    const parts = timestamp.split(' ');
-                    if (parts.length === 2) {
-                        const dateParts = parts[0].split('-');
-                        const timeParts = parts[1].split(':');
-                        return `${dateParts[2]}.${dateParts[1]}.${dateParts[0]} ${timeParts[0]}:${timeParts[1]}`;
+                    if (timestamp == null || timestamp === '') return '';
+                    const s = String(timestamp).trim();
+                    // ISO-ish: YYYY-MM-DD HH:MM(:SS)
+                    let m = s.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+                    if (m) {
+                        return `${m[3]}.${m[2]}.${m[1]} ${m[4]}:${m[5]}`;
                     }
-                    return timestamp;
+                    // EXIF / SQLite: YYYY:MM:DD HH:MM(:SS)
+                    m = s.match(/^(\d{4}):(\d{2}):(\d{2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+                    if (m) {
+                        return `${m[3]}.${m[2]}.${m[1]} ${m[4]}:${m[5]}`;
+                    }
+                    return s;
                 },
                 
                 async rate(photo, rating) {
@@ -2831,7 +3484,12 @@ const { createApp } = Vue;
                 
                 handleImageError(event, photo) {
                     console.warn(`Failed to load thumbnail for ${photo.name}`);
-                    event.target.src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect fill="%23333" width="100" height="100"/><text x="50" y="50" text-anchor="middle" dy=".3em" fill="%23666" font-size="40">ðŸ“·</text></svg>';
+                    const svg =
+                        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">' +
+                        '<rect fill="#2d2d2d" width="100" height="100"/>' +
+                        '<text x="50" y="54" text-anchor="middle" fill="#94a3b8" font-size="10" font-family="system-ui,sans-serif">no preview</text>' +
+                        '</svg>';
+                    event.target.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
                 },
                 
                 getColorHex(color) {
@@ -3016,6 +3674,9 @@ const { createApp } = Vue;
                         alert('No photos to export! Apply some filters first.');
                         return;
                     }
+                    if (!this.currentProjectId) {
+                        this.exportProfileSlug = this.slugifyExportTitle(this.exportTitle);
+                    }
                     
                     this.showExportModal = true;
                 },
@@ -3138,10 +3799,13 @@ const { createApp } = Vue;
                     this.exportProgress.current = 0;
                     
                     const photoIds = this.filteredPhotos.map(p => p.id);
-                    const outputName = this.exportTitle
-                        .toLowerCase()
-                        .replace(/[^a-z0-9]+/g, '-')
-                        .replace(/^-|-$/g, '');
+                    const manifestPhotoPaths =
+                        this.currentProjectId && this.photos && this.photos.length
+                            ? this.photos.map((p) => p.path || p.id).filter(Boolean)
+                            : undefined;
+                    const outputName = this.sanitizeExportSlug(
+                        this.exportProfileSlug || this.slugifyExportTitle(this.exportTitle)
+                    );
                     
                     const musicFiles = this.exportMusicFiles
                         .split('\n')
@@ -3151,9 +3815,6 @@ const { createApp } = Vue;
                     const ptc = (this.currentProjectId && this.exportTemplate === 'slideshow')
                         ? this.exportProjectToCouchMode
                         : 'off';
-                    const exportProjectId = (ptc !== 'off' && this.currentProjectId)
-                        ? this.currentProjectId
-                        : undefined;
                     
                     const fetchPromise = fetch('/api/export/gallery', {
                         method: 'POST',
@@ -3179,8 +3840,9 @@ const { createApp } = Vue;
                             music_files: musicFiles.length > 0 ? musicFiles : undefined,
                             music_autoplay: this.exportMusicAutoplay,  // ðŸŽµ Autoplay toggle
                             music_ducking_volume: this.exportMusicDuckingVolume,  // ðŸŽšï¸ Ducking volume (0-100%)
-                            project_id: exportProjectId,
-                            project_to_couch_mode: ptc
+                            project_id: this.currentProjectId || undefined,
+                            project_to_couch_mode: ptc,
+                            manifest_photo_paths: manifestPhotoPaths
                         })
                     });
 
@@ -3204,10 +3866,15 @@ const { createApp } = Vue;
                             message += `ðŸŽ¬ Slideshow: ${this.exportSlideshowDuration}s per photo\n`;
                         }
                         message += `\nLocation: ${data.gallery_path}\n\nOpen: ${data.index_html}`;
-                        
+                        message += `\n\n(Optional) Landing-Page-Eintrag im nächsten Dialog.`;
                         alert(message);
                         
                         this.showExportModal = false;
+                        await this.openLandingEntryAfterExport({
+                            slug: outputName,
+                            title: this.exportTitle,
+                            gallery_path: data.gallery_path,
+                        });
                         
                     } catch (err) {
                         alert(`Failed to export gallery: ${err.message}`);
@@ -4312,6 +4979,10 @@ const { createApp } = Vue;
                     this.loadMediaFolders(),      // Load media manager folders
                     this.loadWorkspaceFolders()    // Load workspace folders
                 ]);
+
+                await this.loadPublishSettings();
+                await this.syncPublishRootFromActiveExportPathNow();
+                await this.refreshThumbnailCacheStatus();
 
                 // Note: Photos/media are loaded when a project is activated
                 // Bursts are loaded automatically after media is loaded

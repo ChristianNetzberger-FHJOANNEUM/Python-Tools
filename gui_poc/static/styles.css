@@ -17,12 +17,42 @@ body {
     padding: 20px;
 }
 
-header {
-    margin-bottom: 30px;
+/* Top title + workspace (scrolls away) */
+.app-header-brand {
+    margin-bottom: 16px;
     padding: 20px;
     background: rgba(255, 255, 255, 0.05);
     border-radius: 12px;
     backdrop-filter: blur(10px);
+}
+
+/* Tab row + Media quick actions: stays visible while scrolling */
+.app-toolbar-sticky {
+    position: sticky;
+    top: 0;
+    z-index: 8000;
+    margin-bottom: 20px;
+    padding: 10px 14px 12px;
+    background: rgba(10, 15, 30, 0.9);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.app-toolbar-sticky__inner {
+    width: 100%;
+}
+
+.tabs.tabs--toolbar {
+    margin-top: 0;
+    flex: 1;
+    min-width: 0;
+    flex-wrap: wrap;
+    gap: 8px;
+    border-bottom: none;
+    padding-bottom: 2px;
 }
 
 h1 {
@@ -151,6 +181,113 @@ h1 {
 @keyframes burst-pulse {
     0%, 100% { border-color: #8b5cf6; }
     50% { border-color: #a78bfa; }
+}
+
+/* Slide-first audio/light cues on media grid */
+.photo-thumb-wrap {
+    position: relative;
+}
+
+.photo-cue-bar {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
+    display: flex;
+    gap: 6px;
+    z-index: 8;
+}
+
+.cue-icon-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    background: rgba(15, 23, 42, 0.75);
+    cursor: pointer;
+    font-size: 0.95rem;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    backdrop-filter: blur(6px);
+}
+
+.cue-icon-btn:hover {
+    background: rgba(30, 41, 59, 0.9);
+    border-color: rgba(148, 163, 184, 0.5);
+}
+
+.cue-icon-btn--on {
+    border-color: rgba(52, 211, 153, 0.7);
+    box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.35);
+}
+
+.cue-icon-btn--audio-active {
+    background: rgba(5, 150, 105, 0.55);
+    border-color: rgba(52, 211, 153, 0.95);
+    box-shadow: 0 0 0 2px rgba(52, 211, 153, 0.45);
+}
+
+.cue-icon-btn--light-active {
+    background: rgba(180, 83, 9, 0.55);
+    border-color: rgba(251, 191, 36, 0.95);
+    box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.4);
+}
+
+.cue-popover {
+    position: absolute;
+    left: 4px;
+    right: 4px;
+    bottom: 42px;
+    z-index: 14;
+    padding: 10px 10px 8px;
+    border-radius: 10px;
+    background: rgba(15, 23, 42, 0.96);
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.cue-popover-title {
+    font-size: 0.72rem;
+    color: #94a3b8;
+    margin-bottom: 8px;
+    font-weight: 600;
+}
+
+.cue-popover-select,
+.cue-popover-input {
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(0, 0, 0, 0.35);
+    color: #fff;
+    font-size: 0.85rem;
+    box-sizing: border-box;
+}
+
+.cue-popover-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.cue-btn {
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    background: rgba(255, 255, 255, 0.06);
+    color: #e2e8f0;
+    font-size: 0.78rem;
+    cursor: pointer;
+}
+
+.cue-btn--primary {
+    background: rgba(59, 130, 246, 0.35);
+    border-color: rgba(59, 130, 246, 0.55);
+    color: #dbeafe;
 }
 
 .burst-badge {

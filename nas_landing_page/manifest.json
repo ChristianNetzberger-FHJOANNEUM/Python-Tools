@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "galleries": [
+    {
+      "id": "example-mera-peak",
+      "slug": "mera-peak",
+      "title": "Nepal 2024 · Mera Peak",
+      "href": "mera-peak/",
+      "description": "Beispiel — ersetzen durch Einträge aus dem Photo-Tool oder manuell pflegen.",
+      "thumb": "mera-peak/images/0000.jpg"
+    }
+  ]
+}

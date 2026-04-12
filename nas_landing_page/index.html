@@ -41,6 +41,19 @@
       margin: 0 auto;
       line-height: 1.45;
     }
+    .banner {
+      max-width: 40rem;
+      margin: 1rem auto 0;
+      padding: 0.75rem 1rem;
+      border-radius: 10px;
+      background: rgba(251, 191, 36, 0.12);
+      border: 1px solid rgba(251, 191, 36, 0.35);
+      color: #fcd34d;
+      font-size: 0.88rem;
+      line-height: 1.4;
+      display: none;
+    }
+    .banner.show { display: block; }
     .grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
@@ -102,56 +115,89 @@
 <body>
   <header>
     <h1>Slideshows</h1>
-    <p class="sub">Auf dem Fernbedienungs-Cursor: Karten ansteuern, OK öffnen. Jede Karte verlinkt eine exportierte Galerie (Unterordner mit <code>index.html</code>).</p>
+    <p class="sub">Karten aus <code style="color:#93c5fd;">manifest.json</code> (gleicher Ordner wie diese Seite). Photo-Tool: nach Export „In manifest.json schreiben“, wenn Publish-Root = Web-Ordner.</p>
+    <div id="manifest-warning" class="banner" role="status"></div>
   </header>
 
-  <!--
-    NEUE SLIDESHOW: Dupliziere einen <a class="card">-Block.
-    href = Ordnername relativ zu dieser index.html, z.B. "mera-peak/" 
-    Lege auf der NAS unter web/ ab: web/mera-peak/index.html + images/
-  -->
-  <main class="grid" id="grid">
-    <a class="card" href="mera-peak/">
-      <div class="thumb" aria-hidden="true">🏔</div>
-      <div class="body">
-        <h2>Nepal 2024 · Mera Peak</h2>
-        <div class="meta">
-          <span>Lokal · HTML-Slideshow</span>
-        </div>
-      </div>
-    </a>
-
-    <!-- Beispiel mit Vorschaubild aus der Galerie (optional):
-    <a class="card" href="andere-tour/">
-      <div class="thumb"><img src="andere-tour/images/0000.jpg" alt="" loading="lazy" /></div>
-      ...
-    </a>
-    -->
-  </main>
+  <main class="grid" id="grid"></main>
 
   <footer>
-    nginx auf uGreen · Share <strong>web</strong> · Port 8080
+    nginx / NAS · <code>manifest.json</code> + Unterordner pro Galerie (<code>index.html</code>)
   </footer>
 
   <script>
-    /* Einfache Tastatur-Navigation (TV / PC) */
     (function () {
-      const cards = () => Array.from(document.querySelectorAll('a.card'));
-      document.addEventListener('keydown', function (e) {
-        const list = cards();
-        if (list.length === 0) return;
-        const i = list.indexOf(document.activeElement);
-        let next = i;
-        if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-          e.preventDefault();
-          next = Math.min(i < 0 ? 0 : i + 1, list.length - 1);
-          list[next].focus();
-        } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-          e.preventDefault();
-          next = Math.max((i < 0 ? 1 : i) - 1, 0);
-          list[next].focus();
-        }
-      });
+      const grid = document.getElementById('grid');
+      const warn = document.getElementById('manifest-warning');
+
+      function esc(s) {
+        return String(s == null ? '' : s)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/"/g, '&quot;');
+      }
+
+      function cardHtml(g) {
+        const href = (g.href || (g.slug ? g.slug + '/' : '#')).replace(/^\/?/, '');
+        const hrefNorm = href.endsWith('/') ? href : href + '/';
+        const title = g.title || g.slug || 'Galerie';
+        const desc = g.description || '';
+        const thumb = g.thumb;
+        const thumbBlock = thumb
+          ? '<div class="thumb"><img src="' + esc(thumb) + '" alt="" loading="lazy" /></div>'
+          : '<div class="thumb" aria-hidden="true">&#x1F5BC;</div>';
+        return (
+          '<a class="card" href="' + esc(hrefNorm) + '">' +
+          thumbBlock +
+          '<div class="body"><h2>' + esc(title) + '</h2>' +
+          '<div class="meta"><span>HTML-Slideshow</span>' +
+          (desc ? '<span>' + esc(desc) + '</span>' : '') +
+          '</div></div></a>'
+        );
+      }
+
+      function showCards(galleries) {
+        grid.innerHTML = galleries.map(cardHtml).join('');
+ }
+
+      function navCards() {
+        const cards = () => Array.from(document.querySelectorAll('a.card'));
+        document.addEventListener('keydown', function (e) {
+          const list = cards();
+          if (list.length === 0) return;
+          const i = list.indexOf(document.activeElement);
+          let next = i;
+          if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            next = Math.min(i < 0 ? 0 : i + 1, list.length - 1);
+            list[next].focus();
+          } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            next = Math.max((i < 0 ? 1 : i) - 1, 0);
+            list[next].focus();
+          }
+        });
+      }
+
+      fetch('manifest.json', { cache: 'no-store' })
+        .then(function (r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
+        })
+        .then(function (data) {
+          const list = data && Array.isArray(data.galleries) ? data.galleries : [];
+          if (list.length === 0) {
+            warn.textContent = 'manifest.json enthält keine Einträge (galleries).';
+            warn.classList.add('show');
+            return;
+          }
+          showCards(list);
+          navCards();
+        })
+        .catch(function () {
+          warn.textContent = 'manifest.json nicht gefunden oder ungültig — bitte Datei neben index.html ablegen (vom Photo-Tool schreiben lassen oder aus dem Repo kopieren).';
+          warn.classList.add('show');
+        });
     })();
   </script>
 </body>

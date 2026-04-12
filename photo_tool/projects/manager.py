@@ -4,6 +4,8 @@ Handles project creation, loading, saving, and deletion
 """
 
 import copy
+import re
+import uuid
 import yaml
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -106,8 +108,12 @@ class Project:
     manual_additions: Optional[List[str]] = None
     manual_exclusions: Optional[List[str]] = None
     
-    # Export settings
+    # Export settings (always mirrored from active export_profiles entry when profiles exist)
     export_settings: Optional[ExportSettings] = None
+    
+    # Named export targets (folder slug + full export_settings fields each); Couch/workflows per camera batch
+    export_profiles: Optional[List[Dict[str, Any]]] = None
+    active_export_profile_id: Optional[str] = None
     
     # Quality detection settings
     quality_settings: Optional[QualityDetectionSettings] = None
@@ -128,7 +134,18 @@ class Project:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'Project':
         """Create from dictionary"""
-        # Convert nested dicts to dataclasses
+        data = dict(data)
+
+        ep_raw = data.get('export_profiles')
+        raw_es = data.get('export_settings')
+        if (
+            (not ep_raw or not isinstance(ep_raw, list) or len(ep_raw) == 0)
+            and isinstance(raw_es, dict)
+        ):
+            profs, aid = migrate_legacy_export_profiles(raw_es)
+            data['export_profiles'] = profs
+            data.setdefault('active_export_profile_id', aid)
+
         if 'filters' in data and data['filters']:
             data['filters'] = ProjectFilters(**data['filters'])
         if 'export_settings' in data:
@@ -146,7 +163,10 @@ class Project:
         ap = data.get('audio_playlist')
         if ap is not None and not isinstance(ap, dict):
             data['audio_playlist'] = None
-        return cls(**data)
+
+        proj = cls(**data)
+        sync_export_settings_from_profiles(proj)
+        return proj
 
 
 def export_settings_from_dict(d: Optional[Dict[str, Any]]) -> Optional[ExportSettings]:
@@ -162,6 +182,87 @@ def export_settings_from_dict(d: Optional[Dict[str, Any]]) -> Optional[ExportSet
     except TypeError:
         logger.warning("export_settings_from_dict: invalid fields, using defaults")
         return ExportSettings()
+
+
+EXPORT_PROFILE_META_KEYS = frozenset({'id', 'slug', 'label'})
+
+
+def slug_from_export_title(title: Optional[str]) -> str:
+    """Folder slug from gallery title (same idea as gui exportGallery output_name)."""
+    if not title or not str(title).strip():
+        return 'default'
+    s = str(title).lower().strip()
+    s = re.sub(r'[^a-z0-9]+', '-', s)
+    s = re.sub(r'^-+|-+$', '', s)
+    return s or 'default'
+
+
+def export_profile_flat_to_settings(flat: Dict[str, Any]) -> ExportSettings:
+    """One export profile dict → ExportSettings (strips id/slug/label)."""
+    inner = {k: v for k, v in flat.items() if k not in EXPORT_PROFILE_META_KEYS}
+    return export_settings_from_dict(inner) or ExportSettings()
+
+
+def export_profile_to_flat_dict(
+    profile_id: str,
+    slug: str,
+    label: Optional[str],
+    es: ExportSettings,
+) -> Dict[str, Any]:
+    """Serialize one named export profile for YAML/API (flat: meta + ExportSettings fields)."""
+    d = asdict(es)
+    d['id'] = profile_id
+    d['slug'] = (slug or '').strip() or 'default'
+    if label is not None and str(label).strip():
+        d['label'] = str(label).strip()
+    return d
+
+
+def merge_export_settings_into_active_profile(project: 'Project') -> None:
+    """Copy project.export_settings fields into the active export_profiles row (if any)."""
+    es = project.export_settings
+    if not es or not project.export_profiles:
+        return
+    aid = project.active_export_profile_id
+    payload = asdict(es)
+    for p in project.export_profiles:
+        if isinstance(p, dict) and p.get('id') == aid:
+            for k, v in payload.items():
+                p[k] = v
+            return
+
+
+def sync_export_settings_from_profiles(project: 'Project') -> None:
+    """Mirror active profile into project.export_settings for legacy readers."""
+    profiles = project.export_profiles
+    if not profiles:
+        return
+    aid = project.active_export_profile_id
+    prof = None
+    for p in profiles:
+        if isinstance(p, dict) and p.get('id') == aid:
+            prof = p
+            break
+    if prof is None:
+        prof = profiles[0] if isinstance(profiles[0], dict) else None
+        if prof and prof.get('id'):
+            project.active_export_profile_id = prof.get('id')
+    if prof and isinstance(prof, dict):
+        project.export_settings = export_profile_flat_to_settings(prof)
+
+
+def migrate_legacy_export_profiles(
+    export_settings_raw: Optional[Dict[str, Any]],
+) -> tuple[List[Dict[str, Any]], str]:
+    """Build a single export_profiles entry from legacy export_settings only."""
+    es = export_settings_from_dict(export_settings_raw if isinstance(export_settings_raw, dict) else {})
+    if es is None:
+        es = ExportSettings()
+    pid = str(uuid.uuid4())
+    slug = slug_from_export_title(es.export_title)
+    label = (es.export_title or '').strip() or None
+    flat = export_profile_to_flat_dict(pid, slug, label, es)
+    return [flat], pid
 
 
 class ProjectManager:
@@ -226,6 +327,8 @@ class ProjectManager:
             # Update timestamp
             project.updated = datetime.now().isoformat()
             
+            sync_export_settings_from_profiles(project)
+
             # Save project file
             project_file = self.projects_dir / f"{project.id}.yaml"
             with open(project_file, 'w', encoding='utf-8') as f:
@@ -372,6 +475,21 @@ class ProjectManager:
                     'audio_count': wf.get('audio_count', 0)
                 })
         
+        es_obj = export_settings_from_dict(export_settings) if export_settings else None
+        profiles = None
+        active_pid = None
+        if es_obj:
+            pid = str(uuid.uuid4())
+            profiles = [
+                export_profile_to_flat_dict(
+                    pid,
+                    slug_from_export_title(es_obj.export_title),
+                    (es_obj.export_title or '').strip() or None,
+                    es_obj,
+                )
+            ]
+            active_pid = pid
+
         # Create project with default quality settings
         project = Project(
             id=project_id,
@@ -383,12 +501,15 @@ class ProjectManager:
             selection_mode=selection_mode,
             filters=ProjectFilters(**filters) if filters else None,
             photo_ids=photo_ids,
-            export_settings=export_settings_from_dict(export_settings) if export_settings else None,
+            export_settings=es_obj,
+            export_profiles=profiles,
+            active_export_profile_id=active_pid,
             quality_settings=QualityDetectionSettings(**quality_settings) if quality_settings else QualityDetectionSettings(),
             exports=[],
             stats={}
         )
-        
+        sync_export_settings_from_profiles(project)
+
         # Save it
         self.save_project(project)
         
@@ -417,6 +538,25 @@ class ProjectManager:
             if src.export_settings
             else None
         )
+        dup_profiles = copy.deepcopy(src.export_profiles) if src.export_profiles else None
+        dup_active = None
+        if dup_profiles:
+            id_map: Dict[str, str] = {}
+            for p in dup_profiles:
+                if not isinstance(p, dict):
+                    continue
+                oid = p.get('id')
+                nid = str(uuid.uuid4())
+                if isinstance(oid, str) and oid.strip():
+                    id_map[oid.strip()] = nid
+                p['id'] = nid
+            old_active = src.active_export_profile_id
+            if isinstance(old_active, str) and old_active.strip() in id_map:
+                dup_active = id_map[old_active.strip()]
+            elif dup_profiles and isinstance(dup_profiles[0], dict):
+                dup_active = dup_profiles[0].get('id')
+            dup_export = export_profile_flat_to_settings(dup_profiles[0]) if dup_profiles else dup_export
+
         dup_quality = (
             QualityDetectionSettings(**asdict(src.quality_settings))
             if src.quality_settings
@@ -436,11 +576,14 @@ class ProjectManager:
             manual_additions=dup_manual_add,
             manual_exclusions=dup_manual_exc,
             export_settings=dup_export,
+            export_profiles=dup_profiles,
+            active_export_profile_id=dup_active,
             quality_settings=dup_quality,
             exports=[],
             stats={},
             audio_playlist=dup_audio,
         )
+        sync_export_settings_from_profiles(project)
         self.save_project(project)
         return project
 

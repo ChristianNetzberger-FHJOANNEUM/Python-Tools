@@ -489,4 +489,10 @@ type Subscription {
 
 ---
 
+## Slideshow: Web vs. native Shield (Roadmap)
+
+Für ein **Zielbild** mit realistischen Web-Grenzen und **maximaler Performance** auf der NVIDIA Shield (Kotlin/Android TV) siehe [docs/ROADMAP_SHIELD_NATIVE_SLIDESHOW.md](docs/ROADMAP_SHIELD_NATIVE_SLIDESHOW.md). Das Photo-Tool bleibt Lieferant der Rohdaten; der Schwerpunkt der Differenzierung liegt am **Export-Profil** und am **Player**.
+
+---
+
 **Note:** This architecture is designed to minimize rework when transitioning from CLI to web app. Core business logic remains unchanged, only interfaces are added.

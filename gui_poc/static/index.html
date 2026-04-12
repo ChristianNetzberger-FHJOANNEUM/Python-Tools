@@ -31,7 +31,7 @@
 </head>
 <body>
     <div id="app">
-        <header>
+        <header class="app-header-brand">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                 <h1 style="margin: 0;">
                     <span>📸</span>
@@ -59,11 +59,16 @@
                     </select>
                 </div>
             </div>
+        </header>
             
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div class="tabs">
+        <div class="app-toolbar-sticky">
+            <div class="app-toolbar-sticky__inner" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+                <div class="tabs tabs--toolbar">
                     <button class="tab" :class="{ active: currentView === 'media-manager' }" @click="currentView = 'media-manager'">
                         📱 Media Manager
+                    </button>
+                    <button class="tab" :class="{ active: currentView === 'settings' }" @click="currentView = 'settings'">
+                        ⚙️ Einstellungen
                     </button>
                     <button class="tab" :class="{ active: currentView === 'workspaces' }" @click="currentView = 'workspaces'">
                         🗂️ Workspaces
@@ -97,6 +102,7 @@
                     </button>
                 </div>
             </div>
+        </div>
             
             <div v-if="stats" class="stats">
                 <div class="stat-card">
@@ -116,7 +122,6 @@
                     <div>Blurry Photos</div>
                 </div>
             </div>
-        </header>
         
         <!-- Media Manager View -->
         <div v-if="currentView === 'media-manager'">
@@ -135,6 +140,53 @@
                         style="background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 1rem;">
                     📋 Show Config
                 </button>
+            </div>
+
+            <!-- Thumbnail cache (same logic as generate_thumbnails / DB paths) -->
+            <div style="background: rgba(251, 191, 36, 0.08); border: 1px solid rgba(251, 191, 36, 0.35); border-radius: 12px; padding: 16px 20px; margin-bottom: 24px;">
+                <div style="font-weight: 600; margin-bottom: 8px; color: #fbbf24;">Thumbnail-Cache füllen</div>
+                <p style="margin: 0 0 12px 0; font-size: 0.88rem; color: #888; line-height: 1.45;">
+                    Erzeugt JPEGs unter <code style="color:#cbd5e1;">workspace/cache/thumbnails/</code> aus der Medien-Datenbank (nur verfügbare Fotos). Entspricht dem Skript <code style="color:#cbd5e1;">generate_thumbnails.py</code>.
+                </p>
+                <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-bottom: 12px;">
+                    <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.9rem;">
+                        <input type="radio" name="thumbScopeMm" value="all" v-model="thumbnailCacheScope">
+                        Alle Fotos (DB)
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.9rem;">
+                        <input type="radio" name="thumbScopeMm" value="enabled" v-model="thumbnailCacheScope">
+                        Nur aktivierte Workspace-Ordner
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.85rem; color: #ccc;">
+                        <input type="checkbox" v-model="thumbnailCacheForce">
+                        Vorhandene überschreiben
+                    </label>
+                    <button type="button"
+                            @click="startThumbnailCacheFill"
+                            :disabled="!currentWorkspace || (thumbnailCacheJob && thumbnailCacheJob.running)"
+                            style="background: linear-gradient(135deg, #f59e0b, #d97706); color: #fff; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.9rem;"
+                            :style="{ opacity: (!currentWorkspace || (thumbnailCacheJob && thumbnailCacheJob.running)) ? 0.45 : 1 }">
+                        {{ (thumbnailCacheJob && thumbnailCacheJob.running) ? 'Läuft…' : 'Cache generieren' }}
+                    </button>
+                </div>
+                <div v-if="thumbnailCacheJob && thumbnailCacheJob.running" style="font-size: 0.85rem; color: #aaa;">
+                    <div style="margin-bottom: 6px;">
+                        {{ thumbnailCacheJob.done }} / {{ thumbnailCacheJob.total }}
+                        <span v-if="thumbnailCacheJob.current_file" style="color:#64748b; margin-left:8px; word-break: break-all;">{{ thumbnailCacheJob.current_file }}</span>
+                    </div>
+                    <div style="width: 100%; height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden;">
+                        <div v-if="thumbnailCacheJob.total > 0"
+                             style="height: 100%; background: linear-gradient(90deg, #f59e0b, #fbbf24); transition: width 0.2s ease;"
+                             :style="{ width: (100 * thumbnailCacheJob.done / thumbnailCacheJob.total) + '%' }"></div>
+                    </div>
+                    <div style="margin-top: 8px; font-size: 0.8rem; color: #888;">
+                        neu {{ thumbnailCacheJob.created }} · vorhanden {{ thumbnailCacheJob.exists }} · fehlend {{ thumbnailCacheJob.missing }} · Fehler {{ thumbnailCacheJob.error }}
+                    </div>
+                </div>
+                <div v-if="thumbnailCacheJob && !thumbnailCacheJob.running && thumbnailCacheJob.finished" style="font-size: 0.8rem; color: #6ee7b7; margin-top: 4px;">
+                    Letzter Lauf: neu {{ thumbnailCacheJob.created }}, vorhanden {{ thumbnailCacheJob.exists }}, fehlend {{ thumbnailCacheJob.missing }}, Fehler {{ thumbnailCacheJob.error }}
+                    <span v-if="thumbnailCacheJob.last_error" style="color: #f87171; display: block; margin-top: 6px;">{{ thumbnailCacheJob.last_error }}</span>
+                </div>
             </div>
             
             <!-- Media Folders List -->
@@ -912,10 +964,43 @@
                          @mouseleave="hoveredPhoto = null; hoverStar = 0"
                          @click="photo.is_burst_lead && !activeBurstId ? toggleBurstExpansion(photo.burst_id) : openLightbox(photo, index)">
                     
+                    <div class="photo-thumb-wrap">
                     <img :src="photo.thumbnail" 
                          :alt="photo.name"
                          @error="handleImageError($event, photo)"
                          loading="lazy">
+                    <div class="photo-cue-bar" @click.stop>
+                        <button type="button" class="cue-icon-btn" :class="{ 'cue-icon-btn--audio-active': cueHasAudio(photo) }"
+                                @click="toggleCuePanel(photo, 'audio')"
+                                title="Audio-Cue (Manifest-Index)">🎵</button>
+                        <button type="button" class="cue-icon-btn" :class="{ 'cue-icon-btn--light-active': cueHasLight(photo) }"
+                                @click="toggleCuePanel(photo, 'light')"
+                                title="Licht-Cue (effect_id)">💡</button>
+                    </div>
+                    <div v-if="cuePanel && cuePanel.photoId === photo.id && cuePanel.kind === 'audio'" class="cue-popover" @click.stop>
+                        <div class="cue-popover-title">Audio · Slide {{ cuePanel.slideIndex }}</div>
+                        <select v-model="audioCueDraft" class="cue-popover-select">
+                            <option value="">— kein Track —</option>
+                            <option v-for="t in playlistFolderState.tracks" :key="'ac-' + t.track_id" :value="t.track_id">{{ t.filename }}</option>
+                        </select>
+                        <div v-if="!playlistFolderState.tracks.length" style="font-size:0.75rem;color:#94a3b8;margin:6px 0;">Zuerst im Tab „Audio“ Tracks in den Playlist-Ordner legen.</div>
+                        <div class="cue-popover-actions">
+                            <button type="button" class="cue-btn cue-btn--primary" @click="saveAudioCueFromPanel" :disabled="playlistFolderBusy">Speichern</button>
+                            <button type="button" class="cue-btn" @click="removeAudioCueFromPanel" :disabled="playlistFolderBusy">Entfernen</button>
+                            <button type="button" class="cue-btn" @click="closeCuePanel">Schließen</button>
+                        </div>
+                    </div>
+                    <div v-if="cuePanel && cuePanel.photoId === photo.id && cuePanel.kind === 'light'" class="cue-popover" @click.stop>
+                        <div class="cue-popover-title">Licht · Slide {{ cuePanel.slideIndex }}</div>
+                        <input type="text" v-model="lightEffectDraft" class="cue-popover-input" placeholder="effect_id (z. B. warm, scene_1, dmx:3)" />
+                        <div style="font-size:0.72rem;color:#94a3b8;margin-top:6px;">Export/Player später; jetzt nur Speicherung.</div>
+                        <div class="cue-popover-actions">
+                            <button type="button" class="cue-btn cue-btn--primary" @click="saveLightCueFromPanel" :disabled="playlistFolderBusy">Speichern</button>
+                            <button type="button" class="cue-btn" @click="removeLightCueFromPanel" :disabled="playlistFolderBusy">Entfernen</button>
+                            <button type="button" class="cue-btn" @click="closeCuePanel">Schließen</button>
+                        </div>
+                    </div>
+                    </div>
                     
                     <!-- Color Label Badge (top-left) -->
                     <div v-if="photo.color" 
@@ -1109,6 +1194,8 @@
                     Dateien liegen unter <code style="color:#cbd5e1;">…/projects/&lt;Projekt-ID&gt;/playlist/</code>.
                     Optional <code style="color:#cbd5e1;">playlist_order.yaml</code> legt die Reihenfolge fest (YAML ist Master: nicht gelistete Dateien sind deaktiviert).
                     Ohne YAML: alle Audiodateien, alphabetisch. Stabile <code style="color:#cbd5e1;">track_id</code> in <code style="color:#cbd5e1;">playlist/.ids/</code>.
+                    <br /><span style="color:#a5b4fc;">Neue Uploads werden bei aktivem YAML automatisch an die Reihenfolge angehängt.</span>
+                    <br /><span style="color:#a5b4fc;"><strong>.wma</strong> wird serverseitig per <strong>ffmpeg</strong> nach <strong>.mp3</strong> konvertiert (ffmpeg im PATH); sonst bitte lokal konvertieren.</span>
                 </p>
                 <div
                     @dragover.prevent="playlistFolderDropZoneOver = true"
@@ -1126,7 +1213,7 @@
                     }">
                     <strong style="color:#e2e8f0;">Audio hierher ziehen</strong> (Upload) oder Ordner manuell auf der NAS befüllen.
                     <div style="margin-top: 10px;">
-                        <input type="file" accept="audio/*" multiple @change="onPlaylistFolderFileInput" style="display:none" ref="playlistFolderFileInput" />
+                        <input type="file" accept="audio/*,.wma,.mp3,.wav,.flac,.ogg,.m4a,.aac,.opus" multiple @change="onPlaylistFolderFileInput" style="display:none" ref="playlistFolderFileInput" />
                         <button type="button" @click="$refs.playlistFolderFileInput.click()"
                                 style="background: rgba(59,130,246,0.25); border: 1px solid rgba(59,130,246,0.5); color: #93c5fd; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-weight: 600;">
                             Dateien wählen…
@@ -1159,6 +1246,11 @@
                                 style="padding:4px 8px; border-radius:4px; background:rgba(255,255,255,0.08); color:#cbd5e1; border:none; cursor:pointer;">↑</button>
                         <button type="button" @click="movePlaylistTrack(idx, 1)" :disabled="idx === playlistFolderState.tracks.length - 1 || playlistFolderBusy"
                                 style="padding:4px 8px; border-radius:4px; background:rgba(255,255,255,0.08); color:#cbd5e1; border:none; cursor:pointer;">↓</button>
+                        <button type="button" @click="deletePlaylistTrack(t)" :disabled="playlistFolderBusy"
+                                title="Datei und Sidecar aus Projekt-Playlist entfernen"
+                                style="padding:6px 12px; border-radius:6px; background:rgba(239,68,68,0.18); border:1px solid rgba(239,68,68,0.45); color:#f87171; cursor:pointer; font-size:0.8rem; font-weight:600;">
+                            Entfernen
+                        </button>
                     </div>
                 </div>
                 <h3 style="font-size:1.05rem; margin-bottom:10px;">Audio-Cues (sparse)</h3>
@@ -1872,6 +1964,39 @@
             </div>
         </div>
         
+
+        <!-- Global publish / NAS landing settings -->
+        <div v-if="currentView === 'settings'">
+            <h2 style="font-size: 1.5rem; margin-bottom: 12px;">Veröffentlichung &amp; Landing-Page</h2>
+            <p style="color: #888; font-size: 0.9rem; margin-bottom: 24px; max-width: 52rem; line-height: 1.5;">
+                Diese Werte werden pro <strong>Workspace</strong> in <code style="color:#cbd5e1;">publish_settings.json</code> im Workspace-Ordner gespeichert.
+                Unter <strong>Publish-Root</strong> liegt die NAS-Web-Freigabe (z.&nbsp;B. <code>X:\web</code>), darunter je Export ein Unterordner (Slug).
+                Die <code>manifest.json</code> dort listet Galerien für die TV-Landing-Page (<code>index.html</code> neben dem Manifest).
+                <strong>Publish-Root</strong> wird automatisch an den <strong>Export-Basisordner</strong> des aktiven Export-Profils angeglichen (wenn dieser gesetzt ist); du kannst ihn hier bei Bedarf manuell überschreiben und speichern.
+            </p>
+            <div style="background: rgba(255,255,255,0.05); border-radius: 12px; padding: 20px; max-width: 40rem; border: 1px solid rgba(255,255,255,0.1);">
+                <div style="margin-bottom: 16px;">
+                    <label style="display:block; margin-bottom: 6px; color:#aaa; font-size: 0.85rem;">Publish-Root (NAS / Web-Ordner)</label>
+                    <input v-model="publishSettings.publish_root" type="text" placeholder="z. B. X:\web oder \\NAS\share\web"
+                           style="width:100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color:#fff; padding:10px; border-radius:8px; font-family:monospace; font-size:0.9rem;">
+                </div>
+                <div style="margin-bottom: 16px;">
+                    <label style="display:block; margin-bottom: 6px; color:#aaa; font-size: 0.85rem;">Öffentliche Basis-URL (optional, für Link-Vorschau)</label>
+                    <input v-model="publishSettings.nas_web_public_base" type="text" placeholder="z. B. http://192.168.1.10:8080"
+                           style="width:100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color:#fff; padding:10px; border-radius:8px; font-family:monospace; font-size:0.9rem;">
+                </div>
+                <div style="margin-bottom: 20px;">
+                    <label style="display:block; margin-bottom: 6px; color:#aaa; font-size: 0.85rem;">Manifest-Datei (relativ zum Publish-Root)</label>
+                    <input v-model="publishSettings.manifest_relative" type="text" placeholder="manifest.json"
+                           style="width:100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color:#fff; padding:10px; border-radius:8px; font-family:monospace; font-size:0.9rem;">
+                </div>
+                <button type="button" @click="savePublishSettings" :disabled="publishSettingsSaving"
+                        style="background: linear-gradient(135deg, #4ade80, #3b82f6); color:#fff; border:none; padding:12px 20px; border-radius:8px; cursor:pointer; font-weight:600;">
+                    {{ publishSettingsSaving ? 'Speichern…' : 'Speichern' }}
+                </button>
+            </div>
+        </div>
+
         <!-- Workspaces View -->
         <div v-if="currentView === 'workspaces'">
             <h2 style="font-size: 1.5rem; margin-bottom: 30px;">🗂️ Workspace & Folder Management</h2>
@@ -1966,6 +2091,53 @@
                     <div style="display: flex; justify-content: space-between; margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.1);">
                         <span>Total Photos (active):</span>
                         <span style="font-weight: 600; color: #3b82f6;">{{ totalActivePhotos }}</span>
+                    </div>
+                </div>
+
+                <!-- Thumbnail cache -->
+                <div style="margin-top: 24px; background: rgba(251, 191, 36, 0.08); border: 1px solid rgba(251, 191, 36, 0.35); border-radius: 12px; padding: 16px 20px;">
+                    <div style="font-weight: 600; margin-bottom: 8px; color: #fbbf24;">Thumbnail-Cache</div>
+                    <p style="margin: 0 0 12px 0; font-size: 0.88rem; color: #888; line-height: 1.45;">
+                        Vorberechnete Vorschaubilder im aktuellen Workspace (<code style="color:#cbd5e1;">cache/thumbnails/</code>), basierend auf der gleichen SQLite-Liste wie die Oberfläche.
+                    </p>
+                    <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-bottom: 12px;">
+                        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.9rem;">
+                            <input type="radio" name="thumbScopeWs" value="all" v-model="thumbnailCacheScope">
+                            Alle Fotos (DB)
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.9rem;">
+                            <input type="radio" name="thumbScopeWs" value="enabled" v-model="thumbnailCacheScope">
+                            Nur aktivierte Ordner
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.85rem; color: #ccc;">
+                            <input type="checkbox" v-model="thumbnailCacheForce">
+                            Vorhandene überschreiben
+                        </label>
+                        <button type="button"
+                                @click="startThumbnailCacheFill"
+                                :disabled="!currentWorkspace || (thumbnailCacheJob && thumbnailCacheJob.running)"
+                                style="background: linear-gradient(135deg, #f59e0b, #d97706); color: #fff; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.9rem;"
+                                :style="{ opacity: (!currentWorkspace || (thumbnailCacheJob && thumbnailCacheJob.running)) ? 0.45 : 1 }">
+                            {{ (thumbnailCacheJob && thumbnailCacheJob.running) ? 'Läuft…' : 'Cache generieren' }}
+                        </button>
+                    </div>
+                    <div v-if="thumbnailCacheJob && thumbnailCacheJob.running" style="font-size: 0.85rem; color: #aaa;">
+                        <div style="margin-bottom: 6px;">
+                            {{ thumbnailCacheJob.done }} / {{ thumbnailCacheJob.total }}
+                            <span v-if="thumbnailCacheJob.current_file" style="color:#64748b; margin-left:8px; word-break: break-all;">{{ thumbnailCacheJob.current_file }}</span>
+                        </div>
+                        <div style="width: 100%; height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden;">
+                            <div v-if="thumbnailCacheJob.total > 0"
+                                 style="height: 100%; background: linear-gradient(90deg, #f59e0b, #fbbf24); transition: width 0.2s ease;"
+                                 :style="{ width: (100 * thumbnailCacheJob.done / thumbnailCacheJob.total) + '%' }"></div>
+                        </div>
+                        <div style="margin-top: 8px; font-size: 0.8rem; color: #888;">
+                            neu {{ thumbnailCacheJob.created }} · vorhanden {{ thumbnailCacheJob.exists }} · fehlend {{ thumbnailCacheJob.missing }} · Fehler {{ thumbnailCacheJob.error }}
+                        </div>
+                    </div>
+                    <div v-if="thumbnailCacheJob && !thumbnailCacheJob.running && thumbnailCacheJob.finished" style="font-size: 0.8rem; color: #6ee7b7; margin-top: 4px;">
+                        Letzter Lauf: neu {{ thumbnailCacheJob.created }}, vorhanden {{ thumbnailCacheJob.exists }}, fehlend {{ thumbnailCacheJob.missing }}, Fehler {{ thumbnailCacheJob.error }}
+                        <span v-if="thumbnailCacheJob.last_error" style="color: #f87171; display: block; margin-top: 6px;">{{ thumbnailCacheJob.last_error }}</span>
                     </div>
                 </div>
             </div>
@@ -2095,6 +2267,63 @@
                     <p style="color: #888; margin-bottom: 15px; font-size: 0.9rem;">
                         Export {{ filteredPhotos.length }} photos as a standalone HTML gallery.
                     </p>
+
+                    <div v-if="currentProjectId" style="margin-bottom: 15px; padding: 12px; background: rgba(139, 92, 246, 0.12); border: 1px solid rgba(139, 92, 246, 0.35); border-radius: 8px;">
+                        <label style="display: block; margin-bottom: 6px; color: #c4b5fd; font-size: 0.85rem;">
+                            Export-Profil (gespeichert im Projekt)
+                        </label>
+                        <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+                            <select :value="activeExportProfileId"
+                                    @change="selectExportProfileById($event.target.value)"
+                                    style="flex: 1; min-width: 180px; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 8px 10px; border-radius: 8px; font-size: 0.88rem; cursor: pointer;">
+                                <option v-for="p in exportProfiles" :key="p.id" :value="p.id" style="background: #1a1a1a;">
+                                    {{ exportProfileSelectLabel(p) }}
+                                </option>
+                            </select>
+                            <button type="button"
+                                    @click="addExportProfile"
+                                    style="background: linear-gradient(135deg, #8b5cf6, #6366f1); color: #fff; border: none; padding: 8px 14px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.85rem; white-space: nowrap;">
+                                + Profil
+                            </button>
+                            <button type="button"
+                                    @click="duplicateExportProfile"
+                                    title="Aktuelles Profil kopieren (neuer Slug, neue ID)"
+                                    style="background: rgba(99, 102, 241, 0.35); color: #e0e7ff; border: 1px solid rgba(165, 180, 252, 0.5); padding: 8px 12px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.85rem; white-space: nowrap;">
+                                Duplizieren
+                            </button>
+                            <button type="button"
+                                    @click="deleteExportProfile"
+                                    :disabled="exportProfiles.length <= 1"
+                                    title="Mindestens ein Profil muss bleiben"
+                                    :style="{
+                                        background: exportProfiles.length <= 1 ? 'rgba(239,68,68,0.15)' : 'rgba(239, 68, 68, 0.35)',
+                                        color: exportProfiles.length <= 1 ? '#888' : '#fecaca',
+                                        border: '1px solid rgba(248, 113, 113, 0.45)',
+                                        padding: '8px 12px',
+                                        borderRadius: '8px',
+                                        cursor: exportProfiles.length <= 1 ? 'not-allowed' : 'pointer',
+                                        fontWeight: '600',
+                                        fontSize: '0.85rem',
+                                        whiteSpace: 'nowrap',
+                                        opacity: exportProfiles.length <= 1 ? 0.55 : 1
+                                    }">
+                                Löschen
+                            </button>
+                        </div>
+                        <div style="font-size: 0.72rem; color: #a5b4fc; margin-top: 8px; line-height: 1.35;">
+                            Jedes Profil hat eigene Export-Einstellungen und einen <strong>Ordner-Slug</strong> (Unterordner unter Zielpfad). Beim Wechsel werden die Formularfelder aus dem gewählten Profil geladen.
+                        </div>
+                    </div>
+
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 6px; color: #aaa; font-size: 0.85rem;">
+                            Ordner-Slug <span style="opacity:0.7;">(Web-Root: &lt;slug&gt;/)</span>
+                        </label>
+                        <input v-model="exportProfileSlug"
+                               type="text"
+                               placeholder="z. B. mera-peak, galaxy-review, lumix-tv"
+                               style="width: 100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color: #fff; padding: 10px; border-radius: 8px; font-size: 0.95rem; outline: none; font-family: monospace;">
+                    </div>
                     
                     <div style="margin-bottom: 15px;">
                         <label style="display: block; margin-bottom: 6px; color: #aaa; font-size: 0.85rem;">
@@ -2480,6 +2709,54 @@
             </div>
         </div>
         
+
+        <!-- Landing manifest entry (after export) -->
+        <div v-if="showLandingEntryModal" class="modal" @click.self="showLandingEntryModal = false">
+            <div class="modal-content" style="max-width: 520px; max-height: 88vh; display: flex; flex-direction: column;">
+                <div class="modal-header" style="flex-shrink: 0;">
+                    <div class="modal-title">Landing-Page / manifest.json</div>
+                    <button type="button" class="close-btn" @click="showLandingEntryModal = false">&times;</button>
+                </div>
+                <div style="padding: 16px 20px; overflow-y: auto; flex: 1;">
+                    <p v-if="lastLandingExport" style="color:#888; font-size:0.88rem; margin:0 0 12px 0;">
+                        Export: <code style="color:#cbd5e1;">{{ lastLandingExport.slug }}</code> — {{ lastLandingExport.title }}
+                    </p>
+                    <div style="margin-bottom: 12px;">
+                        <label style="display:block; color:#aaa; font-size:0.8rem; margin-bottom:4px;">Kurzbeschreibung (optional)</label>
+                        <input v-model="landingEntryDescription" @change="refreshLandingEntryPreview" type="text" placeholder="z. B. Couch-Vorauswahl Galaxy"
+                               style="width:100%; background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); color:#fff; padding:8px; border-radius:8px; font-size:0.9rem;">
+                    </div>
+                    <div v-if="landingEntryBusy" style="color:#94a3b8; font-size:0.85rem;">Laden…</div>
+                    <div v-if="landingEntryError" style="color:#f87171; font-size:0.85rem; margin-bottom:10px;">{{ landingEntryError }}</div>
+                    <div v-if="landingEntryResult && landingEntryResult.entry" style="background: rgba(0,0,0,0.35); border-radius:8px; padding:10px; margin-bottom:12px; font-size:0.78rem; color:#cbd5e1; max-height: 200px; overflow:auto;">
+                        <div v-if="landingEntryResult.entry.public_url" style="margin-bottom:8px;">
+                            <strong style="color:#86efac;">Öffentliche URL:</strong><br>
+                            <a :href="landingEntryResult.entry.public_url" target="_blank" rel="noopener" style="color:#93c5fd; word-break: break-all;">{{ landingEntryResult.entry.public_url }}</a>
+                        </div>
+                        <pre style="margin:0; white-space: pre-wrap; word-break: break-all;">{{ landingEntryJsonText }}</pre>
+                    </div>
+                    <div style="display:flex; flex-wrap:wrap; gap:8px;">
+                        <button type="button" @click="refreshLandingEntryPreview" :disabled="landingEntryBusy"
+                                style="background:#475569; color:#fff; border:none; padding:10px 14px; border-radius:8px; cursor:pointer; font-weight:600; font-size:0.85rem;">
+                            Vorschau aktualisieren
+                        </button>
+                        <button type="button" @click="copyLandingEntryJson" :disabled="!landingEntryResult || !landingEntryResult.entry"
+                                style="background:#6366f1; color:#fff; border:none; padding:10px 14px; border-radius:8px; cursor:pointer; font-weight:600; font-size:0.85rem;">
+                            JSON kopieren
+                        </button>
+                        <button type="button" @click="writeLandingManifest" :disabled="landingEntryBusy || landingEntryError || !landingEntryResult"
+                                style="background: linear-gradient(135deg, #22c55e, #0ea5e9); color:#fff; border:none; padding:10px 14px; border-radius:8px; cursor:pointer; font-weight:600; font-size:0.85rem;">
+                            In manifest.json schreiben
+                        </button>
+                    </div>
+                    <p style="color:#64748b; font-size:0.72rem; margin-top:12px; line-height:1.4;">
+                        Voraussetzung: Publish-Root unter Einstellungen gesetzt und identisch mit dem Export-Ziel (oder der Export liegt unter diesem Ordner).
+                        Die Landing-Page auf der NAS lädt <code>manifest.json</code> aus demselben Ordner wie <code>index.html</code>.
+                    </p>
+                </div>
+            </div>
+        </div>
+
         <!-- Config Info Modal -->
         <div v-if="showConfigModal" class="modal-overlay" @click.self="showConfigModal = false">
             <div class="modal-content" style="max-width: 900px; max-height: 80vh; overflow-y: auto;">

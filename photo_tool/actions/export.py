@@ -14,6 +14,11 @@ from PIL import Image
 from ..util.logging import get_logger
 from ..projects.rating_layers import RATING_LAYER_PROJECT
 from ..projects.project_sidecar import ProjectSidecarManager
+from ..projects.playlist_folder import (
+    export_playlist_to_gallery,
+    filter_audio_cues_to_exported_tracks,
+    filter_cues_for_export,
+)
 from .metadata import get_metadata, get_metadata_file
 from .export_profiles import get_profile, optimize_image, generate_optimized_thumbnail, list_profiles
 
@@ -133,6 +138,28 @@ def _empty_slideshow_media_dirs(images_dir: Path, thumbs_dir: Path) -> None:
                     p.unlink()
                 except OSError as exc:
                     logger.warning("Could not remove %s: %s", p, exc)
+
+
+def _ensure_splash_jpeg_for_slideshow(gallery_dir: Path, photo_data: List[Dict[str, Any]]) -> None:
+    """index.html splash uses splash.jpg; copy first slide export image beside index.html to avoid 404."""
+    if not photo_data:
+        return
+    row = photo_data[0]
+    rel = row.get("src")
+    if not isinstance(rel, str) or not rel.strip():
+        rel = row.get("thumbnail")
+    if not isinstance(rel, str) or not rel.strip():
+        return
+    src_path = gallery_dir / Path(rel.replace("\\", "/"))
+    dest = gallery_dir / "splash.jpg"
+    if not src_path.is_file():
+        logger.warning("Splash: first slide file missing (%s)", src_path)
+        return
+    try:
+        shutil.copy2(src_path, dest)
+        logger.info("Wrote splash.jpg from %s", rel)
+    except OSError as exc:
+        logger.warning("Could not write splash.jpg: %s", exc)
 
 
 def _prune_unreferenced_gallery_media(gallery_dir: Path, photo_data: List[Dict[str, Any]]) -> None:
@@ -279,6 +306,7 @@ def export_gallery(
     apply_edits: bool = True,  # NEW: Apply non-destructive edits during export
     project_dir: Optional[Path] = None,
     project_to_couch_mode: str = "off",
+    manifest_photo_paths: Optional[List[str]] = None,
     # Legacy parameters (deprecated, use profile instead)
     max_image_size: Optional[int] = None,
     thumbnail_size: Optional[int] = None
@@ -558,7 +586,9 @@ def export_gallery(
         
         if photo_data:
             _prune_unreferenced_gallery_media(gallery_dir, photo_data)
-        
+        if template == "slideshow" and photo_data:
+            _ensure_splash_jpeg_for_slideshow(gallery_dir, photo_data)
+
         if slides_manifest:
             _merge_couch_from_existing_slides_json(gallery_dir, slides_manifest, photo_data)
 
@@ -570,7 +600,36 @@ def export_gallery(
         ):
             pd = Path(project_dir)
             _apply_project_to_couch_seed(pd, _ptc, photo_data, slides_manifest)
-        
+
+        playlist_tracks_export: List[Dict[str, Any]] = []
+        cue_audio: List[Dict[str, Any]] = []
+        cue_light: List[Dict[str, Any]] = []
+        cue_warnings: List[str] = []
+        if project_dir is not None and slides_manifest:
+            pd = Path(project_dir)
+            playlist_tracks_export, pl_warn = export_playlist_to_gallery(pd, gallery_dir)
+            for w in pl_warn:
+                logger.warning("Export playlist: %s", w)
+            cue_audio, cue_light, cue_warnings = filter_cues_for_export(
+                pd,
+                len(slides_manifest),
+                export_photo_paths=photo_paths,
+                canonical_project_photo_paths=manifest_photo_paths,
+            )
+            for w in cue_warnings:
+                logger.warning("Export Cues: %s", w)
+            cue_audio, cue_orphan_export = filter_audio_cues_to_exported_tracks(
+                cue_audio, playlist_tracks_export
+            )
+            for w in cue_orphan_export:
+                logger.warning("Export Cues: %s", w)
+            cue_warnings = cue_warnings + cue_orphan_export
+            logger.info(
+                "Export slideshow audio: playlist_tracks=%s, audio_cues=%s (embed in index.html when slideshow template)",
+                len(playlist_tracks_export),
+                len(cue_audio),
+            )
+
         if template == "slideshow":
             _ensure_splash_qr_vendor(gallery_dir)
             mem_win = _slideshow_memory_window_for_profile(profile)
@@ -588,6 +647,9 @@ def export_gallery(
                 remote_hub_ws_base=remote_hub_ws_base,
                 remote_session_id=remote_session_id,
                 gallery_public_http_base=gallery_public_http_base,
+                playlist_tracks=playlist_tracks_export,
+                audio_cues=cue_audio,
+                light_cues=cue_light,
             )
         elif template == "photoswipe":
             html = _generate_photoswipe_html(title, photo_data)
@@ -601,7 +663,7 @@ def export_gallery(
         
         if slides_manifest:
             manifest_path = gallery_dir / "slides.json"
-            manifest_body = {
+            manifest_body: Dict[str, Any] = {
                 "manifest_version": 1,
                 "title": title,
                 "exported_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -610,6 +672,13 @@ def export_gallery(
                 "slide_count": len(slides_manifest),
                 "slides": slides_manifest,
             }
+            if project_dir is not None:
+                manifest_body["audio_cues"] = cue_audio
+                manifest_body["light_cues"] = cue_light
+                if playlist_tracks_export:
+                    manifest_body["playlist_tracks"] = playlist_tracks_export
+                if cue_warnings:
+                    manifest_body["cue_export_warnings"] = cue_warnings
             manifest_path.write_text(
                 json.dumps(manifest_body, indent=2, ensure_ascii=False) + "\n",
                 encoding="utf-8",
@@ -996,16 +1065,33 @@ def _generate_slideshow_html(
     remote_hub_ws_base: Optional[str] = None,
     remote_session_id: str = "default",
     gallery_public_http_base: Optional[str] = None,
+    playlist_tracks: Optional[List[Dict[str, Any]]] = None,
+    audio_cues: Optional[List[Dict[str, Any]]] = None,
+    light_cues: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """Generate fullscreen slideshow template with music support (based on working GUI slideshow)"""
     
     photos_json = json.dumps(photo_data, indent=2)
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    pl_tracks = playlist_tracks or []
+    au_cues = audio_cues or []
+    lt_cues = light_cues or []
+    cue_player_active = bool(au_cues and pl_tracks)
+    playlist_tracks_json = json.dumps(pl_tracks, ensure_ascii=False)
+    audio_cues_json = json.dumps(au_cues, ensure_ascii=False)
+    light_cues_json = json.dumps(lt_cues, ensure_ascii=False)
     
-    # Convert music file paths to HTML-friendly format
+    # Project playlist + cues: single cueAudio element; legacy bgMusic when manual music_files only
     music_html = ""
     music_controls_html = ""
-    if music_files:
+    if cue_player_active:
+        music_html = """
+        <audio id="cueAudio" preload="auto" playsinline></audio>"""
+        music_controls_html = '''
+                    <button class="slideshow-btn" onclick="event.stopPropagation(); toggleMusic();" title="Music (M)">
+                        <span id="musicIcon">🎵</span> Music
+                    </button>'''
+    elif music_files:
         music_sources = '\n'.join(
             f'            <source src="{music}" type="{_audio_mime_type(music)}">'
             for music in music_files
@@ -1030,7 +1116,10 @@ def _generate_slideshow_html(
     if not splash_title:
         splash_title = title
     if not splash_subtitle:
-        splash_subtitle = f"{len(photo_data)} photos{' • Background music' if music_files else ''}"
+        if cue_player_active:
+            splash_subtitle = f"{len(photo_data)} photos • Projekt-Audio (Cues)"
+        else:
+            splash_subtitle = f"{len(photo_data)} photos{' • Background music' if music_files else ''}"
 
     hub_ws = (remote_hub_ws_base or "").strip()
     remote_hub_literal = json.dumps(hub_ws) if hub_ws else "null"
@@ -1687,6 +1776,160 @@ def _generate_slideshow_html(
     
     <script>
         const photos = {photos_json};
+        const EXPORT_PLAYLIST_TRACKS = {playlist_tracks_json};
+        const EXPORT_AUDIO_CUES = {audio_cues_json};
+        const EXPORT_LIGHT_CUES = {light_cues_json};
+        const CUE_EXPORT_EMBEDDED = Array.isArray(EXPORT_AUDIO_CUES) && EXPORT_AUDIO_CUES.length > 0
+            && Array.isArray(EXPORT_PLAYLIST_TRACKS) && EXPORT_PLAYLIST_TRACKS.length > 0;
+        const DEBUG_SLIDESHOW_CUES = (function () {{
+            try {{
+                const q = new URLSearchParams(location.search).get('debug_cues');
+                if (q === '1' || q === 'true') return true;
+            }} catch (e0) {{}}
+            try {{
+                return localStorage.getItem('slideshow_debug_cues') === '1';
+            }} catch (e1) {{ return false; }}
+        }})();
+        function cueDbg() {{
+            if (!DEBUG_SLIDESHOW_CUES) return;
+            try {{
+                const a = ['[SlideshowCue]'].concat([].slice.call(arguments));
+                console.log.apply(console, a);
+            }} catch (e) {{}}
+        }}
+        const LIGHT_PROXY_URL = (function () {{
+            try {{
+                const u = new URLSearchParams(location.search).get('light_proxy');
+                return u && String(u).trim() ? String(u).trim() : '';
+            }} catch (e0) {{ return ''; }}
+        }})();
+        let trackByIdForCues = new Map();
+        let cueBySlideIndex = new Map();
+        let exportAudioCuesSorted = [];
+        function rebuildCueMapsFromData(tracks, cues) {{
+            trackByIdForCues = new Map((tracks || []).map(function (t) {{
+                return [String(t.track_id), t];
+            }}));
+            cueBySlideIndex = new Map();
+            (cues || []).forEach(function (c) {{
+                const at = parseInt(c.at_slide, 10);
+                if (!isNaN(at) && at >= 0) cueBySlideIndex.set(at, c);
+            }});
+            exportAudioCuesSorted = (cues || []).slice().sort(function (a, b) {{
+                return parseInt(a.at_slide, 10) - parseInt(b.at_slide, 10);
+            }});
+        }}
+        function effectiveAudioCueForSlide(slideIndex) {{
+            let best = null;
+            let bestAt = -1;
+            (exportAudioCuesSorted || []).forEach(function (c) {{
+                const at = parseInt(c.at_slide, 10);
+                if (isNaN(at) || at < 0 || at > slideIndex) return;
+                if (at > bestAt) {{
+                    bestAt = at;
+                    best = c;
+                }} else if (at === bestAt) {{
+                    best = c;
+                }}
+            }});
+            return best;
+        }}
+        let exportLightCuesSorted = [];
+        function setExportLightCuesFromList(cues) {{
+            exportLightCuesSorted = (cues || []).slice().sort(function (a, b) {{
+                return parseInt(a.at_slide, 10) - parseInt(b.at_slide, 10);
+            }});
+        }}
+        setExportLightCuesFromList(EXPORT_LIGHT_CUES);
+        let lightCuesEnabled = exportLightCuesSorted.length > 0;
+        function effectiveLightCueForSlide(slideIndex) {{
+            let best = null;
+            let bestAt = -1;
+            (exportLightCuesSorted || []).forEach(function (c) {{
+                const at = parseInt(c.at_slide, 10);
+                if (isNaN(at) || at < 0 || at > slideIndex) return;
+                if (at > bestAt) {{
+                    bestAt = at;
+                    best = c;
+                }} else if (at === bestAt) {{
+                    best = c;
+                }}
+            }});
+            return best;
+        }}
+        rebuildCueMapsFromData(EXPORT_PLAYLIST_TRACKS, EXPORT_AUDIO_CUES);
+        let cuePlaybackEnabled = CUE_EXPORT_EMBEDDED;
+        function ensureCueAudioElement() {{
+            let el = document.getElementById('cueAudio');
+            if (el) return el;
+            if (!cuePlaybackEnabled) return null;
+            el = document.createElement('audio');
+            el.id = 'cueAudio';
+            el.preload = 'auto';
+            el.setAttribute('playsinline', '');
+            el.style.display = 'none';
+            document.body.appendChild(el);
+            cueDbg('created #cueAudio in DOM');
+            return el;
+        }}
+        async function mergeSlidesJsonCueFallbackIfNeeded() {{
+            if (cuePlaybackEnabled && document.getElementById('cueAudio') && lightCuesEnabled) {{
+                cueDbg('slides.json fallback: skip (embedded audio + light OK)');
+                return;
+            }}
+            if (cuePlaybackEnabled && !document.getElementById('cueAudio')) {{
+                ensureCueAudioElement();
+                cueDbg('slides.json fallback: #cueAudio was missing, created');
+                return;
+            }}
+            try {{
+                const u = new URL('slides.json', window.location.href);
+                const res = await fetch(u.href, {{ cache: 'no-store' }});
+                if (!res.ok) {{
+                    cueDbg('slides.json fetch failed', res.status);
+                    return;
+                }}
+                const j = await res.json();
+                const tracks = j.playlist_tracks || [];
+                const cues = j.audio_cues || [];
+                const lights = j.light_cues || [];
+                if (lights.length && !lightCuesEnabled) {{
+                    setExportLightCuesFromList(lights);
+                    lightCuesEnabled = exportLightCuesSorted.length > 0;
+                    cueDbg('slides.json: merged', lights.length, 'light cue(s)');
+                }}
+                if (!tracks.length || !cues.length) {{
+                    cueDbg('slides.json: empty playlist_tracks or audio_cues (audio unchanged)');
+                    return;
+                }}
+                rebuildCueMapsFromData(tracks, cues);
+                cuePlaybackEnabled = true;
+                ensureCueAudioElement();
+                cueDbg('slides.json: merged', tracks.length, 'tracks,', cues.length, 'cues');
+            }} catch (e) {{
+                cueDbg('slides.json fallback error', e);
+            }}
+        }}
+        function cueDiagSlideshowAudio() {{
+            const el = document.getElementById('cueAudio');
+            console.info(
+                '[Slideshow] Project audio cues: enabled=' + cuePlaybackEnabled
+                + ', embed=' + CUE_EXPORT_EMBEDDED
+                + ', embedTracks=' + ((EXPORT_PLAYLIST_TRACKS || []).length)
+                + ', embedCues=' + ((EXPORT_AUDIO_CUES || []).length)
+                + ', mapTracks=' + trackByIdForCues.size
+                + ', cueSlides=' + cueBySlideIndex.size
+                + ', #cueAudio=' + (el ? 'yes' : 'no')
+                + ' | light: enabled=' + lightCuesEnabled
+                + ', embedLightCues=' + ((EXPORT_LIGHT_CUES || []).length)
+                + ', lightSorted=' + ((exportLightCuesSorted || []).length)
+            );
+            if (DEBUG_SLIDESHOW_CUES) {{
+                console.log('[SlideshowCue] first track', (EXPORT_PLAYLIST_TRACKS || [])[0]);
+                console.log('[SlideshowCue] first cue', (EXPORT_AUDIO_CUES || [])[0]);
+                console.log('[SlideshowCue] Verbose: ?debug_cues=1 or localStorage slideshow_debug_cues=1');
+            }}
+        }}
 
         function effectiveRating(photo) {{
             if (!photo) return 0;
@@ -1703,6 +1946,8 @@ def _generate_slideshow_html(
         }}
 
         let currentIndex = 0;
+        let prevDisplayedIndex = -1;
+        let slideshowHasStarted = false;
         let isPlaying = true;
         let isLooping = true;
         let isFullscreen = false;
@@ -2158,6 +2403,10 @@ def _generate_slideshow_html(
             try {{
                 const pm = progressMetrics();
                 const elig = getEligibleSlideIndices();
+                const auCue = cuePlaybackEnabled ? effectiveAudioCueForSlide(currentIndex) : null;
+                const ltCue = lightCuesEnabled ? effectiveLightCueForSlide(currentIndex) : null;
+                const effAudioTid = auCue && auCue.track_id != null ? String(auCue.track_id) : null;
+                const effLightId = ltCue && ltCue.effect_id ? String(ltCue.effect_id).trim() : null;
                 remoteWs.send(JSON.stringify({{
                     type: 'state',
                     index: currentIndex,
@@ -2169,7 +2418,11 @@ def _generate_slideshow_html(
                     min_couch_stars: minCouchStarsAutoplay,
                     eligible_total: elig.length,
                     progress_line: pm.line,
-                    autoplay_filter_active: minCouchStarsAutoplay > 0
+                    autoplay_filter_active: minCouchStarsAutoplay > 0,
+                    effective_audio_track_id: effAudioTid || null,
+                    effective_audio_cue_at_slide: auCue != null ? auCue.at_slide : null,
+                    effective_light_effect_id: effLightId || null,
+                    effective_light_cue_at_slide: ltCue != null ? ltCue.at_slide : null
                 }}));
             }} catch (e) {{}}
         }}
@@ -2211,7 +2464,7 @@ def _generate_slideshow_html(
                         }}
                         return;
                     }}
-                    if (msg.type === 'hello' && msg.role === 'remote') {{
+                    if (msg.type === 'hello' && (msg.role === 'remote' || msg.role === 'cue_debug')) {{
                         sendRemoteState();
                         return;
                     }}
@@ -2273,7 +2526,11 @@ def _generate_slideshow_html(
         const counter = document.getElementById('counter');
         const fullscreenBtn = document.getElementById('fullscreenBtn');
         const speedSelect = document.getElementById('speedSelect');
-        const bgMusic = document.getElementById('bgMusic');
+        function getSlideshowAudio() {{
+            const cue = document.getElementById('cueAudio');
+            if (cue && cuePlaybackEnabled) return cue;
+            return document.getElementById('bgMusic');
+        }}
         
         /** 0 = legacy (all slides keep <img src>); >0 = only load neighbors to save 4K/8K GPU RAM */
         const MEMORY_WINDOW_RADIUS = {memory_window_radius};
@@ -2287,6 +2544,101 @@ def _generate_slideshow_html(
         function absMediaUrl(rel) {{
             try {{ return new URL(rel, window.location.href).href; }} catch (e) {{ return rel; }}
         }}
+
+        function cueAudioMimeFromPath(s) {{
+            const l = (s || '').toLowerCase().split('?')[0];
+            if (l.endsWith('.mp3')) return 'audio/mpeg';
+            if (l.endsWith('.m4a') || l.endsWith('.aac')) return 'audio/mp4';
+            if (l.endsWith('.ogg')) return 'audio/ogg';
+            if (l.endsWith('.opus')) return 'audio/ogg';
+            if (l.endsWith('.wma')) return 'audio/x-ms-wma';
+            if (l.endsWith('.wav')) return 'audio/wav';
+            if (l.endsWith('.flac')) return 'audio/flac';
+            return 'audio/mpeg';
+        }}
+
+        function applyProjectCueForSlide(slideIndex) {{
+            if (!cuePlaybackEnabled) {{
+                cueDbg('apply: cuePlaybackEnabled=false, skip slide', slideIndex);
+                return;
+            }}
+            const el = ensureCueAudioElement();
+            if (!el) {{
+                cueDbg('apply: no #cueAudio element, slide', slideIndex);
+                return;
+            }}
+            const cue = effectiveAudioCueForSlide(slideIndex);
+            if (!cue) {{
+                cueDbg('apply: no stem at or before slide', slideIndex, '(silence)');
+                el.pause();
+                try {{
+                    el.removeAttribute('data-cue-src');
+                    el.removeAttribute('src');
+                    el.innerHTML = '';
+                }} catch (e0) {{}}
+                return;
+            }}
+            const tid = cue.track_id != null ? String(cue.track_id) : '';
+            const tr = tid ? trackByIdForCues.get(tid) : null;
+            if (!tr || !tr.src) {{
+                console.warn('[SlideshowCue] no exported track for track_id', tid, 'slide', slideIndex);
+                el.pause();
+                return;
+            }}
+            const wantSrc = tr.src;
+            cueDbg('apply: slide', slideIndex, 'cue_at_slide', cue.at_slide, 'track', wantSrc, 'tid', tid);
+            try {{
+                const already = el.getAttribute('data-cue-src');
+                if (already !== wantSrc) {{
+                    el.pause();
+                    el.removeAttribute('src');
+                    el.innerHTML = '';
+                    const s = document.createElement('source');
+                    s.src = wantSrc;
+                    s.type = cueAudioMimeFromPath(wantSrc);
+                    el.appendChild(s);
+                    el.setAttribute('data-cue-src', wantSrc);
+                    el.load();
+                }}
+                const p = el.play();
+                if (p && typeof p.catch === 'function') {{
+                    p.catch(function (err) {{
+                        console.warn('[SlideshowCue] play() rejected', err && err.name, err && err.message, wantSrc);
+                    }});
+                }}
+            }} catch (e) {{
+                console.warn('[SlideshowCue] apply exception', e, wantSrc);
+            }}
+        }}
+
+        let lastDispatchedLightKey = null;
+        function applyLightCuesForSlide(slideIndex) {{
+            if (!lightCuesEnabled) return;
+            const cue = effectiveLightCueForSlide(slideIndex);
+            const eff = cue && cue.effect_id ? String(cue.effect_id).trim() : '';
+            const key = eff || '';
+            if (lastDispatchedLightKey !== null && key === lastDispatchedLightKey) return;
+            lastDispatchedLightKey = key;
+            cueDbg('light: slide', slideIndex, eff || '(none)', 'cue_at', cue ? cue.at_slide : null);
+            if (!LIGHT_PROXY_URL) return;
+            const body = {{
+                effect_id: eff || null,
+                slide_index: slideIndex,
+                cue_at_slide: cue ? cue.at_slide : null
+            }};
+            try {{
+                fetch(LIGHT_PROXY_URL, {{
+                    method: 'POST',
+                    mode: 'cors',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify(body)
+                }}).catch(function (err) {{
+                    console.warn('[SlideshowLight] light_proxy POST failed', err);
+                }});
+            }} catch (e) {{
+                console.warn('[SlideshowLight] light_proxy exception', e);
+            }}
+        }}
         
         function releaseOffWindowImages() {{
             if (MEMORY_WINDOW_RADIUS <= 0) return;
@@ -2294,6 +2646,9 @@ def _generate_slideshow_html(
             for (let d = -MEMORY_WINDOW_RADIUS; d <= MEMORY_WINDOW_RADIUS; d++) {{
                 const i = currentIndex + d;
                 if (i >= 0 && i < photos.length) keep.add(i);
+            }}
+            if (prevDisplayedIndex >= 0 && prevDisplayedIndex !== currentIndex && prevDisplayedIndex < photos.length) {{
+                keep.add(prevDisplayedIndex);
             }}
             imageContainers.forEach((container, i) => {{
                 const img = container.querySelector('img');
@@ -2347,6 +2702,11 @@ def _generate_slideshow_html(
             nextBtn.disabled = currentIndex === photos.length - 1 && !isLooping;
             sendRemoteState();
             syncRatingHudContent();
+            if (slideshowHasStarted) {{
+                applyProjectCueForSlide(currentIndex);
+                applyLightCuesForSlide(currentIndex);
+            }}
+            prevDisplayedIndex = currentIndex;
         }}
         
         function nextSlide() {{
@@ -2373,17 +2733,15 @@ def _generate_slideshow_html(
 
             if (isPlaying) {{
                 startAutoplay();
-                // 🎚️ Restore full music volume when playing
-                const bgMusic = document.getElementById('bgMusic');
-                if (bgMusic) {{
-                    bgMusic.volume = MUSIC_FULL_VOLUME;
+                const a = getSlideshowAudio();
+                if (a) {{
+                    a.volume = MUSIC_FULL_VOLUME;
                 }}
             }} else {{
                 stopSlideshow();
-                // 🎚️ Duck music volume when paused
-                const bgMusic = document.getElementById('bgMusic');
-                if (bgMusic) {{
-                    bgMusic.volume = MUSIC_DUCKING_VOLUME;
+                const a = getSlideshowAudio();
+                if (a) {{
+                    a.volume = MUSIC_DUCKING_VOLUME;
                 }}
             }}
             sendRemoteState();
@@ -2505,12 +2863,13 @@ def _generate_slideshow_html(
         }}
         
         function toggleMusic() {{
-            if (bgMusic) {{
-                if (bgMusic.paused) {{
-                    bgMusic.play();
+            const a = getSlideshowAudio();
+            if (a) {{
+                if (a.paused) {{
+                    a.play();
                     document.getElementById('musicIcon').textContent = '🎵';
                 }} else {{
-                    bgMusic.pause();
+                    a.pause();
                     document.getElementById('musicIcon').textContent = '🔇';
                 }}
             }}
@@ -2661,7 +3020,7 @@ def _generate_slideshow_html(
                 case 'm':           // Toggle music
                 case 'M':
                 case 'MediaStop':
-                    if (bgMusic) {{
+                    if (getSlideshowAudio()) {{
                         toggleMusic();
                         showControlsTemporarily();
                     }}
@@ -2685,6 +3044,7 @@ def _generate_slideshow_html(
         // 🎬 Splash Screen: Start slideshow on button click
         async function startSlideshowFromSplash() {{
             if (slideshowBootPromise) await slideshowBootPromise;
+            slideshowHasStarted = true;
             const splashSel = document.getElementById('splashMinStars');
             if (splashSel) minCouchStarsAutoplay = Math.max(0, Math.min(5, parseInt(splashSel.value, 10) || 0));
             syncMinStarsWidgets();
@@ -2709,22 +3069,35 @@ def _generate_slideshow_html(
             startAutoplay();
             
             // 🎵 Start music (user gesture from splash unlocks autoplay policy)
-            if (bgMusic) {{
-                bgMusic.volume = MUSIC_FULL_VOLUME;
-                try {{ bgMusic.load(); }} catch (e) {{}}
-                const tryPlay = () => bgMusic.play().catch(e => console.log('Music playback blocked:', e));
-                if (bgMusic.readyState >= 2) {{
-                    tryPlay();
-                }} else {{
-                    bgMusic.addEventListener('canplay', function startMusic() {{
-                        tryPlay();
-                        bgMusic.removeEventListener('canplay', startMusic);
-                    }}, {{ once: true }});
-                    bgMusic.addEventListener('canplaythrough', function startMusicFull() {{
-                        tryPlay();
-                        bgMusic.removeEventListener('canplaythrough', startMusicFull);
-                    }}, {{ once: true }});
+            if (cuePlaybackEnabled) {{
+                const el = ensureCueAudioElement();
+                if (el) {{
+                    el.volume = MUSIC_FULL_VOLUME;
+                    applyProjectCueForSlide(currentIndex);
                 }}
+            }} else {{
+                const bgMusic = document.getElementById('bgMusic');
+                if (bgMusic) {{
+                    bgMusic.volume = MUSIC_FULL_VOLUME;
+                    try {{ bgMusic.load(); }} catch (e) {{}}
+                    const tryPlay = () => bgMusic.play().catch(e => console.log('Music playback blocked:', e));
+                    if (bgMusic.readyState >= 2) {{
+                        tryPlay();
+                    }} else {{
+                        bgMusic.addEventListener('canplay', function startMusic() {{
+                            tryPlay();
+                            bgMusic.removeEventListener('canplay', startMusic);
+                        }}, {{ once: true }});
+                        bgMusic.addEventListener('canplaythrough', function startMusicFull() {{
+                            tryPlay();
+                            bgMusic.removeEventListener('canplaythrough', startMusicFull);
+                        }}, {{ once: true }});
+                    }}
+                }}
+            }}
+            if (lightCuesEnabled) {{
+                lastDispatchedLightKey = null;
+                applyLightCuesForSlide(currentIndex);
             }}
             
             // Hide controls after 3 seconds
@@ -2739,6 +3112,8 @@ def _generate_slideshow_html(
         
         async function runSlideshowBoot() {{
             await mergeCouchRatingsFromSlidesJson();
+            await mergeSlidesJsonCueFallbackIfNeeded();
+            cueDiagSlideshowAudio();
             fillMinStarsSelectOptions(document.getElementById('splashMinStars'));
             fillMinStarsSelectOptions(document.getElementById('footerMinStars'));
             syncMinStarsWidgets();

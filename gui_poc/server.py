@@ -15,6 +15,10 @@ from datetime import datetime
 
 # Add parent directory to path to import photo_tool
 sys.path.insert(0, str(Path(__file__).parent.parent))
+# gui_poc-local modules (e.g. thumbnail_cache_service)
+_GUI_POC_DIR = Path(__file__).resolve().parent
+if str(_GUI_POC_DIR) not in sys.path:
+    sys.path.insert(0, str(_GUI_POC_DIR))
 
 from photo_tool.io import scan_multiple_directories, filter_by_type, get_capture_time
 from photo_tool.config import load_config, save_config
@@ -33,13 +37,17 @@ from photo_tool.actions.export import export_gallery, _export_progress
 from photo_tool.projects import ProjectManager, ProjectSidecarManager
 from photo_tool.projects.project_sidecar import load_project_sidecar_index
 from photo_tool.projects.playlist_folder import (
+    append_filename_to_order_yaml_if_present,
     build_folder_playlist_state,
+    delete_playlist_track_file,
     ensure_playlist_structure,
     save_cues,
+    save_light_cues,
     save_order_yaml,
     delete_order_yaml,
     playlist_root,
     resolve_track_path_by_id,
+    try_convert_wma_to_mp3,
 )
 from photo_tool.projects.rating_layers import (
     normalize_rating_layer,
@@ -67,6 +75,8 @@ from photo_tool.audio import (
 )
 
 logger = get_logger("gui_server")
+
+from thumbnail_cache_service import run_thumbnail_batch, workspace_db_path_default
 
 
 def _configure_stdio_line_buffered() -> None:
@@ -119,6 +129,105 @@ def get_current_workspace():
 def get_project_manager():
     """Get project manager for current workspace"""
     return ProjectManager(get_current_workspace())
+
+
+def _enabled_media_folder_paths(workspace_path: Path) -> list:
+    """Workspace media roots that are enabled (for thumbnail security + search scope)."""
+    ws = Workspace(workspace_path)
+    config = load_config(ws.config_file)
+    roots = []
+    if getattr(config, "folders", None):
+        for f in config.folders:
+            if not f.get("enabled", True):
+                continue
+            p = f.get("path")
+            if p:
+                roots.append(Path(str(p)))
+    elif hasattr(config, "scan") and getattr(config.scan, "roots", None):
+        roots = [Path(str(root)) for root in config.scan.roots]
+    return roots
+
+
+def _path_is_under_root_norm(file_s: str, root_s: str) -> bool:
+    """Windows/NAS-safe: normcase + normpath prefix (Path.relative_to often fails on UNC/mixed slashes)."""
+    c = os.path.normcase(os.path.normpath(file_s))
+    rf = os.path.normcase(os.path.normpath(root_s))
+    if c == rf:
+        return True
+    if not c.startswith(rf):
+        return False
+    if len(c) > len(rf) and c[len(rf)] not in (os.sep, "/"):
+        return False
+    return True
+
+
+def _is_abs_media_file_under_workspace_roots(file_path: Path, workspace_path: Path) -> bool:
+    """True if file_path is an existing file under an enabled workspace media root."""
+    try:
+        if not file_path.is_file():
+            return False
+    except OSError:
+        return False
+    file_variants = [str(file_path)]
+    try:
+        try:
+            file_variants.append(str(file_path.resolve(strict=False)))
+        except TypeError:
+            file_variants.append(str(file_path.resolve()))
+    except (OSError, ValueError, RuntimeError):
+        pass
+    file_variants = list(dict.fromkeys(file_variants))
+    for root in _enabled_media_folder_paths(workspace_path):
+        root_variants = [str(root)]
+        try:
+            try:
+                root_variants.append(str(root.resolve(strict=False)))
+            except TypeError:
+                root_variants.append(str(root.resolve()))
+        except (OSError, ValueError, RuntimeError):
+            pass
+        root_variants = list(dict.fromkeys(root_variants))
+        for c in file_variants:
+            for r in root_variants:
+                if _path_is_under_root_norm(c, r):
+                    return True
+    return False
+
+
+def _thumbnail_url_for_abs_path(abs_path: Path) -> str:
+    """Thumbnail URL with absolute path hint so cache misses avoid recursive NAS scans."""
+    from urllib.parse import quote
+
+    return f"/thumbnails/{abs_path.stem}.jpg?path={quote(str(abs_path), safe='')}"
+
+
+def _generate_thumbnail_jpeg_bytes(original: Path):
+    """Load image, apply EXIF orientation, resize; return BytesIO JPEG."""
+    from io import BytesIO
+
+    from PIL import Image
+
+    img = Image.open(original)
+    try:
+        exif = img.getexif()
+        if exif:
+            orientation = exif.get(0x0112)
+            if orientation == 3:
+                img = img.rotate(180, expand=True)
+            elif orientation == 6:
+                img = img.rotate(270, expand=True)
+            elif orientation == 8:
+                img = img.rotate(90, expand=True)
+    except Exception:
+        pass
+    img.thumbnail((300, 300), Image.Resampling.LANCZOS)
+    if img.mode in ("RGBA", "LA", "P"):
+        img = img.convert("RGB")
+    img_io = BytesIO()
+    img.save(img_io, "JPEG", quality=85)
+    img_io.seek(0)
+    return img_io
+
 
 # Cache for burst analysis
 _burst_cache = {
@@ -281,7 +390,7 @@ def load_photo_data_parallel(photo, metadata_map, sidecar_map, enabled_folders):
             'blur_scores': blur_scores,
             'blur_method': metadata.get('blur_method', 'laplacian'),
             'burst': burst_info,
-            'thumbnail': f"/thumbnails/{photo.path.stem}.jpg",
+            'thumbnail': _thumbnail_url_for_abs_path(photo.path),
             'full_image': f"/images/{photo.path.stem}{photo.path.suffix}"
         }
     except Exception as e:
@@ -1006,7 +1115,7 @@ def export_gallery_api():
         "slideshow_enabled": true,  // optional, default true
         "slideshow_duration": 5,  // optional, seconds per photo
         "smart_tv_mode": false,  // optional, optimize for TV
-        "project_id": "my-project-id",  // optional; required if project_to_couch_mode ≠ off
+        "project_id": "my-project-id",  // optional; required if project_to_couch_mode ≠ off; if set, exports project playlist + audio cues into the gallery
         "project_to_couch_mode": "off" | "fill_empty" | "replace_all"  // seed slides.json couch_* from project layer (after merge)
     }
     """
@@ -1049,15 +1158,24 @@ def export_gallery_api():
             return jsonify({'error': 'Invalid project_to_couch_mode (use off, fill_empty, replace_all)'}), 400
         project_id_raw = data.get('project_id')
         project_id = (project_id_raw or '').strip() if isinstance(project_id_raw, str) else ''
+        manifest_photo_paths = data.get('manifest_photo_paths')
+        if manifest_photo_paths is not None and not isinstance(manifest_photo_paths, list):
+            manifest_photo_paths = None
+        if isinstance(manifest_photo_paths, list):
+            manifest_photo_paths = [str(p) for p in manifest_photo_paths if p is not None and str(p).strip()]
+            if not manifest_photo_paths:
+                manifest_photo_paths = None
         project_dir = None
         if project_to_couch_mode != 'off':
             if not project_id:
                 return jsonify({'error': 'project_id required when project_to_couch_mode is not off'}), 400
+        # Resolve project_dir whenever project_id is sent (playlist + audio cues export), not only for couch sync.
+        if project_id:
             pm = get_project_manager()
             project_dir = pm.projects_dir / project_id
             if not project_dir.is_dir():
                 return jsonify({'error': f'Project not found: {project_id}'}), 404
-        
+
         if not photo_ids:
             return jsonify({'error': 'No photos selected'}), 400
 
@@ -1114,6 +1232,7 @@ def export_gallery_api():
                     gallery_public_http_base=gallery_public_http_base,
                     project_dir=project_dir,
                     project_to_couch_mode=project_to_couch_mode,
+                    manifest_photo_paths=manifest_photo_paths,
                 )
             except Exception as e:
                 result['error'] = str(e)
@@ -1142,6 +1261,107 @@ def export_gallery_api():
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
+
+@app.get('/api/settings/publish')
+def get_publish_settings_api():
+    """Per-workspace publish root, public URL base, manifest path (see publish_settings.json)."""
+    try:
+        from publish_settings_store import load_publish_settings
+    except ImportError:
+        from gui_poc.publish_settings_store import load_publish_settings
+    try:
+        return jsonify(load_publish_settings(get_current_workspace()))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.put('/api/settings/publish')
+def put_publish_settings_api():
+    """Save publish_settings.json in current workspace root."""
+    from flask import request
+
+    try:
+        from publish_settings_store import load_publish_settings, save_publish_settings
+    except ImportError:
+        from gui_poc.publish_settings_store import load_publish_settings, save_publish_settings
+    try:
+        data = request.get_json() or {}
+        save_publish_settings(get_current_workspace(), data)
+        return jsonify({'success': True, 'settings': load_publish_settings(get_current_workspace())})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.post('/api/settings/publish/landing-entry')
+def post_landing_entry_api():
+    """
+    Build landing manifest entry; optionally append to manifest.json under publish_root.
+    Body: slug, title, description?, href?, thumb?, require_gallery_dir? (default true),
+ write_manifest? (default true), dry_run? (merge preview only, no file write)
+    """
+    from flask import request
+
+    try:
+        from publish_settings_store import (
+            build_landing_entry,
+            merge_landing_entry_into_manifest,
+        )
+    except ImportError:
+        from gui_poc.publish_settings_store import (
+            build_landing_entry,
+            merge_landing_entry_into_manifest,
+        )
+
+    data = request.get_json() or {}
+    slug = (data.get('slug') or '').strip()
+    title = (data.get('title') or '').strip()
+    description = (data.get('description') or '').strip()
+    href = data.get('href')
+    thumb = data.get('thumb')
+    require_gallery = data.get('require_gallery_dir')
+    if require_gallery is None:
+        require_gallery = True
+    write_manifest = data.get('write_manifest')
+    if write_manifest is None:
+        write_manifest = True
+    dry_run = bool(data.get('dry_run'))
+
+    if not slug:
+        return jsonify({'error': 'slug is required'}), 400
+
+    try:
+        entry = build_landing_entry(
+            workspace=get_current_workspace(),
+            slug=slug,
+            title=title or slug,
+            description=description,
+            href=href if isinstance(href, str) else None,
+            thumb=thumb if isinstance(thumb, str) else None,
+            require_gallery_dir=bool(require_gallery),
+        )
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.exception('build_landing_entry')
+        return jsonify({'error': str(e)}), 500
+
+    if not write_manifest:
+        return jsonify({'success': True, 'entry': entry})
+
+    try:
+        merge_result = merge_landing_entry_into_manifest(
+            get_current_workspace(),
+            entry,
+            dry_run=dry_run,
+        )
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.exception('merge_landing_entry_into_manifest')
+        return jsonify({'error': str(e)}), 500
+
+    return jsonify({'success': True, 'entry': entry, **merge_result})
 
 
 def _resolve_slides_json_path(raw: str):
@@ -1305,92 +1525,73 @@ def get_export_progress():
 
 @app.get('/thumbnails/<path:filename>')
 def get_thumbnail(filename):
-    """Serve thumbnail images"""
+    """Serve thumbnails: disk cache, then direct path query param, then slow rglob fallback."""
+    from flask import request
+
     try:
         workspace_path = get_current_workspace()
         thumb_dir = workspace_path / "cache" / "thumbnails"
-        
-        # Try to find thumbnail (case-insensitive)
+
         thumb_path = thumb_dir / filename
         if not thumb_path.exists():
-            # Try with different extensions
-            for ext in ['.jpg', '.jpeg', '.JPG', '.JPEG']:
+            for ext in [".jpg", ".jpeg", ".JPG", ".JPEG"]:
                 alt_path = thumb_dir / f"{thumb_path.stem}{ext}"
                 if alt_path.exists():
                     thumb_path = alt_path
                     break
-        
+
         if thumb_path.exists():
-            # ✅ Serving cached thumbnail
             return send_from_directory(thumb_dir, thumb_path.name)
-        else:
-            # ⚠️ Cache miss - generating on-the-fly (slow!)
-            print(f"⚠️ Thumbnail cache miss: {filename} (looking in {thumb_dir})", flush=True)
-            # FALLBACK: Generate thumbnail on-the-fly from original image
-            # Get workspace folders
-            ws = Workspace(workspace_path)
-            config = load_config(ws.config_file)
-            
-            # Get all folders (both old and new structure)
-            folders_to_search = []
-            if config.folders:
-                folders_to_search = [Path(f['path']) for f in config.folders]
-            elif hasattr(config, 'scan') and hasattr(config.scan, 'roots'):
-                folders_to_search = [Path(root) for root in config.scan.roots]
-            
-            # Search for original file in all folders (recursively)
-            base_name = Path(filename).stem
-            for folder in folders_to_search:
-                if not folder.exists():
-                    continue
-                
-                # Try different cases and extensions
-                for ext in ['.JPG', '.jpg', '.JPEG', '.jpeg', '.PNG', '.png']:
-                    # Search recursively for the file
-                    for original in folder.rglob(f"{base_name}{ext}"):
-                        if original.exists():
-                            # Generate thumbnail on-the-fly using Pillow
-                            from PIL import Image
-                            from io import BytesIO
-                            from flask import send_file
-                            
-                            img = Image.open(original)
-                            
-                            # Apply EXIF orientation
+
+        qp = request.args.get("path") or request.args.get("source_path")
+        direct_original = None
+        if qp:
+            cand = Path(qp)
+            if _is_abs_media_file_under_workspace_roots(cand, workspace_path):
+                direct_original = cand
+
+        if direct_original is not None:
+            try:
+                thumb_dir.mkdir(parents=True, exist_ok=True)
+                img_io = _generate_thumbnail_jpeg_bytes(direct_original)
+                try:
+                    (thumb_dir / f"{direct_original.stem}.jpg").write_bytes(img_io.getvalue())
+                except OSError:
+                    pass
+                img_io.seek(0)
+                return send_file(img_io, mimetype="image/jpeg")
+            except Exception as e:
+                logger.warning("Thumbnail from path=%s failed: %s", direct_original, e)
+
+        print(f"Thumbnail cache miss (rglob fallback): {filename}", flush=True)
+        folders_to_search = _enabled_media_folder_paths(workspace_path)
+        base_name = Path(filename).stem
+        for folder in folders_to_search:
+            if not folder.exists():
+                continue
+            for ext in [".JPG", ".jpg", ".JPEG", ".jpeg", ".PNG", ".png"]:
+                for original in folder.rglob(f"{base_name}{ext}"):
+                    if original.exists():
+                        try:
+                            thumb_dir.mkdir(parents=True, exist_ok=True)
+                            img_io = _generate_thumbnail_jpeg_bytes(original)
                             try:
-                                exif = img.getexif()
-                                if exif:
-                                    orientation = exif.get(0x0112)  # Orientation tag
-                                    if orientation:
-                                        if orientation == 3:
-                                            img = img.rotate(180, expand=True)
-                                        elif orientation == 6:
-                                            img = img.rotate(270, expand=True)
-                                        elif orientation == 8:
-                                            img = img.rotate(90, expand=True)
-                            except:
+                                (thumb_dir / f"{original.stem}.jpg").write_bytes(img_io.getvalue())
+                            except OSError:
                                 pass
-                            
-                            img.thumbnail((300, 300), Image.Resampling.LANCZOS)
-                            
-                            # Convert to JPEG
-                            if img.mode in ('RGBA', 'LA', 'P'):
-                                img = img.convert('RGB')
-                            
-                            # Save to BytesIO
-                            img_io = BytesIO()
-                            img.save(img_io, 'JPEG', quality=85)
                             img_io.seek(0)
-                            
-                            return send_file(img_io, mimetype='image/jpeg')
-            
-            return jsonify({'error': 'Thumbnail not found'}), 404
-    
+                            return send_file(img_io, mimetype="image/jpeg")
+                        except Exception as e2:
+                            logger.warning("Thumbnail rglob failed %s: %s", original, e2)
+                            return jsonify({"error": str(e2)}), 500
+
+        return jsonify({"error": "Thumbnail not found"}), 404
+
     except Exception as e:
         import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
 
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 @app.get('/images/<path:filename>')
 def get_full_image(filename):
@@ -1631,7 +1832,7 @@ def _compute_bursts_cached(workspace_path, force=False):
                     'blur_score': cluster.blur_scores[j],
                     'is_best': j == cluster.best_photo_idx,
                     'rating': rating or 0,
-                    'thumbnail': f"/thumbnails/{photo_path.stem}.jpg"
+                    'thumbnail': _thumbnail_url_for_abs_path(photo_path)
                 })
             
             bursts.append({
@@ -2084,6 +2285,113 @@ _scan_progress = {
     'photos_per_second': 0,
     'error_count': 0
 }
+
+_thumbnail_cache_lock = threading.Lock()
+_thumbnail_cache_job = {
+    'running': False,
+    'total': 0,
+    'done': 0,
+    'current_file': '',
+    'created': 0,
+    'exists': 0,
+    'missing': 0,
+    'error': 0,
+    'finished': False,
+    'last_error': None,
+    'scope': '',
+    'force': False,
+}
+
+
+def _thumbnail_cache_progress(done: int, total: int, path: str, counts: dict) -> None:
+    with _thumbnail_cache_lock:
+        _thumbnail_cache_job['total'] = total
+        _thumbnail_cache_job['done'] = done
+        if path:
+            _thumbnail_cache_job['current_file'] = path
+        _thumbnail_cache_job['created'] = counts.get('created', 0)
+        _thumbnail_cache_job['exists'] = counts.get('exists', 0)
+        _thumbnail_cache_job['missing'] = counts.get('missing', 0)
+        _thumbnail_cache_job['error'] = counts.get('error', 0)
+
+
+def _run_thumbnail_cache_worker(scope: str, force: bool, max_workers: int) -> None:
+    try:
+        ws = get_current_workspace()
+        db_path = workspace_db_path_default()
+        roots = None
+        if scope == 'enabled':
+            roots = get_enabled_folders(ws)
+        run_thumbnail_batch(
+            ws,
+            db_path,
+            scope=scope,
+            force=force,
+            max_workers=max_workers,
+            enabled_roots=roots,
+            progress=_thumbnail_cache_progress,
+        )
+    except Exception as e:
+        logger.exception('thumbnail cache batch failed')
+        with _thumbnail_cache_lock:
+            _thumbnail_cache_job['last_error'] = str(e)
+    finally:
+        with _thumbnail_cache_lock:
+            _thumbnail_cache_job['running'] = False
+            _thumbnail_cache_job['finished'] = True
+
+
+@app.get('/api/workspace/thumbnail-cache/status')
+def thumbnail_cache_status():
+    with _thumbnail_cache_lock:
+        return jsonify(dict(_thumbnail_cache_job))
+
+
+@app.post('/api/workspace/thumbnail-cache')
+def thumbnail_cache_start():
+    from flask import request
+
+    with _thumbnail_cache_lock:
+        if _thumbnail_cache_job['running']:
+            return jsonify({'error': 'Thumbnail cache generation already running'}), 409
+
+    data = request.get_json(silent=True) or {}
+    scope = data.get('scope', 'all')
+    if scope not in ('all', 'enabled'):
+        return jsonify({'error': "scope must be 'all' or 'enabled'"}), 400
+    force = bool(data.get('force'))
+    try:
+        max_workers = int(data.get('max_workers', 8))
+    except (TypeError, ValueError):
+        max_workers = 8
+    max_workers = max(1, min(max_workers, 16))
+
+    with _thumbnail_cache_lock:
+        _thumbnail_cache_job.update({
+            'running': True,
+            'total': 0,
+            'done': 0,
+            'current_file': '',
+            'created': 0,
+            'exists': 0,
+            'missing': 0,
+            'error': 0,
+            'finished': False,
+            'last_error': None,
+            'scope': scope,
+            'force': force,
+        })
+
+    thread = threading.Thread(
+        target=_run_thumbnail_cache_worker,
+        args=(scope, force, max_workers),
+        daemon=True,
+    )
+    thread.start()
+
+    with _thumbnail_cache_lock:
+        return jsonify({'success': True, 'job': dict(_thumbnail_cache_job)})
+
 
 @app.get('/api/media/folders')
 def get_media_folders():
@@ -2713,10 +3021,11 @@ def browse_folders():
             for item in sorted(current_path.iterdir()):
                 if item.is_dir():
                     try:
-                        # Check if directory is accessible
-                        list(item.iterdir())
+                        # One cheap read — avoid listing every child of each subfolder (NAS killer)
+                        with os.scandir(item) as sd:
+                            next(sd, None)
                         is_accessible = True
-                    except PermissionError:
+                    except OSError:
                         is_accessible = False
                     
                     folders.append({
@@ -2967,10 +3276,43 @@ def post_playlist_folder_upload(project_id):
         ensure_playlist_structure(project_dir)
         dest = playlist_root(project_dir) / name
         f.save(str(dest))
+        final_path, conv_err = try_convert_wma_to_mp3(dest)
+        if conv_err:
+            try:
+                if dest.exists():
+                    dest.unlink()
+            except OSError:
+                pass
+            return jsonify({'error': conv_err}), 400
+        append_filename_to_order_yaml_if_present(project_dir, final_path.name)
         state = build_folder_playlist_state(project_dir)
         return jsonify({'success': True, **state})
     except Exception as e:
         logger.exception("post_playlist_folder_upload")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.delete('/api/projects/<project_id>/playlist-folder/file')
+def delete_playlist_folder_file(project_id):
+    """Query: filename= — remove file from playlist folder, order yaml, cues."""
+    try:
+        from flask import request
+
+        fn = (request.args.get('filename') or '').strip()
+        if not fn:
+            return jsonify({'error': 'filename required'}), 400
+        pm = get_project_manager()
+        tup = _project_dir_or_404(pm, project_id)
+        if tup[0] is None:
+            return tup[1]
+        project_dir = tup[0]
+        err = delete_playlist_track_file(project_dir, fn)
+        if err:
+            return jsonify({'error': err}), 400
+        state = build_folder_playlist_state(project_dir)
+        return jsonify({'success': True, **state})
+    except Exception as e:
+        logger.exception("delete_playlist_folder_file")
         return jsonify({'error': str(e)}), 500
 
 
@@ -3037,6 +3379,31 @@ def put_playlist_folder_cues(project_id):
         return jsonify({'success': True, **state})
     except Exception as e:
         logger.exception("put_playlist_folder_cues")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.put('/api/projects/<project_id>/playlist-folder/light-cues')
+def put_playlist_folder_light_cues(project_id):
+    """Body: { cues: [ { at_slide, effect_id }, ... ] } — one effect per slide."""
+    try:
+        from flask import request
+
+        pm = get_project_manager()
+        tup = _project_dir_or_404(pm, project_id)
+        if tup[0] is None:
+            return tup[1]
+        project_dir = tup[0]
+        body = request.get_json() or {}
+        cues = body.get('cues')
+        if cues is None:
+            cues = []
+        if not isinstance(cues, list):
+            return jsonify({'error': 'cues must be a list'}), 400
+        save_light_cues(project_dir, cues)
+        state = build_folder_playlist_state(project_dir)
+        return jsonify({'success': True, **state})
+    except Exception as e:
+        logger.exception("put_playlist_folder_light_cues")
         return jsonify({'error': str(e)}), 500
 
 
@@ -3355,6 +3722,19 @@ def update_project(project_id):
             project.manual_additions = data['manual_additions']
         if 'manual_exclusions' in data:
             project.manual_exclusions = data['manual_exclusions']
+        if 'export_profiles' in data:
+            rawp = data['export_profiles']
+            if rawp is None:
+                project.export_profiles = None
+            elif isinstance(rawp, list):
+                project.export_profiles = [p for p in rawp if isinstance(p, dict)]
+            else:
+                return jsonify({'error': 'export_profiles must be a list or null'}), 400
+        if 'active_export_profile_id' in data:
+            aid = data['active_export_profile_id']
+            project.active_export_profile_id = (
+                str(aid).strip() if isinstance(aid, str) and aid.strip() else None
+            )
         if 'export_settings' in data:
             from photo_tool.projects.manager import export_settings_from_dict
 
@@ -3367,6 +3747,14 @@ def update_project(project_id):
                 )
             else:
                 project.export_settings = None
+
+        from photo_tool.projects.manager import (
+            merge_export_settings_into_active_profile,
+            sync_export_settings_from_profiles,
+        )
+
+        merge_export_settings_into_active_profile(project)
+        sync_export_settings_from_profiles(project)
         if 'quality_settings' in data:
             from photo_tool.projects.manager import QualityDetectionSettings
             project.quality_settings = QualityDetectionSettings(**data['quality_settings']) if data['quality_settings'] else None
@@ -3809,7 +4197,7 @@ def get_project_media(project_id):
                                 'burst_neighbors': burst_neighbors_list,
                                 'burst_count': burst_count_val,
                                 # Critical: thumbnail paths
-                                'thumbnail': f"/thumbnails/{Path(media['filename']).stem}.jpg",
+                                'thumbnail': _thumbnail_url_for_abs_path(Path(media["path"])),
                                 'full_image': f"/images/{Path(media['filename']).stem}{Path(media['filename']).suffix}",
                                 # Relative path for display
                                 'relative_path': media['filename'],
@@ -4107,7 +4495,7 @@ def get_project_media(project_id):
                         'keywords': metadata.get('keywords', []),
                         'blur_scores': blur_scores,
                         'burst_keep': burst_keep,
-                        'thumbnail': f"/thumbnails/{item.path.stem}.jpg",
+                        'thumbnail': _thumbnail_url_for_abs_path(item.path),
                         'full_image': f"/images/{item.path.stem}{item.path.suffix}",
                         'has_project_override': metadata.get('_has_project_override', False),
                         'rating_source': metadata.get('_rating_source', 'global'),
@@ -4341,7 +4729,7 @@ def get_project_bursts(project_id):
                                 'path': str(photo.path),
                                 'name': photo.path.name,
                                 'rating': metadata.get('rating', 0),
-                                'thumbnail': f"/thumbnails/{photo.path.stem}.jpg",
+                                'thumbnail': _thumbnail_url_for_abs_path(photo.path),
                                 'position': burst_data.get('position', 0),
                                 'is_best': burst_data.get('is_best', False)
                             })
